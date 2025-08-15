@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'; // <-- prevent static prerender on Vercel
+
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
@@ -10,8 +12,6 @@ type Ingredient = { recipe_id: string; item_id: string; qty: number };
 type Item = { id: string; name: string; pack_to_base_factor: number; last_price: number | null; base_unit: string };
 
 type RoundStyle = '99' | '95' | '49' | '00';
-
-type SavedMenu = { id: string; name: string | null; served_on: string | null };
 
 function roundPrice(raw: number, style: RoundStyle) {
   const f = Math.floor(raw);
@@ -33,24 +33,13 @@ export default function MenuToday() {
   const [portionCost, setPortionCost] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
 
-  // menu building state
   const [selection, setSelection] = useState<Record<string, { price?: number; manual?: boolean }>>({});
   const [targetPct, setTargetPct] = useState<number>(0.30);
   const [rounding, setRounding] = useState<RoundStyle>('99');
   const [status, setStatus] = useState<string | null>(null);
 
-  // saved menus
-  const [currentMenuId, setCurrentMenuId] = useState<string | null>(null);
-  const [menuName, setMenuName] = useState<string>(() => {
-    const d = new Date();
-    return `Today's Menu ${d.toLocaleDateString()}`;
-  });
-  const [menuList, setMenuList] = useState<SavedMenu[]>([]);
-  const [menuToLoadId, setMenuToLoadId] = useState<string>('');
-
   const chosen = useMemo(() => recipes.filter(r => selection[r.id]), [recipes, selection]);
 
-  // boot: load tenant, recipes, costs
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -61,7 +50,6 @@ export default function MenuToday() {
       if (!prof?.tenant_id) { setStatus('No tenant'); setLoading(false); return; }
       setTenantId(prof.tenant_id);
 
-      // recipes
       const { data: recs } = await supabase
         .from('recipes')
         .select('id,name,batch_yield_qty,batch_yield_unit,yield_pct')
@@ -71,7 +59,6 @@ export default function MenuToday() {
 
       if (recipesData.length === 0) { setPortionCost({}); setLoading(false); return; }
 
-      // ingredients for all recipes
       const rIds = recipesData.map(r => r.id);
       const { data: ing } = await supabase
         .from('recipe_ingredients')
@@ -79,7 +66,6 @@ export default function MenuToday() {
         .in('recipe_id', rIds);
       const ingredients = (ing ?? []) as Ingredient[];
 
-      // items map
       const itemIds = Array.from(new Set(ingredients.map(i => i.item_id)));
       const { data: itemsData } = await supabase
         .from('inventory_items')
@@ -105,23 +91,10 @@ export default function MenuToday() {
       }
       setPortionCost(costMap);
       setLoading(false);
-
-      // load list of saved menus
-      refreshMenuList(prof.tenant_id);
     })();
   }, []);
 
-  async function refreshMenuList(tid: string) {
-    const { data } = await supabase
-      .from('menus')
-      .select('id,name,served_on')
-      .eq('tenant_id', tid)
-      .order('served_on', { ascending: false })
-      .limit(25);
-    setMenuList((data ?? []) as SavedMenu[]);
-  }
-
-  // keep suggestions fresh for non-manual rows
+  // Auto-update suggested prices for non-manual rows when target/rounding/costs change
   useEffect(() => {
     setSelection(prev => {
       const next = { ...prev };
@@ -135,7 +108,6 @@ export default function MenuToday() {
     });
   }, [targetPct, rounding, portionCost]);
 
-  // interactions
   const toggle = (id: string) => {
     setSelection((s) => {
       const copy = { ...s };
@@ -157,55 +129,28 @@ export default function MenuToday() {
       return { ...s, [id]: { price: suggestPrice(cpp, targetPct, rounding), manual: false } };
     });
 
-  function rowsForSave(menuId: string) {
-    return chosen.map(r => ({
-      menu_id: menuId,
-      recipe_id: r.id,
+  async function saveMenu() {
+    if (!tenantId) return;
+    if (chosen.length === 0) { setStatus('Pick at least one item'); return; }
+    setStatus('Saving…');
+
+    // create menu for today
+    const { data: menu, error: mErr } = await supabase
+      .from('menus').insert({ tenant_id: tenantId, name: "Today's Menu" })
+      .select('id').single();
+    if (mErr) { setStatus(mErr.message); return; }
+
+    const rows = chosen.map(r => ({
+      menu_id: menu!.id, recipe_id: r.id,
       price: selection[r.id]?.price ?? 0,
       target_pct: targetPct,
       rounding,
       manual: !!selection[r.id]?.manual
     }));
-  }
-
-  async function saveAs() {
-    if (!tenantId) return;
-    if (chosen.length === 0) { setStatus('Pick at least one item'); return; }
-    setStatus('Saving…');
-
-    const { data: menu, error: mErr } = await supabase
-      .from('menus')
-      .insert({ tenant_id: tenantId, name: menuName })
-      .select('id')
-      .single();
-    if (mErr) { setStatus(mErr.message); return; }
-
-    const rows = rowsForSave(menu!.id);
     const { error: iErr } = await supabase.from('menu_recipes').insert(rows);
     if (iErr) { setStatus(iErr.message); return; }
 
-    setCurrentMenuId(menu!.id);
-    setStatus('Saved as new menu ✅');
-    refreshMenuList(tenantId);
-  }
-
-  async function saveMenu() {
-    if (!tenantId) return;
-    if (!currentMenuId) { await saveAs(); return; }
-    if (chosen.length === 0) { setStatus('Pick at least one item'); return; }
-    setStatus('Saving…');
-
-    // Update menu name
-    await supabase.from('menus').update({ name: menuName }).eq('id', currentMenuId);
-
-    // Replace rows
-    await supabase.from('menu_recipes').delete().eq('menu_id', currentMenuId);
-    const rows = rowsForSave(currentMenuId);
-    const { error: iErr } = await supabase.from('menu_recipes').insert(rows);
-    if (iErr) { setStatus(iErr.message); return; }
-
-    setStatus('Menu saved ✅');
-    refreshMenuList(tenantId);
+    setStatus('Saved ✅');
   }
 
   async function loadLast() {
@@ -213,111 +158,41 @@ export default function MenuToday() {
     setStatus('Loading last…');
     const { data: menus, error } = await supabase
       .from('menus')
-      .select('id,name,served_on')
-      .eq('tenant_id', tenantId)
+      .select('id, served_on')
       .order('served_on', { ascending: false })
       .limit(1);
     if (error || !menus?.length) { setStatus('No previous menu'); return; }
-    await loadMenuById(menus[0].id);
-  }
 
-  async function loadMenuById(menuId: string) {
-    if (!tenantId) return;
-    setStatus('Loading…');
-
-    const { data: m } = await supabase
-      .from('menus')
-      .select('id,name,served_on')
-      .eq('id', menuId)
-      .maybeSingle();
-
+    const lastId = menus[0].id;
     const { data: rows, error: rErr } = await supabase
       .from('menu_recipes')
       .select('recipe_id, price, manual, target_pct, rounding')
-      .eq('menu_id', menuId);
+      .eq('menu_id', lastId);
     if (rErr) { setStatus(rErr.message); return; }
 
     const sel: Record<string, { price?: number; manual?: boolean }> = {};
     rows?.forEach(row => { sel[row.recipe_id] = { price: Number(row.price), manual: row.manual || false }; });
     setSelection(sel);
 
-    // adopt that menu's target/rounding if present
+    // adopt last menu's target/rounding if present
     if (rows && rows.length) {
       const rp = rows.find(Boolean);
       if (rp?.target_pct) setTargetPct(Number(rp.target_pct));
       if (rp?.rounding) setRounding(rp.rounding as RoundStyle);
     }
-
-    setMenuName(m?.name || '');
-    setCurrentMenuId(menuId);
-    setMenuToLoadId(menuId);
-    setStatus('Loaded menu ✅');
-  }
-
-  function startNewMenu() {
-    setCurrentMenuId(null);
-    setSelection({});
-    setTargetPct(0.30);
-    setRounding('99');
-    const d = new Date();
-    setMenuName(`Today's Menu ${d.toLocaleDateString()}`);
-    setStatus('New menu');
+    setStatus('Loaded last menu ✅');
   }
 
   const printNow = () => window.print();
 
   return (
     <div className="space-y-4">
-      {/* Top bar */}
-      <div className="flex items-start justify-between gap-4 print:hidden">
-        <div className="flex-1">
-          <h1 className="text-2xl font-semibold">Today&apos;s Menu</h1>
-          <div className="mt-2 flex items-center gap-2">
-            <label className="text-sm opacity-80">Menu name</label>
-            <input
-              className="border rounded px-2 py-1 text-sm w-[320px]"
-              value={menuName}
-              onChange={(e) => setMenuName(e.target.value)}
-              placeholder="Name this menu…"
-            />
-            {currentMenuId && (
-              <span className="text-xs opacity-60 ml-2">Loaded: {currentMenuId.slice(0, 8)}…</span>
-            )}
-          </div>
-        </div>
-
-        <div className="flex flex-col items-end gap-2">
-          <div className="flex gap-2">
-            <button onClick={startNewMenu} className="border rounded px-3 py-2">New</button>
-            <button onClick={loadLast} className="border rounded px-3 py-2">Load last</button>
-            <button onClick={saveMenu} className="border rounded px-3 py-2">Save</button>
-            <button onClick={saveAs} className="border rounded px-3 py-2">Save as</button>
-            <button onClick={printNow} className="bg-black text-white rounded px-4 py-2">Print</button>
-          </div>
-
-          {/* Load any saved */}
-          <div className="flex items-center gap-2">
-            <span className="text-sm opacity-80">Load:</span>
-            <select
-              className="border rounded px-2 py-1 text-sm min-w-[260px]"
-              value={menuToLoadId}
-              onChange={(e) => setMenuToLoadId(e.target.value)}
-            >
-              <option value="" disabled>Select a saved menu…</option>
-              {menuList.map(m => (
-                <option key={m.id} value={m.id}>
-                  {(m.name || 'Untitled')} {m.served_on ? `• ${new Date(m.served_on).toLocaleDateString()}` : ''}
-                </option>
-              ))}
-            </select>
-            <button
-              disabled={!menuToLoadId}
-              onClick={() => loadMenuById(menuToLoadId)}
-              className="border rounded px-3 py-1 text-sm disabled:opacity-50"
-            >
-              Load
-            </button>
-          </div>
+      <div className="flex items-baseline justify-between print:hidden">
+        <h1 className="text-2xl font-semibold">Today&apos;s Menu</h1>
+        <div className="flex gap-2">
+          <button onClick={loadLast} className="border rounded px-3 py-2">Load last</button>
+          <button onClick={saveMenu} className="border rounded px-3 py-2">Save</button>
+          <button onClick={printNow} className="bg-black text-white rounded px-4 py-2">Print</button>
         </div>
       </div>
 
@@ -327,12 +202,9 @@ export default function MenuToday() {
       <div className="border rounded p-4 space-y-3 print:hidden">
         <div className="flex items-center gap-4 text-sm">
           <div className="font-semibold">Food-cost target</div>
-          <input
-            type="range" min={10} max={60} step={1}
+          <input type="range" min={10} max={60} step={1}
             value={Math.round(targetPct * 100)}
-            onChange={(e) => setTargetPct(Number(e.target.value) / 100)}
-            className="w-64"
-          />
+            onChange={(e) => setTargetPct(Number(e.target.value) / 100)} className="w-64" />
           <div>{Math.round(targetPct * 100)}%</div>
 
           <div className="ml-6 font-semibold">Rounding</div>
@@ -385,12 +257,10 @@ export default function MenuToday() {
                       </div>
                     </div>
                     <div className="col-span-1 text-right">$</div>
-                    <input
-                      className="border p-1 w-28 col-span-2"
+                    <input className="border p-1 w-28 col-span-2"
                       type="number" step="0.01" min="0"
                       value={Number.isFinite(price) ? price : ''}
-                      onChange={(e) => setPrice(r.id, Number(e.target.value))}
-                    />
+                      onChange={(e) => setPrice(r.id, Number(e.target.value))} />
                     <button type="button" onClick={() => resetToSuggest(r.id)} className="col-span-1 text-xs underline justify-self-end">
                       Reset
                     </button>
@@ -405,7 +275,7 @@ export default function MenuToday() {
       {/* Printable view */}
       <div className="print:block hidden">
         <div className="text-center mb-4">
-          <h1 className="text-3xl font-bold">{menuName || "Today's Menu"}</h1>
+          <h1 className="text-3xl font-bold">Today&apos;s Menu</h1>
           <div className="text-sm">{new Date().toLocaleDateString()}</div>
         </div>
         <table className="w-full text-lg">
@@ -413,9 +283,7 @@ export default function MenuToday() {
             {chosen.map((r) => (
               <tr key={r.id}>
                 <td className="py-2 pr-4">{r.name}</td>
-                <td className="py-2 text-right">
-                  {selection[r.id]?.price ? `$${Number(selection[r.id]?.price).toFixed(2)}` : ''}
-                </td>
+                <td className="py-2 text-right">{selection[r.id]?.price ? `$${Number(selection[r.id]?.price).toFixed(2)}` : ''}</td>
               </tr>
             ))}
           </tbody>
