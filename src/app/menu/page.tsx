@@ -1,6 +1,6 @@
-export const dynamic = 'force-dynamic'; // <-- prevent static prerender on Vercel
-
 'use client';
+export const dynamic = 'force-dynamic'; // prevent static prerender on Vercel
+
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 
@@ -19,7 +19,7 @@ function roundPrice(raw: number, style: RoundStyle) {
     case '99': return Number((f + 0.99).toFixed(2));
     case '95': return Number((f + 0.95).toFixed(2));
     case '49': return Number((f + 0.49).toFixed(2));
-    case '00': return Math.round(raw * 100) / 100; // to .00
+    case '00': return Math.round(raw * 100) / 100;
   }
 }
 function suggestPrice(costPerPortion: number, targetPct: number, style: RoundStyle) {
@@ -94,7 +94,6 @@ export default function MenuToday() {
     })();
   }, []);
 
-  // Auto-update suggested prices for non-manual rows when target/rounding/costs change
   useEffect(() => {
     setSelection(prev => {
       const next = { ...prev };
@@ -134,7 +133,6 @@ export default function MenuToday() {
     if (chosen.length === 0) { setStatus('Pick at least one item'); return; }
     setStatus('Saving…');
 
-    // create menu for today
     const { data: menu, error: mErr } = await supabase
       .from('menus').insert({ tenant_id: tenantId, name: "Today's Menu" })
       .select('id').single();
@@ -174,7 +172,6 @@ export default function MenuToday() {
     rows?.forEach(row => { sel[row.recipe_id] = { price: Number(row.price), manual: row.manual || false }; });
     setSelection(sel);
 
-    // adopt last menu's target/rounding if present
     if (rows && rows.length) {
       const rp = rows.find(Boolean);
       if (rp?.target_pct) setTargetPct(Number(rp.target_pct));
@@ -198,7 +195,6 @@ export default function MenuToday() {
 
       {status && <div className="text-sm text-neutral-300 print:hidden">{status}</div>}
 
-      {/* Controls */}
       <div className="border rounded p-4 space-y-3 print:hidden">
         <div className="flex items-center gap-4 text-sm">
           <div className="font-semibold">Food-cost target</div>
@@ -220,7 +216,6 @@ export default function MenuToday() {
         </p>
       </div>
 
-      {/* Builder */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 print:hidden">
         <div className="border rounded p-4">
           <div className="font-semibold mb-2">Pick items</div>
@@ -272,7 +267,6 @@ export default function MenuToday() {
         </div>
       </div>
 
-      {/* Printable view */}
       <div className="print:block hidden">
         <div className="text-center mb-4">
           <h1 className="text-3xl font-bold">Today&apos;s Menu</h1>
