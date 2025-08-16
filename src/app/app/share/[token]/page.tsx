@@ -13,10 +13,8 @@ export default async function SharedMenuPage({
 }: {
   params: Promise<{ token: string }>;
 }) {
-  // Next 15: params is a Promise
   const { token } = await params;
 
-  // Public RPC — no auth required
   const { data, error } = await supabase.rpc('get_shared_menu', {
     p_token: token,
   });
