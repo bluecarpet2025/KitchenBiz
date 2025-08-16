@@ -1,12 +1,14 @@
-// src/middleware.ts
 import { NextRequest, NextResponse } from 'next/server';
 
 const PUBLIC_PATHS = ['/', '/login'];
-const SB_COOKIE_PREFIX = 'sb-zdwenjdspvbfouooqlco-auth-token'; // your project ref
-const KB_COOKIE = 'kb_auth';
+
+const SB_AUTH_COOKIE = 'sb-zdwenjdspvbfouooqlco-auth-token';
 
 function isPublicPath(pathname: string) {
   if (PUBLIC_PATHS.includes(pathname)) return true;
+  // Public share pages
+  if (pathname === '/share' || pathname.startsWith('/share/')) return true;
+
   if (pathname.startsWith('/_next')) return true;
   if (pathname === '/favicon.ico') return true;
   if (/\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js|map|txt)$/.test(pathname)) return true;
@@ -18,11 +20,9 @@ export function middleware(req: NextRequest) {
 
   if (isPublicPath(pathname)) return NextResponse.next();
 
-  const hasKb = req.cookies.get(KB_COOKIE)?.value === '1';
-  const hasSb = Boolean(req.cookies.get(SB_COOKIE_PREFIX)) ||
-                req.cookies.getAll().some(c => c.name.startsWith(SB_COOKIE_PREFIX));
-
-  const hasSession = hasKb || hasSb;
+  const hasSession =
+    Boolean(req.cookies.get(SB_AUTH_COOKIE)) ||
+    req.cookies.getAll().some((c) => c.name.startsWith(SB_AUTH_COOKIE));
 
   if (!hasSession) {
     const url = req.nextUrl.clone();
@@ -31,8 +31,7 @@ export function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // Signed in but hit /login directly — send home
-  if (pathname === '/login') {
+  if (hasSession && pathname === '/login') {
     const url = req.nextUrl.clone();
     url.pathname = '/';
     url.search = '';

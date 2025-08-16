@@ -1,66 +1,66 @@
-'use client';
+export const dynamic = 'force-dynamic'; // don't pre-render; always fetch
 
-import { useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 
-type Row = { menu_name: string; served_on: string | null; item_name: string; price: number | null };
+type SharedPayload = {
+  title?: string;
+  served_on?: string;
+  items?: { name: string; price: number }[];
+};
 
-export default function PublicMenuPage() {
-  const params = useParams<{ token: string }>();
+export default async function SharedMenuPage({
+  params,
+}: {
+  params: { token: string };
+}) {
   const token = params.token;
-  const [rows, setRows] = useState<Row[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      setErr(null);
-      const { data, error } = await supabase.rpc('get_public_menu', { p_token: token });
-      if (error) { setErr(error.message); setLoading(false); return; }
-      setRows((data ?? []) as Row[]);
-      setLoading(false);
-    })();
-  }, [token]);
+  // Call the RPC that returns the JSON payload (works without auth)
+  const { data, error } = await supabase.rpc('get_shared_menu', {
+    p_token: token,
+  });
 
-  if (loading) return null;
-  if (err) return <div className="p-6 text-red-500">{err}</div>;
-  if (!rows.length) return <div className="p-6">Nothing found.</div>;
+  // If RPC failed or no payload, show a clean 404-ish message
+  if (error || !data) {
+    return (
+      <div className="max-w-3xl mx-auto py-10 space-y-4">
+        <h1 className="text-2xl font-semibold">Menu not found</h1>
+        <p className="opacity-75">
+          This share link is invalid or has been revoked.
+        </p>
+      </div>
+    );
+  }
 
-  const menuName = rows[0]?.menu_name ?? 'Menu';
-  const servedOn = rows[0]?.served_on ?? '';
+  const payload = data as SharedPayload;
+  const title = payload.title ?? 'Menu';
+  const servedOn = payload.served_on
+    ? new Date(payload.served_on).toLocaleDateString()
+    : '';
 
   return (
-    <div className="max-w-2xl mx-auto p-6 bg-white text-black">
-      <div className="text-center mb-4">
-        <h1 className="text-3xl font-bold">{menuName}</h1>
-        {servedOn && <div className="text-sm">{new Date(servedOn).toLocaleDateString()}</div>}
-        <button
-          onClick={() => window.print()}
-          className="mt-3 border rounded px-3 py-1 print:hidden"
-        >
-          Print
-        </button>
+    <div className="max-w-3xl mx-auto py-10 space-y-6">
+      <div className="text-center space-y-1">
+        <h1 className="text-3xl font-bold">{title}</h1>
+        {servedOn && <div className="text-sm opacity-75">{servedOn}</div>}
       </div>
 
       <table className="w-full text-lg">
         <tbody>
-          {rows.map((r, i) => (
+          {(payload.items ?? []).map((it, i) => (
             <tr key={i}>
-              <td className="py-2 pr-4">{r.item_name}</td>
-              <td className="py-2 text-right">{r.price != null ? `$${Number(r.price).toFixed(2)}` : ''}</td>
+              <td className="py-2 pr-4">{it.name}</td>
+              <td className="py-2 text-right">
+                {Number.isFinite(it.price) ? `$${Number(it.price).toFixed(2)}` : ''}
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
 
-      <style>{`
-        @media print {
-          body { color: #000; background: #fff; }
-          header, nav, .print\\:hidden { display: none !important; }
-        }
-      `}</style>
+      <p className="text-xs opacity-60 text-center">
+        Read-only share. Prices shown were saved with the menu.
+      </p>
     </div>
   );
 }
