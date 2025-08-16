@@ -234,7 +234,8 @@ export default function MenuToday() {
     const { data, error } = await supabase.rpc('ensure_menu_share', { p_menu_id: currentMenuId });
     if (error) { setShareStatus(error.message); return; }
 
-    const token = Array.isArray(data) ? data[0]?.token : (data as any)?.token;
+    const row: any = Array.isArray(data) ? data[0] : data;
+    const token = row?.share_token || row?.token; // handle old/new shapes
     if (!token) { setShareStatus('No token returned'); return; }
 
     const url = `${window.location.origin}/share/${token}`;
