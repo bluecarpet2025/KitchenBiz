@@ -1,50 +1,45 @@
-'use client';
-import Link from 'next/link';
-
-export default function Landing() {
+export default function Home() {
   return (
-    <div className="space-y-6 max-w-5xl">
-      <h1 className="text-3xl font-semibold">Run your kitchen with clarity.</h1>
+    <main className="max-w-5xl mx-auto p-6 space-y-6">
+      <h1 className="text-3xl font-semibold">Kitchen Biz</h1>
+      <p className="text-sm text-neutral-300">
+        Simple back-of-house for small restaurants: inventory, recipes, and menu costing.
+      </p>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <section className="border rounded p-4">
-          <h2 className="font-semibold mb-2">What this does</h2>
-          <ul className="list-disc list-inside text-sm space-y-1">
-            <li>Track inventory and unit costs</li>
-            <li>Build recipes with per-serving costs</li>
-            <li>Create a daily menu with suggested prices</li>
-            <li>Print or save the menu as PDF</li>
-          </ul>
-        </section>
-
-        <section className="border rounded p-4">
-          <h2 className="font-semibold mb-2">What’s available now</h2>
-          <ul className="list-disc list-inside text-sm space-y-1">
-            <li>Inventory: add/edit items, inline price edits</li>
-            <li>Recipes: wizard + detail view, auto cost calcs</li>
-            <li>Menu: % slider, rounding, save/load</li>
-          </ul>
-        </section>
-
-        <section className="border rounded p-4">
-          <h2 className="font-semibold mb-2">Coming next (hints)</h2>
-          <ul className="list-disc list-inside text-sm space-y-1">
-            <li>CSV tools & faster imports</li>
-            <li>Staff roles & permissions</li>
-            <li>Vendor & purchase tracking (optional)</li>
-          </ul>
-        </section>
-
-        <section className="border rounded p-4">
-          <h2 className="font-semibold mb-2">Access</h2>
-          <p className="text-sm">Invite-only during MVP. Use your email’s magic link to sign in.</p>
-          <div className="mt-3">
-            <Link href="/login" className="bg-white text-black font-medium rounded px-4 py-2">
-              Sign in
-            </Link>
-          </div>
-        </section>
+      <div className="grid sm:grid-cols-3 gap-3">
+        <a href="/inventory" className="border rounded-lg p-4 hover:bg-neutral-900 block">
+          <h2 className="font-medium">Inventory →</h2>
+          <p className="text-xs text-neutral-400 mt-1">
+            Track items, purchases, and daily counts. Inline pricing with $/base auto-calc.
+          </p>
+        </a>
+        <a href="/recipes" className="border rounded-lg p-4 hover:bg-neutral-900 block">
+          <h2 className="font-medium">Recipes →</h2>
+          <p className="text-xs text-neutral-400 mt-1">
+            Per-serving costs and “Makeable” based on stock on hand.
+          </p>
+        </a>
+        <a href="/menu" className="border rounded-lg p-4 hover:bg-neutral-900 block">
+          <h2 className="font-medium">Menu →</h2>
+          <p className="text-xs text-neutral-400 mt-1">
+            Build menus, save/load, share read-only links, print.
+          </p>
+        </a>
       </div>
-    </div>
+
+      <section className="space-y-2">
+        <h3 className="text-lg font-medium">Roadmap</h3>
+        <ul className="list-disc ml-6 text-sm text-neutral-300 space-y-1">
+          <li>Prep printable sheet</li>
+          <li>Import templates & Google Sheets sync</li>
+          <li>Staff roles & vendors</li>
+          <li>Polish & empty states</li>
+        </ul>
+      </section>
+
+      <p className="text-sm text-neutral-400">
+        Need a hand? Read the <a href="/help" className="underline">help/FAQ</a>.
+      </p>
+    </main>
   );
 }
