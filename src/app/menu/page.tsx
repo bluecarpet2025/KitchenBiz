@@ -1,5 +1,4 @@
-// app/menu/page.tsx
-import { cookies } from "next/headers";
+// src/app/menu/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 
@@ -10,12 +9,18 @@ type MenuRow = { id: string; name: string | null; updated_at: string | null };
 async function getTenant(supabase: ReturnType<typeof createServerClient>) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { user: null, tenantId: null };
-  const { data: profile } = await supabase.from("profiles").select("tenant_id").eq("id", user.id).single();
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("tenant_id")
+    .eq("id", user.id)
+    .single();
   return { user, tenantId: profile?.tenant_id ?? null };
 }
 
-export default async function MenuPage({ searchParams }: { searchParams?: Record<string,string> }) {
-  const supabase = createServerClient(cookies());
+export default async function MenuPage(
+  props: { searchParams?: Promise<Record<string, string | string[]>> }
+) {
+  const supabase = createServerClient();
   const { user, tenantId } = await getTenant(supabase);
 
   if (!user || !tenantId) {
@@ -28,6 +33,16 @@ export default async function MenuPage({ searchParams }: { searchParams?: Record
     );
   }
 
+  // Next.js 15: searchParams is a Promise
+  const sp = (await props.searchParams) ?? {};
+  const selectedParam = sp["menu_id"];
+  const selectedFromQuery =
+    typeof selectedParam === "string"
+      ? selectedParam
+      : Array.isArray(selectedParam)
+        ? selectedParam[0]
+        : undefined;
+
   const { data: menus } = await supabase
     .from("menus")
     .select("id, name, updated_at")
@@ -35,7 +50,7 @@ export default async function MenuPage({ searchParams }: { searchParams?: Record
     .order("updated_at", { ascending: false })
     .returns<MenuRow[]>();
 
-  const selectedId = searchParams?.menu_id || menus?.[0]?.id || null;
+  const selectedId = selectedFromQuery || menus?.[0]?.id || null;
 
   let menuRecipes: { recipe_id: string; servings: number }[] = [];
   let recipes: { id: string; name: string | null }[] = [];
@@ -47,9 +62,12 @@ export default async function MenuPage({ searchParams }: { searchParams?: Record
       .eq("menu_id", selectedId);
     menuRecipes = mr ?? [];
 
-    const rids = menuRecipes.map(m => m.recipe_id);
+    const rids = menuRecipes.map((m) => m.recipe_id);
     if (rids.length > 0) {
-      const { data: rs } = await supabase.from("recipes").select("id, name").in("id", rids);
+      const { data: rs } = await supabase
+        .from("recipes")
+        .select("id, name")
+        .in("id", rids);
       recipes = rs ?? [];
     }
   }
@@ -68,7 +86,7 @@ export default async function MenuPage({ searchParams }: { searchParams?: Record
         <form action="/menu" method="get" className="flex items-center gap-2">
           <label className="text-sm">Saved menus:</label>
           <select name="menu_id" defaultValue={selectedId ?? ""} className="border rounded-md px-2 py-1">
-            {(menus ?? []).map(m => (
+            {(menus ?? []).map((m) => (
               <option key={m.id} value={m.id}>
                 {m.name || "Untitled"} • {m.updated_at ? new Date(m.updated_at).toLocaleDateString() : ""}
               </option>
@@ -80,7 +98,9 @@ export default async function MenuPage({ searchParams }: { searchParams?: Record
       </div>
 
       <div className="mt-6">
-        {!selectedId && <p className="text-sm text-muted-foreground">No menus yet. Create one to get started.</p>}
+        {!selectedId && (
+          <p className="text-sm text-muted-foreground">No menus yet. Create one to get started.</p>
+        )}
         {selectedId && (
           <div className="border rounded-lg p-4">
             <h2 className="text-lg font-medium mb-2">Recipes in this menu</h2>
@@ -94,12 +114,16 @@ export default async function MenuPage({ searchParams }: { searchParams?: Record
               <tbody>
                 {menuRecipes.map((mr, i) => (
                   <tr key={i} className="border-t">
-                    <td className="p-2">{recipes.find(r => r.id === mr.recipe_id)?.name ?? "Untitled"}</td>
+                    <td className="p-2">{recipes.find((r) => r.id === mr.recipe_id)?.name ?? "Untitled"}</td>
                     <td className="p-2 text-right">{mr.servings}</td>
                   </tr>
                 ))}
                 {menuRecipes.length === 0 && (
-                  <tr><td colSpan={2} className="p-2 text-sm text-muted-foreground">No recipes in this menu.</td></tr>
+                  <tr>
+                    <td colSpan={2} className="p-2 text-sm text-muted-foreground">
+                      No recipes in this menu.
+                    </td>
+                  </tr>
                 )}
               </tbody>
             </table>
