@@ -87,41 +87,40 @@ export default function InventoryPage() {
             <col style={{ width: COLS[4] }} />
             <col style={{ width: COLS[5] }} />
           </colgroup>
-          <tbody>
-            <tr>
-              <td className="px-3 py-1" colSpan={4}>
-                <div className="flex items-center gap-4">
-                  <h1 className="text-2xl font-semibold">Inventory</h1>
-                  {onhandLoaded && (
-                    <span className="text-xs px-2 py-1 rounded bg-neutral-800 border border-neutral-700">
-                      On hand loaded
-                    </span>
-                  )}
-                  <a className="underline text-sm" href="/app">← Home</a>
-                </div>
-              </td>
-              <td className="px-3 py-1">
-                <div className="flex gap-2 justify-end">
-                  <Link href="/inventory/purchase"
-                        className="w-32 whitespace-nowrap text-sm border rounded py-2 hover:bg-neutral-900 inline-flex items-center justify-center">
-                    New Purchase
+            <tbody>
+              <tr>
+                <td className="px-3 py-1" colSpan={4}>
+                  <div className="flex items-center gap-4">
+                    <h1 className="text-2xl font-semibold">Inventory</h1>
+                    <a className="underline text-sm" href="/app">← Home</a>
+                  </div>
+                </td>
+                <td className="px-3 py-1">
+                  <div className="flex gap-2 justify-end">
+                    <Link
+                      href="/inventory/purchase"
+                      className="min-w-[9rem] whitespace-nowrap text-sm border rounded px-4 py-2 hover:bg-neutral-900 inline-flex items-center justify-center"
+                    >
+                      New Purchase
+                    </Link>
+                    <Link
+                      href="/inventory/counts/new"
+                      className="min-w-[8rem] whitespace-nowrap text-sm border rounded px-4 py-2 hover:bg-neutral-900 inline-flex items-center justify-center"
+                    >
+                      New Count
+                    </Link>
+                  </div>
+                </td>
+                <td className="px-3 py-1">
+                  <Link
+                    href="/inventory/import"
+                    className="min-w-[7.5rem] whitespace-nowrap text-sm border rounded px-4 py-2 hover:bg-neutral-900 inline-flex items-center justify-center"
+                  >
+                    Import
                   </Link>
-                  <Link href="/inventory/counts/new"
-                        className="w-28 whitespace-nowrap text-sm border rounded py-2 hover:bg-neutral-900 inline-flex items-center justify-center">
-                    New Count
-                  </Link>
-                </div>
-              </td>
-              <td className="px-3 py-1">
-                <Link
-                  href="/inventory/import"
-                  className="w-28 whitespace-nowrap text-sm border rounded py-2 hover:bg-neutral-900 inline-flex items-center justify-center"
-                >
-                  Import
-                </Link>
-              </td>
-            </tr>
-          </tbody>
+                </td>
+              </tr>
+            </tbody>
         </table>
       </div>
 

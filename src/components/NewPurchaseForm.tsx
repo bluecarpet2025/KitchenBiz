@@ -107,10 +107,10 @@ export default function NewPurchaseForm({ items: initialItems }: { items: Item[]
         <table className="w-full text-sm">
           <thead className="bg-muted/50">
             <tr>
-              <th className="text-left p-2">Item</th>
-              <th className="text-right p-2">Qty</th>
-              <th className="text-left p-2">Unit</th>
-              <th className="text-right p-2">Cost (total)</th>
+              <th className="text-center p-2">Item</th>
+              <th className="text-center p-2">Qty</th>
+              <th className="text-center p-2">Unit</th>
+              <th className="text-center p-2">Cost (total)</th>
             </tr>
           </thead>
           <tbody>
