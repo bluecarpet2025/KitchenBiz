@@ -1,389 +1,111 @@
-'use client';
+// app/menu/page.tsx
+import { cookies } from "next/headers";
+import Link from "next/link";
+import { createServerClient } from "@/lib/supabase/server";
 
-import { useEffect, useMemo, useState } from 'react';
-import { supabase } from '@/lib/supabase';
+export const dynamic = "force-dynamic";
 
-export const dynamic = 'force-dynamic';
+type MenuRow = { id: string; name: string | null; updated_at: string | null };
 
-type Recipe = {
-  id: string; name: string;
-  batch_yield_qty: number | null; batch_yield_unit: string | null; yield_pct: number | null;
-};
-type Ingredient = { recipe_id: string; item_id: string; qty: number };
-type Item = { id: string; name: string; pack_to_base_factor: number; last_price: number | null; base_unit: string };
-type RoundStyle = '99' | '95' | '49' | '00';
-
-function roundPrice(raw: number, style: RoundStyle) {
-  const f = Math.floor(raw);
-  switch (style) {
-    case '99': return Number((f + 0.99).toFixed(2));
-    case '95': return Number((f + 0.95).toFixed(2));
-    case '49': return Number((f + 0.49).toFixed(2));
-    case '00': return Math.round(raw * 100) / 100;
-  }
-}
-function suggestPrice(costPerPortion: number, targetPct: number, style: RoundStyle) {
-  if (!targetPct || targetPct <= 0) return 0;
-  return roundPrice(costPerPortion / targetPct, style);
+async function getTenant(supabase: ReturnType<typeof createServerClient>) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { user: null, tenantId: null };
+  const { data: profile } = await supabase.from("profiles").select("tenant_id").eq("id", user.id).single();
+  return { user, tenantId: profile?.tenant_id ?? null };
 }
 
-export default function MenuToday() {
-  const [tenantId, setTenantId] = useState<string | null>(null);
-  const [recipes, setRecipes] = useState<Recipe[]>([]);
-  const [portionCost, setPortionCost] = useState<Record<string, number>>({});
-  const [loading, setLoading] = useState(true);
+export default async function MenuPage({ searchParams }: { searchParams?: Record<string,string> }) {
+  const supabase = createServerClient(cookies());
+  const { user, tenantId } = await getTenant(supabase);
 
-  const [selection, setSelection] = useState<Record<string, { price?: number; manual?: boolean }>>({});
-  const [targetPct, setTargetPct] = useState<number>(0.30);
-  const [rounding, setRounding] = useState<RoundStyle>('99');
-  const [status, setStatus] = useState<string | null>(null);
+  if (!user || !tenantId) {
+    return (
+      <main className="max-w-5xl mx-auto p-6">
+        <h1 className="text-2xl font-semibold">Menu</h1>
+        <p className="mt-4">Sign in required.</p>
+        <Link href="/login?redirect=/menu" className="underline">Go to login</Link>
+      </main>
+    );
+  }
 
-  const [currentMenuId, setCurrentMenuId] = useState<string | null>(null);
+  const { data: menus } = await supabase
+    .from("menus")
+    .select("id, name, updated_at")
+    .eq("tenant_id", tenantId)
+    .order("updated_at", { ascending: false })
+    .returns<MenuRow[]>();
 
-  // share UI
-  const [shareUrl, setShareUrl] = useState<string | null>(null);
-  const [shareStatus, setShareStatus] = useState<string | null>(null);
+  const selectedId = searchParams?.menu_id || menus?.[0]?.id || null;
 
-  const chosen = useMemo(() => recipes.filter(r => selection[r.id]), [recipes, selection]);
+  let menuRecipes: { recipe_id: string; servings: number }[] = [];
+  let recipes: { id: string; name: string | null }[] = [];
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      setStatus(null);
+  if (selectedId) {
+    const { data: mr } = await supabase
+      .from("menu_recipes")
+      .select("recipe_id, servings")
+      .eq("menu_id", selectedId);
+    menuRecipes = mr ?? [];
 
-      const { data: u } = await supabase.auth.getUser();
-      const uid = u.user?.id;
-      if (!uid) { setStatus('Not signed in'); setLoading(false); return; }
-
-      const { data: prof } = await supabase.from('profiles').select('tenant_id').eq('id', uid).maybeSingle();
-      if (!prof?.tenant_id) { setStatus('No tenant'); setLoading(false); return; }
-      setTenantId(prof.tenant_id);
-
-      const { data: recs } = await supabase
-        .from('recipes')
-        .select('id,name,batch_yield_qty,batch_yield_unit,yield_pct')
-        .order('name');
-      const recipesData = (recs ?? []) as Recipe[];
-      setRecipes(recipesData);
-
-      if (recipesData.length === 0) { setPortionCost({}); setLoading(false); return; }
-
-      const rIds = recipesData.map(r => r.id);
-      const { data: ing } = await supabase
-        .from('recipe_ingredients')
-        .select('recipe_id,item_id,qty')
-        .in('recipe_id', rIds);
-      const ingredients = (ing ?? []) as Ingredient[];
-
-      const itemIds = Array.from(new Set(ingredients.map(i => i.item_id)));
-      const { data: itemsData } = await supabase
-        .from('inventory_items')
-        .select('id,name,base_unit,pack_to_base_factor,last_price')
-        .in('id', itemIds);
-      const itemsMap: Record<string, Item> = {};
-      (itemsData ?? []).forEach((it: any) => (itemsMap[it.id] = it as Item));
-
-      const costMap: Record<string, number> = {};
-      for (const r of recipesData) {
-        const rIngs = ingredients.filter(i => i.recipe_id === r.id);
-        let batchCost = 0;
-        rIngs.forEach((ing) => {
-          const it = itemsMap[ing.item_id];
-          if (!it) return;
-          const costPerBase = it.last_price ? Number(it.last_price) / Number(it.pack_to_base_factor) : 0;
-          batchCost += costPerBase * Number(ing.qty || 0);
-        });
-        const yieldPct = Number(r.yield_pct ?? 1);
-        const portions = Math.max(1, Number(r.batch_yield_qty ?? 1));
-        const effective = yieldPct > 0 ? batchCost / yieldPct : batchCost;
-        costMap[r.id] = effective / portions;
-      }
-      setPortionCost(costMap);
-      setLoading(false);
-    })();
-  }, []);
-
-  useEffect(() => {
-    setSelection(prev => {
-      const next = { ...prev };
-      for (const id of Object.keys(next)) {
-        if (!next[id]?.manual) {
-          const cpp = portionCost[id] ?? 0;
-          next[id] = { price: suggestPrice(cpp, targetPct, rounding), manual: false };
-        }
-      }
-      return next;
-    });
-  }, [targetPct, rounding, portionCost]);
-
-  const toggle = (id: string) => {
-    setSelection((s) => {
-      const copy = { ...s };
-      if (copy[id]) delete copy[id];
-      else {
-        const cpp = portionCost[id] ?? 0;
-        copy[id] = { price: suggestPrice(cpp, targetPct, rounding), manual: false };
-      }
-      return copy;
-    });
-  };
-
-  const setPrice = (id: string, val: number) =>
-    setSelection((s) => ({ ...s, [id]: { price: Number(val), manual: true } }));
-
-  const resetToSuggest = (id: string) =>
-    setSelection((s) => {
-      const cpp = portionCost[id] ?? 0;
-      return { ...s, [id]: { price: suggestPrice(cpp, targetPct, rounding), manual: false } };
-    });
-
-  const rowsForSave = (menuId: string) => {
-    return chosen.map(r => ({
-      menu_id: menuId, recipe_id: r.id,
-      price: selection[r.id]?.price ?? 0,
-      target_pct: targetPct, rounding,
-      manual: !!selection[r.id]?.manual
-    }));
-  };
-
-  async function saveMenu() {
-    if (!tenantId) return;
-    if (chosen.length === 0) { setStatus('Pick at least one item'); return; }
-    setStatus('Saving…');
-
-    let menuId: string;
-
-    if (currentMenuId) {
-      menuId = currentMenuId;
-      const { error: delErr } = await supabase.from('menu_recipes').delete().eq('menu_id', menuId);
-      if (delErr) { setStatus(delErr.message); return; }
-    } else {
-      const { data: menu, error: mErr } = await supabase
-        .from('menus')
-        .insert({ tenant_id: tenantId, name: "Today's Menu", served_on: new Date().toISOString().slice(0,10) })
-        .select('id').single();
-      if (mErr || !menu?.id) { setStatus(mErr?.message || 'Failed creating menu'); return; }
-      menuId = menu.id;
-      setCurrentMenuId(menuId);
+    const rids = menuRecipes.map(m => m.recipe_id);
+    if (rids.length > 0) {
+      const { data: rs } = await supabase.from("recipes").select("id, name").in("id", rids);
+      recipes = rs ?? [];
     }
-
-    const rows = rowsForSave(menuId);
-    const { error: iErr } = await supabase.from('menu_recipes').insert(rows);
-    if (iErr) { setStatus(iErr.message); return; }
-
-    setStatus('Saved ✅');
   }
 
-  async function saveAsNew() {
-    if (!tenantId) return;
-    if (chosen.length === 0) { setStatus('Pick at least one item'); return; }
-    const name = (typeof window !== 'undefined' ? window.prompt('Name this menu:', 'Menu') : null) || 'Menu';
-    setStatus('Saving as new…');
-
-    const { data: menu, error: mErr } = await supabase
-      .from('menus')
-      .insert({ tenant_id: tenantId, name, served_on: new Date().toISOString().slice(0,10) })
-      .select('id').single();
-    if (mErr || !menu?.id) { setStatus(mErr?.message || 'Failed creating menu'); return; }
-
-    const rows = rowsForSave(menu.id);
-    const { error: iErr } = await supabase.from('menu_recipes').insert(rows);
-    if (iErr) { setStatus(iErr.message); return; }
-
-    setCurrentMenuId(menu.id);
-    setStatus('Saved new menu ✅');
-  }
-
-  async function loadLast() {
-    if (!tenantId) return;
-    setStatus('Loading last…');
-    const { data: menus, error } = await supabase
-      .from('menus')
-      .select('id, served_on')
-      .order('served_on', { ascending: false })
-      .limit(1);
-    if (error || !menus?.length) { setStatus('No previous menu'); return; }
-
-    const lastId = menus[0].id as string;
-    const { data: rows, error: rErr } = await supabase
-      .from('menu_recipes')
-      .select('recipe_id, price, manual, target_pct, rounding')
-      .eq('menu_id', lastId);
-    if (rErr) { setStatus(rErr.message); return; }
-
-    const sel: Record<string, { price?: number; manual?: boolean }> = {};
-    rows?.forEach(row => { sel[row.recipe_id] = { price: Number(row.price), manual: row.manual || false }; });
-    setSelection(sel);
-    setCurrentMenuId(lastId);
-
-    if (rows && rows.length) {
-      const rp = rows.find(Boolean);
-      if (rp?.target_pct) setTargetPct(Number(rp.target_pct));
-      if (rp?.rounding) setRounding(rp.rounding as RoundStyle);
-    }
-    setStatus('Loaded last menu ✅');
-  }
-
-  const printNow = () => window.print();
-
-  // ----- Share helpers -----
-  async function createOrFetchShare() {
-    if (!currentMenuId) { setShareStatus('Save the menu first'); return; }
-    setShareStatus('Creating link…');
-
-    const { data, error } = await supabase.rpc('ensure_menu_share', { p_menu_id: currentMenuId });
-    if (error) { setShareStatus(error.message); return; }
-
-    const row: any = Array.isArray(data) ? data[0] : data;
-    const token = row?.share_token || row?.token; // handle old/new shapes
-    if (!token) { setShareStatus('No token returned'); return; }
-
-    const url = `${window.location.origin}/share/${token}`;
-    setShareUrl(url);
-    setShareStatus('Link ready ✅');
-  }
-
-  async function revokeShare() {
-    if (!currentMenuId) { setShareStatus('No menu open'); return; }
-    setShareStatus('Revoking…');
-    const { error } = await supabase.rpc('revoke_menu_share', { p_menu_id: currentMenuId });
-    if (error) { setShareStatus(error.message); return; }
-    setShareUrl(null);
-    setShareStatus('Revoked ✅');
-  }
-
-  async function copyShare() {
-    if (!shareUrl) return;
-    await navigator.clipboard.writeText(shareUrl);
-    setShareStatus('Copied! ✅');
-  }
-
-  // ----- UI -----
   return (
-    <div className="space-y-4">
-      <div className="flex items-baseline justify-between print:hidden">
-        <h1 className="text-2xl font-semibold">Today&apos;s Menu</h1>
+    <main className="max-w-5xl mx-auto p-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">Menu</h1>
         <div className="flex gap-2">
-          <button onClick={loadLast} className="border rounded px-3 py-2">Load last</button>
-          <button onClick={saveMenu} className="border rounded px-3 py-2">Save</button>
-          <button onClick={saveAsNew} className="border rounded px-3 py-2">Save as new</button>
-          <button onClick={printNow} className="bg-black text-white rounded px-4 py-2">Print</button>
+          <Link href="/menu/prep" className="px-3 py-2 border rounded-md text-sm hover:bg-muted">Prep</Link>
+          <Link href="/menu/print" className="px-3 py-2 border rounded-md text-sm hover:bg-muted">Print</Link>
         </div>
       </div>
 
-      {status && <div className="text-sm text-neutral-300 print:hidden">{status}</div>}
-
-      {/* Share panel */}
-      <div className="border rounded p-4 space-y-2 print:hidden">
-        <div className="font-semibold">Share (read-only link)</div>
-        <div className="flex gap-2">
-          <button onClick={createOrFetchShare} className="border rounded px-3 py-2">Create / Get link</button>
-          <button onClick={copyShare} disabled={!shareUrl} className="border rounded px-3 py-2 disabled:opacity-50">Copy</button>
-          <button onClick={revokeShare} className="border rounded px-3 py-2">Revoke</button>
-        </div>
-        {shareUrl && <div className="text-sm break-all">{shareUrl}</div>}
-        {shareStatus && <div className="text-xs text-neutral-400">{shareStatus}</div>}
-      </div>
-
-      {/* Controls */}
-      <div className="border rounded p-4 space-y-3 print:hidden">
-        <div className="flex items-center gap-4 text-sm">
-          <div className="font-semibold">Food-cost target</div>
-          <input type="range" min={10} max={60} step={1}
-            value={Math.round(targetPct * 100)}
-            onChange={(e) => setTargetPct(Number(e.target.value) / 100)} className="w-64" />
-          <div>{Math.round(targetPct * 100)}%</div>
-
-          <div className="ml-6 font-semibold">Rounding</div>
-          <select className="border p-1" value={rounding} onChange={e => setRounding(e.target.value as RoundStyle)}>
-            <option value="99">.99</option>
-            <option value="95">.95</option>
-            <option value="49">.49</option>
-            <option value="00">.00</option>
-          </select>
-        </div>
-        <p className="text-xs text-neutral-400">
-          Suggested price = cost per portion ÷ target% (rounded). Edits you make are kept when changing the slider or rounding.
-        </p>
-      </div>
-
-      {/* Builder */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 print:hidden">
-        <div className="border rounded p-4">
-          <div className="font-semibold mb-2">Pick items</div>
-          {loading ? <div className="text-sm text-neutral-400">Loading…</div> : (
-            <div className="space-y-2 max-h-[60vh] overflow-auto pr-2">
-              {recipes.map((r) => (
-                <label key={r.id} className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={!!selection[r.id]} onChange={() => toggle(r.id)} />
-                  <span>{r.name}</span>
-                </label>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="border rounded p-4">
-          <div className="font-semibold mb-2">Set prices</div>
-          {chosen.length === 0 ? (
-            <p className="text-sm text-neutral-400">Choose items on the left.</p>
-          ) : (
-            <div className="space-y-3">
-              {chosen.map((r) => {
-                const cpp = portionCost[r.id] ?? 0;
-                const suggested = suggestPrice(cpp, targetPct, rounding);
-                const price = selection[r.id]?.price ?? suggested;
-                const manual = selection[r.id]?.manual ?? false;
-                return (
-                  <div key={r.id} className="grid grid-cols-8 gap-2 items-center">
-                    <div className="col-span-4">
-                      <div className="font-medium">{r.name}</div>
-                      <div className="text-xs text-neutral-400">
-                        Cost/portion: ${cpp.toFixed(2)} • Suggested ({Math.round(targetPct * 100)}% {'.' + rounding}): ${suggested.toFixed(2)}
-                        {manual && <span className="ml-2 text-yellow-400">(edited)</span>}
-                      </div>
-                    </div>
-                    <div className="col-span-1 text-right">$</div>
-                    <input className="border p-1 w-28 col-span-2"
-                      type="number" step="0.01" min="0"
-                      value={Number.isFinite(price) ? price : ''}
-                      onChange={(e) => setPrice(r.id, Number(e.target.value))} />
-                    <button type="button" onClick={() => resetToSuggest(r.id)} className="col-span-1 text-xs underline justify-self-end">
-                      Reset
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Printable view */}
-      <div className="print:block hidden">
-        <div className="text-center mb-4">
-          <h1 className="text-3xl font-bold">Today&apos;s Menu</h1>
-          <div className="text-sm">{new Date().toLocaleDateString()}</div>
-        </div>
-        <table className="w-full text-lg">
-          <tbody>
-            {chosen.map((r) => (
-              <tr key={r.id}>
-                <td className="py-2 pr-4">{r.name}</td>
-                <td className="py-2 text-right">{selection[r.id]?.price ? `$${Number(selection[r.id]?.price).toFixed(2)}` : ''}</td>
-              </tr>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <form action="/menu" method="get" className="flex items-center gap-2">
+          <label className="text-sm">Saved menus:</label>
+          <select name="menu_id" defaultValue={selectedId ?? ""} className="border rounded-md px-2 py-1">
+            {(menus ?? []).map(m => (
+              <option key={m.id} value={m.id}>
+                {m.name || "Untitled"} • {m.updated_at ? new Date(m.updated_at).toLocaleDateString() : ""}
+              </option>
             ))}
-          </tbody>
-        </table>
+          </select>
+          <button className="px-3 py-2 border rounded-md text-sm hover:bg-muted">Load</button>
+        </form>
+        <Link href="/menu/new" className="text-sm underline">New Menu</Link>
       </div>
 
-      <style>{`
-        @media print {
-          body { color: #000; background: #fff; }
-          header, nav, .print\\:hidden { display: none !important; }
-          .print\\:block { display: block !important; }
-        }
-      `}</style>
-    </div>
+      <div className="mt-6">
+        {!selectedId && <p className="text-sm text-muted-foreground">No menus yet. Create one to get started.</p>}
+        {selectedId && (
+          <div className="border rounded-lg p-4">
+            <h2 className="text-lg font-medium mb-2">Recipes in this menu</h2>
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50">
+                <tr>
+                  <th className="text-left p-2">Recipe</th>
+                  <th className="text-right p-2">Servings</th>
+                </tr>
+              </thead>
+              <tbody>
+                {menuRecipes.map((mr, i) => (
+                  <tr key={i} className="border-t">
+                    <td className="p-2">{recipes.find(r => r.id === mr.recipe_id)?.name ?? "Untitled"}</td>
+                    <td className="p-2 text-right">{mr.servings}</td>
+                  </tr>
+                ))}
+                {menuRecipes.length === 0 && (
+                  <tr><td colSpan={2} className="p-2 text-sm text-muted-foreground">No recipes in this menu.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </main>
   );
 }
