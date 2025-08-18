@@ -1,48 +1,41 @@
-// src/middleware.ts
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { createServerClient } from "@/lib/supabase/server";
 
-/**
- * Your Supabase project sets a cookie for server-side helpers in some flows,
- * but the browser SDK uses localStorage. We accept either the Supabase
- * cookie (if present) or our tiny kb_auth cookie that AuthGate writes.
- */
-const SB_AUTH_COOKIE = 'sb-zdwenjdspvbfouooqlco-auth-token';
-const KB_AUTH_COOKIE = 'kb_auth';
+const PUBLIC_PATHS = [
+  "/",                 // landing
+  "/login",            // login
+  "/auth/callback",    // supabase magic-link handler
+];
 
-function hasSessionCookie(req: NextRequest) {
-  const hasKb = req.cookies.get(KB_AUTH_COOKIE)?.value === '1';
-  const hasSb =
-    Boolean(req.cookies.get(SB_AUTH_COOKIE)) ||
-    req.cookies.getAll().some((c) => c.name.startsWith(SB_AUTH_COOKIE));
-  return hasKb || hasSb;
+function isPublic(pathname: string) {
+  if (PUBLIC_PATHS.includes(pathname)) return true;
+  // public share links
+  if (pathname.startsWith("/app/share/")) return true;
+  if (pathname === "/favicon.ico") return true;
+  return false;
 }
 
-/**
- * Protect only these routes. Everything else is public.
- */
-export function middleware(req: NextRequest) {
+export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  const protectedPaths = [
-    /^\/inventory(\/.*)?$/i,
-    /^\/recipes(\/.*)?$/i,
-    /^\/menu$/i,
-    /^\/menu\/prep$/i,
-  ];
+  if (isPublic(pathname)) {
+    return NextResponse.next();
+  }
 
-  const isProtected = protectedPaths.some((rx) => rx.test(pathname));
-  if (!isProtected) return NextResponse.next();
+  const supabase = await createServerClient();
+  const { data: { user } } = await supabase.auth.getUser();
 
-  if (!hasSessionCookie(req)) {
-    const url = req.nextUrl.clone();
-    url.pathname = '/login';
-    url.searchParams.set('redirect', pathname + req.nextUrl.search);
-    return NextResponse.redirect(url);
+  if (!user) {
+    const login = new URL("/login", req.url);
+    login.searchParams.set("redirect", pathname + (req.nextUrl.search || ""));
+    return NextResponse.redirect(login);
   }
 
   return NextResponse.next();
 }
 
+// Match everything in app, we’ll early-return for public routes
 export const config = {
-  matcher: ['/inventory/:path*', '/recipes/:path*', '/menu', '/menu/prep'],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };

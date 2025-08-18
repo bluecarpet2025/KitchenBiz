@@ -6,7 +6,7 @@ export default function Help() {
       <h1 className="text-2xl font-semibold">Help & FAQ</h1>
 
       <section className="space-y-2">
-        <h2 className="text-lg font-medium">How do I get Makeable > 0?</h2>
+        <h2 className="text-lg font-medium">How do I get Makeable {'>'} 0?</h2>
         <p className="text-sm text-neutral-300">
           Record a <a className="underline" href="/inventory/purchase">Purchase</a> or commit a{" "}
           <a className="underline" href="/inventory/counts/new">Count</a>. Makeable uses the
