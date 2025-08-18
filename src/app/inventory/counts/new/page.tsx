@@ -1,4 +1,4 @@
-import { cookies } from "next/headers";
+// src/app/inventory/counts/new/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import CountForm from "@/components/CountForm";
@@ -6,7 +6,7 @@ import CountForm from "@/components/CountForm";
 export const dynamic = "force-dynamic";
 
 export default async function NewCountPage() {
-  const supabase = createServerClient(cookies());
+  const supabase = await createServerClient();
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
@@ -19,7 +19,11 @@ export default async function NewCountPage() {
     );
   }
 
-  const { data: profile } = await supabase.from("profiles").select("tenant_id").eq("id", user.id).single();
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("tenant_id")
+    .eq("id", user.id)
+    .single();
   const tenantId = profile?.tenant_id ?? null;
 
   const { data: items } = await supabase
@@ -33,7 +37,9 @@ export default async function NewCountPage() {
     .select("item_id, qty_on_hand")
     .eq("tenant_id", tenantId);
 
-  const expectedMap = Object.fromEntries((expected ?? []).map((e:any)=> [e.item_id, Number(e.qty_on_hand || 0)]));
+  const expectedMap = Object.fromEntries(
+    (expected ?? []).map((e: any) => [e.item_id, Number(e.qty_on_hand || 0)])
+  );
 
   return (
     <main className="max-w-5xl mx-auto p-6">

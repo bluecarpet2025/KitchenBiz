@@ -1,4 +1,4 @@
-import { cookies } from "next/headers";
+// src/app/inventory/purchase/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import NewPurchaseForm from "@/components/NewPurchaseForm";
@@ -6,7 +6,7 @@ import NewPurchaseForm from "@/components/NewPurchaseForm";
 export const dynamic = "force-dynamic";
 
 export default async function PurchasePage() {
-  const supabase = createServerClient(cookies());
+  const supabase = await createServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) {
     return (
@@ -18,7 +18,11 @@ export default async function PurchasePage() {
     );
   }
 
-  const { data: profile } = await supabase.from("profiles").select("tenant_id").eq("id", user.id).single();
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("tenant_id")
+    .eq("id", user.id)
+    .single();
   const tenantId = profile?.tenant_id ?? null;
 
   const { data: items } = await supabase

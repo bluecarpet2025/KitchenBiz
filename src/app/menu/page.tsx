@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 type MenuRow = { id: string; name: string | null; updated_at: string | null };
 
-async function getTenant(supabase: ReturnType<typeof createServerClient>) {
+async function getTenant(supabase: Awaited<ReturnType<typeof createServerClient>>) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { user: null, tenantId: null };
   const { data: profile } = await supabase
@@ -20,7 +20,7 @@ async function getTenant(supabase: ReturnType<typeof createServerClient>) {
 export default async function MenuPage(
   props: { searchParams?: Promise<Record<string, string | string[]>> }
 ) {
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
   const { user, tenantId } = await getTenant(supabase);
 
   if (!user || !tenantId) {
@@ -33,7 +33,6 @@ export default async function MenuPage(
     );
   }
 
-  // Next.js 15: searchParams is a Promise
   const sp = (await props.searchParams) ?? {};
   const selectedParam = sp["menu_id"];
   const selectedFromQuery =
