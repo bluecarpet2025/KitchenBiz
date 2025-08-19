@@ -71,6 +71,8 @@ export default async function MenuPage(
     }
   }
 
+  const createdFlag = (sp["created"] === "1");
+
   return (
     <main className="max-w-5xl mx-auto p-6">
       <div className="flex items-center justify-between">
@@ -80,6 +82,12 @@ export default async function MenuPage(
           <Link href="/menu/print" className="px-3 py-2 border rounded-md text-sm hover:bg-muted">Print</Link>
         </div>
       </div>
+
+      {createdFlag && (
+        <p className="mt-2 text-xs text-emerald-400">
+          New menu created. Use Prep to build it, or Print when ready.
+        </p>
+      )}
 
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <form action="/menu" method="get" className="flex items-center gap-2">

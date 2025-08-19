@@ -21,6 +21,7 @@ export default function PrepListPage() {
   const [sel, setSel] = useState<Sel>({});
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -37,35 +38,38 @@ export default function PrepListPage() {
       const { data: recs } = await supabase
         .from('recipes')
         .select('id,name,batch_yield_qty,batch_yield_unit,yield_pct')
+        .eq('tenant_id', prof.tenant_id)
         .order('name');
       const rList = (recs ?? []) as Recipe[];
       setRecipes(rList);
 
       // ingredients for all recipes
       const rIds = rList.map(r => r.id);
-      const { data: ing } = await supabase
-        .from('recipe_ingredients')
-        .select('recipe_id,item_id,qty')
-        .in('recipe_id', rIds);
-      const ingList = (ing ?? []) as Ingredient[];
+      if (rIds.length) {
+        const { data: ing } = await supabase
+          .from('recipe_ingredients')
+          .select('recipe_id,item_id,qty')
+          .in('recipe_id', rIds);
+        const ingList = (ing ?? []) as Ingredient[];
 
-      const map: Record<string, Ingredient[]> = {};
-      for (const row of ingList) {
-        if (!map[row.recipe_id]) map[row.recipe_id] = [];
-        map[row.recipe_id].push(row);
-      }
-      setIngByRecipe(map);
+        const map: Record<string, Ingredient[]> = {};
+        for (const row of ingList) {
+          if (!map[row.recipe_id]) map[row.recipe_id] = [];
+          map[row.recipe_id].push(row);
+        }
+        setIngByRecipe(map);
 
-      // items used
-      const itemIds = Array.from(new Set(ingList.map(i => i.item_id)));
-      if (itemIds.length) {
-        const { data: items } = await supabase
-          .from('inventory_items')
-          .select('id,name,base_unit,pack_to_base_factor,last_price')
-          .in('id', itemIds);
-        const iMap: Record<string, Item> = {};
-        (items ?? []).forEach((it: any) => (iMap[it.id] = it as Item));
-        setItemsById(iMap);
+        // items used
+        const itemIds = Array.from(new Set(ingList.map(i => i.item_id)));
+        if (itemIds.length) {
+          const { data: items } = await supabase
+            .from('inventory_items')
+            .select('id,name,base_unit,pack_to_base_factor,last_price')
+            .in('id', itemIds);
+          const iMap: Record<string, Item> = {};
+          (items ?? []).forEach((it: any) => (iMap[it.id] = it as Item));
+          setItemsById(iMap);
+        }
       }
 
       setLoading(false);
@@ -86,14 +90,13 @@ export default function PrepListPage() {
     const lastId = menus[0].id;
     const { data: rows } = await supabase
       .from('menu_recipes')
-      .select('recipe_id')
+      .select('recipe_id, servings')
       .eq('menu_id', lastId);
 
-    // default to 1 portion each
     const next: Sel = {};
-    (rows ?? []).forEach(r => { next[r.recipe_id] = 1; });
+    (rows ?? []).forEach(r => { next[r.recipe_id] = Number(r.servings || 1); });
     setSel(next);
-    setStatus('Loaded last menu items (1 portion each). Adjust as needed.');
+    setStatus('Loaded last menu items. Adjust portions as needed.');
   }
 
   function addRecipe(id: string) {
@@ -110,9 +113,51 @@ export default function PrepListPage() {
     setSel(s => ({ ...s, [id]: Math.max(0, Math.floor(n)) }));
   }
 
+  // SAVE AS MENU
+  async function saveAsMenu() {
+    try {
+      if (!tenantId) { alert("No tenant"); return; }
+      const entries = Object.entries(sel).filter(([, v]) => v > 0);
+      if (entries.length === 0) { alert("Add at least one recipe."); return; }
+
+      const defaultName = `Prep ${new Date().toLocaleDateString()}`;
+      // simple prompt for a name
+      const name = window.prompt("Menu name:", defaultName);
+      if (!name) return;
+
+      setSaving(true);
+
+      // insert menu
+      const { data: m, error: mErr } = await supabase
+        .from("menus")
+        .insert({ tenant_id: tenantId, name })
+        .select("id")
+        .single();
+      if (mErr) throw mErr;
+
+      const menuId = m?.id as string;
+
+      // insert menu_recipes
+      const rows = entries.map(([recipe_id, servings]) => ({
+        menu_id: menuId,
+        recipe_id,
+        servings: Number(servings)
+      }));
+      const { error: rErr } = await supabase.from("menu_recipes").insert(rows);
+      if (rErr) throw rErr;
+
+      // go to menu page with banner
+      window.location.assign(`/menu?menu_id=${menuId}&created=1`);
+    } catch (err: any) {
+      console.error(err);
+      alert(err.message ?? "Error saving menu");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   // Aggregate ingredient totals across selected recipes
   const totals = useMemo(() => {
-    // itemId -> total base qty
     const sum: Record<string, number> = {};
     for (const rid of Object.keys(sel)) {
       const portionsToPrep = sel[rid] || 0;
@@ -122,18 +167,16 @@ export default function PrepListPage() {
       const yieldPct = Number(r.yield_pct ?? 1);
       const rows = ingByRecipe[rid] ?? [];
       for (const ing of rows) {
-        // qty is per *batch*; per-serving qty:
+        // qty is per batch; convert to per-serving
         const perServing = portions ? (Number(ing.qty || 0) * (yieldPct || 1)) / portions : Number(ing.qty || 0);
         const needed = perServing * portionsToPrep;
         sum[ing.item_id] = (sum[ing.item_id] || 0) + needed;
       }
     }
-    // turn into array with item data
     const list = Object.entries(sum).map(([itemId, qty]) => ({
       item: itemsById[itemId],
       qty,
     }));
-    // sort by name
     list.sort((a, b) => (a.item?.name || '').localeCompare(b.item?.name || ''));
     return list;
   }, [sel, recipes, ingByRecipe, itemsById]);
@@ -144,6 +187,9 @@ export default function PrepListPage() {
         <h1 className="text-2xl font-semibold">Prep List</h1>
         <div className="flex gap-2">
           <button onClick={loadFromLastMenu} className="border rounded px-3 py-2">Load from last menu</button>
+          <button disabled={saving} onClick={saveAsMenu} className="border rounded px-3 py-2">
+            {saving ? "Saving…" : "Save as menu"}
+          </button>
         </div>
       </div>
 
