@@ -9,7 +9,7 @@ type Recipe = {
   id: string; name: string | null;
   batch_yield_qty: number | null; batch_yield_unit: string | null; yield_pct: number | null;
 };
-type Sel = Record<string, number>; // recipeId -> servings/portions selected
+type Sel = Record<string, number>; // recipeId -> portions
 
 export default function MenuBuilder() {
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -21,12 +21,10 @@ export default function MenuBuilder() {
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // share link (if exists)
   const [shareToken, setShareToken] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
-      // auth + tenant
       const { data: u } = await supabase.auth.getUser();
       const uid = u.user?.id;
       if (!uid) { setStatus('Sign in required.'); return; }
@@ -34,7 +32,6 @@ export default function MenuBuilder() {
       if (!prof?.tenant_id) { setStatus('No tenant. Visit /app.'); return; }
       setTenantId(prof.tenant_id);
 
-      // menus
       const { data: ms } = await supabase
         .from('menus')
         .select('id,name,updated_at')
@@ -43,7 +40,6 @@ export default function MenuBuilder() {
       setMenus((ms ?? []) as MenuRow[]);
       setSelectedMenuId(ms?.[0]?.id ?? null);
 
-      // recipes
       const { data: recs } = await supabase
         .from('recipes')
         .select('id,name,batch_yield_qty,batch_yield_unit,yield_pct')
@@ -53,7 +49,6 @@ export default function MenuBuilder() {
     })();
   }, []);
 
-  // whenever selected menu changes, load its lines and any share token
   useEffect(() => {
     (async () => {
       if (!selectedMenuId) { setSel({}); setShareToken(null); return; }
@@ -92,8 +87,7 @@ export default function MenuBuilder() {
   async function handleLoad(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedMenuId) return;
-    // just re-trigger effect
-    setSelectedMenuId(selectedMenuId);
+    setSelectedMenuId(selectedMenuId); // no-op; triggers effect
   }
 
   async function createNewMenu() {
@@ -127,20 +121,26 @@ export default function MenuBuilder() {
       if (!selectedMenuId) { alert('No menu selected'); return; }
       setBusy(true);
 
-      // replace lines
       const entries = Object.entries(sel).filter(([,v]) => v>0);
+
+      // clear old lines
       await supabase.from('menu_recipes').delete().eq('menu_id', selectedMenuId);
+
       if (entries.length) {
-        const rows = entries.map(([recipe_id, servings]) => ({ menu_id: selectedMenuId, recipe_id, servings: Number(servings) }));
+        // include price: 0 to satisfy NOT NULL
+        const rows = entries.map(([recipe_id, servings]) => ({
+          menu_id: selectedMenuId,
+          recipe_id,
+          servings: Number(servings),
+          price: 0
+        }));
         const { error } = await supabase.from('menu_recipes').insert(rows);
         if (error) throw error;
       }
 
-      // bump updated_at for ordering
       await supabase.from('menus').update({ updated_at: new Date().toISOString() }).eq('id', selectedMenuId);
 
       setStatus('Menu saved.');
-      // refresh list order
       const { data: ms } = await supabase
         .from('menus')
         .select('id,name,updated_at')
@@ -173,7 +173,12 @@ export default function MenuBuilder() {
       if (mErr) throw mErr;
 
       const newId = m!.id as string;
-      const rows = entries.map(([recipe_id, servings]) => ({ menu_id: newId, recipe_id, servings: Number(servings) }));
+      const rows = entries.map(([recipe_id, servings]) => ({
+        menu_id: newId,
+        recipe_id,
+        servings: Number(servings),
+        price: 0
+      }));
       const { error: rErr } = await supabase.from('menu_recipes').insert(rows);
       if (rErr) throw rErr;
 
@@ -198,7 +203,6 @@ export default function MenuBuilder() {
       if (!selectedMenuId || !tenantId) return;
       setBusy(true);
 
-      // simple token
       const token = crypto.randomUUID().replace(/-/g, '').slice(0, 24);
       const payload = { menu_id: selectedMenuId, name: menus.find(m => m.id===selectedMenuId)?.name ?? 'Menu' };
 
@@ -240,8 +244,7 @@ export default function MenuBuilder() {
   async function copyShareToClipboard(token: string) {
     const origin = typeof window !== 'undefined' ? window.location.origin : 'https://kitchenbiz.vercel.app';
     const url = `${origin}/share/${token}`;
-    try { await navigator.clipboard.writeText(url); }
-    catch { /* ignore */ }
+    try { await navigator.clipboard.writeText(url); } catch {}
   }
 
   const selectedList = useMemo(
@@ -254,52 +257,50 @@ export default function MenuBuilder() {
 
   return (
     <main className="max-w-5xl mx-auto p-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Menu</h1>
-        <div className="flex gap-2">
-          <button onClick={doPrint} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Print</button>
-          <div className="flex gap-2">
-            {!shareToken ? (
-              <button disabled={busy} onClick={createShare} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
-                Create share link
-              </button>
-            ) : (
-              <>
-                <button onClick={copyShare} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Copy share</button>
-                <button onClick={revokeShare} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Revoke</button>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
+      <h1 className="text-2xl font-semibold">Menu</h1>
 
       {status && <p className="text-xs text-emerald-400">{status}</p>}
 
-      {/* Top actions: load / new / save */}
-      <div className="flex flex-wrap items-center gap-3">
-        <form onSubmit={handleLoad} className="flex items-center gap-2">
-          <label className="text-sm">Saved menus:</label>
-          <select
-            className="border rounded-md px-2 py-1"
-            value={selectedMenuId ?? ''}
-            onChange={e => setSelectedMenuId(e.target.value || null)}
-          >
-            {(menus ?? []).map(m => (
-              <option key={m.id} value={m.id}>
-                {m.name || 'Untitled'} • {m.updated_at ? new Date(m.updated_at).toLocaleDateString() : ''}
-              </option>
-            ))}
-          </select>
-          <button className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Load</button>
-        </form>
-        <button disabled={busy} onClick={createNewMenu} className="text-sm underline">New Menu</button>
-        <button disabled={busy} onClick={saveCurrentMenu} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Save</button>
-        <button disabled={busy} onClick={saveAsNewMenu} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Save as new</button>
+      {/* Actions row (left + right on same row) */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-3">
+          <form onSubmit={handleLoad} className="flex items-center gap-2">
+            <label className="text-sm">Saved menus:</label>
+            <select
+              className="border rounded-md px-2 py-1"
+              value={selectedMenuId ?? ''}
+              onChange={e => setSelectedMenuId(e.target.value || null)}
+            >
+              {(menus ?? []).map(m => (
+                <option key={m.id} value={m.id}>
+                  {m.name || 'Untitled'} • {m.updated_at ? new Date(m.updated_at).toLocaleDateString() : ''}
+                </option>
+              ))}
+            </select>
+            <button className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Load</button>
+          </form>
+          <button disabled={busy} onClick={createNewMenu} className="text-sm underline">New Menu</button>
+          <button disabled={busy} onClick={saveCurrentMenu} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Save</button>
+          <button disabled={busy} onClick={saveAsNewMenu} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Save as new</button>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button onClick={doPrint} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Print</button>
+          {!shareToken ? (
+            <button disabled={busy} onClick={createShare} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
+              Create share link
+            </button>
+          ) : (
+            <>
+              <button onClick={copyShare} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Copy share</button>
+              <button onClick={revokeShare} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Revoke</button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Two panels */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Left: all recipes */}
         <div className="border rounded p-4">
           <div className="font-semibold mb-2">Pick recipes</div>
           <div className="space-y-2 max-h-[60vh] overflow-auto pr-2">
@@ -316,7 +317,6 @@ export default function MenuBuilder() {
           </div>
         </div>
 
-        {/* Right: selected + portions */}
         <div className="border rounded p-4">
           <div className="font-semibold mb-2">Quantities (portions)</div>
           {selectedList.length === 0 ? (
