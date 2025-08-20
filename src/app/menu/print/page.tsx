@@ -45,7 +45,7 @@ export default async function MenuPrintPage(
     );
   }
 
-  // If no menu_id, fall back to most recent by created_at (not updated_at)
+  // Fallback to the most recently created menu (we do NOT use updated_at)
   if (!selectedId) {
     const { data: m } = await supabase
       .from("menus")
