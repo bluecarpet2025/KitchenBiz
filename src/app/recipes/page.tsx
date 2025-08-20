@@ -19,11 +19,6 @@ type IngredientRow = {
   qty: number | null; // in item base units
 };
 
-type OnHandRow = {
-  item_id: string;
-  qty_on_hand_base: number;
-};
-
 async function getTenant(supabase: Awaited<ReturnType<typeof createServerClient>>) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { user: null, tenantId: null };
@@ -49,7 +44,7 @@ export default async function RecipesPage() {
     );
   }
 
-  // 1) pull recipes
+  // 1) Recipes
   const { data: recipesRaw, error: rErr } = await supabase
     .from("recipes")
     .select("id,name,created_at,batch_yield_qty,batch_yield_unit,yield_pct")
@@ -58,7 +53,7 @@ export default async function RecipesPage() {
   if (rErr) throw rErr;
   const recipes = (recipesRaw ?? []) as RecipeRow[];
 
-  // 2) ingredients for all recipes
+  // 2) Ingredients for those recipes
   const recipeIds = recipes.map(r => r.id);
   let ingredients: IngredientRow[] = [];
   if (recipeIds.length) {
@@ -70,25 +65,46 @@ export default async function RecipesPage() {
     ingredients = (ingRaw ?? []) as IngredientRow[];
   }
 
-  // 3) on‑hand map
-  const { data: ohRaw, error: ohErr } = await supabase
-    .from("v_inventory_on_hand")
-    .select("item_id,qty_on_hand_base")
-    .eq("tenant_id", tenantId);
-  if (ohErr) throw ohErr;
+  // 3) On-hand (try new view first, fall back to legacy view if needed)
   const onhandMap = new Map<string, number>();
-  (ohRaw ?? []).forEach((r: any) => {
-    onhandMap.set(r.item_id as string, Number(r.qty_on_hand_base ?? 0));
-  });
 
-  // group ingredients by recipe_id
+  // Try v_inventory_on_hand (qty_on_hand_base)
+  let ohTriedNew = false;
+  try {
+    ohTriedNew = true;
+    const { data: ohNew, error: ohNewErr } = await supabase
+      .from("v_inventory_on_hand")
+      .select("item_id,qty_on_hand_base")
+      .eq("tenant_id", tenantId);
+
+    if (ohNewErr) throw ohNewErr;
+    (ohNew ?? []).forEach((r: any) => {
+      onhandMap.set(r.item_id as string, Number(r.qty_on_hand_base ?? 0));
+    });
+  } catch (_e) {
+    // Fallback: v_item_on_hand (on_hand_base)
+    const { data: ohOld, error: ohOldErr } = await supabase
+      .from("v_item_on_hand")
+      .select("item_id,on_hand_base")
+      .eq("tenant_id", tenantId);
+
+    if (ohOldErr) {
+      // If both failed, rethrow the original/new error to surface it
+      throw ohOldErr;
+    }
+    (ohOld ?? []).forEach((r: any) => {
+      onhandMap.set(r.item_id as string, Number(r.on_hand_base ?? 0));
+    });
+  }
+
+  // Group ingredients by recipe
   const ingByRecipe = new Map<string, IngredientRow[]>();
   for (const row of ingredients) {
     if (!ingByRecipe.has(row.recipe_id)) ingByRecipe.set(row.recipe_id, []);
     ingByRecipe.get(row.recipe_id)!.push(row);
   }
 
-  // compute makeable per recipe
+  // Compute makeable per recipe
   const rows = recipes.map((rec) => {
     const parts = ingByRecipe.get(rec.id) ?? [];
     const yieldPct = Number(rec.yield_pct ?? 1);
@@ -97,20 +113,18 @@ export default async function RecipesPage() {
     let makeable: number | null = null;
 
     for (const p of parts) {
-      const perServing = batchQty > 0
-        ? Number(p.qty ?? 0) * (yieldPct || 1) / batchQty
-        : Number(p.qty ?? 0);
+      const perServing =
+        batchQty > 0
+          ? Number(p.qty ?? 0) * (yieldPct || 1) / batchQty
+          : Number(p.qty ?? 0);
 
-      // if this ingredient isn’t used per serving, skip its constraint
-      if (!perServing || perServing <= 0) continue;
+      if (!perServing || perServing <= 0) continue; // skip non-consuming rows
 
       const onHand = onhandMap.get(p.item_id) ?? 0;
       const possible = Math.floor(onHand / perServing);
-
       makeable = makeable === null ? possible : Math.min(makeable, possible);
     }
 
-    // if no ingredients or all were zero, show 0
     if (makeable === null) makeable = 0;
 
     return {
@@ -161,7 +175,6 @@ export default async function RecipesPage() {
                 </td>
               </tr>
             ))}
-
             {rows.length === 0 && (
               <tr>
                 <td colSpan={4} className="p-3 text-neutral-400">
