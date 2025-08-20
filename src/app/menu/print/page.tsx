@@ -45,13 +45,13 @@ export default async function MenuPrintPage(
     );
   }
 
-  // if no menu_id, use the most recently updated
+  // If no menu_id, fall back to most recent by created_at (not updated_at)
   if (!selectedId) {
     const { data: m } = await supabase
       .from("menus")
-      .select("id")
+      .select("id,name,created_at")
       .eq("tenant_id", tenantId)
-      .order("updated_at", { ascending: false })
+      .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
     selectedId = m?.id ?? null;
@@ -70,7 +70,7 @@ export default async function MenuPrintPage(
 
   const { data: menu } = await supabase
     .from("menus")
-    .select("id,name,updated_at,tenant_id")
+    .select("id,name,created_at,tenant_id")
     .eq("tenant_id", tenantId)
     .eq("id", selectedId)
     .maybeSingle();
@@ -97,7 +97,7 @@ export default async function MenuPrintPage(
         <div>
           <h1 className="text-2xl font-semibold">{menu?.name ?? "Menu"}</h1>
           <p className="text-sm opacity-80">
-            {menu?.updated_at ? `Updated ${new Date(menu.updated_at).toLocaleString()}` : ""}
+            {menu?.created_at ? `Created ${new Date(menu.created_at).toLocaleString()}` : ""}
           </p>
         </div>
         <div className="flex gap-2">
