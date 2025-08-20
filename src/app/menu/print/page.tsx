@@ -4,7 +4,6 @@ import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
-type MenuRow = { id: string; name: string | null; updated_at: string | null };
 type MR = { recipe_id: string; servings: number };
 type Recipe = {
   id: string;
@@ -46,7 +45,7 @@ export default async function MenuPrintPage(
     );
   }
 
-  // if no menu_id provided, use most recently updated
+  // if no menu_id, use the most recently updated
   if (!selectedId) {
     const { data: m } = await supabase
       .from("menus")
@@ -62,14 +61,16 @@ export default async function MenuPrintPage(
     return (
       <main className="max-w-3xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Print Menu</h1>
-        <p className="mt-4">No menus found. Create one in <Link className="underline" href="/menu">Menu</Link>.</p>
+        <p className="mt-4">
+          No menus yet. Create one in <Link className="underline" href="/menu">Menu</Link>.
+        </p>
       </main>
     );
   }
 
   const { data: menu } = await supabase
     .from("menus")
-    .select("id,name,updated_at")
+    .select("id,name,updated_at,tenant_id")
     .eq("tenant_id", tenantId)
     .eq("id", selectedId)
     .maybeSingle();
