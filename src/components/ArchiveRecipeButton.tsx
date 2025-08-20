@@ -9,8 +9,7 @@ export default function ArchiveRecipeButton({
   const [busy, setBusy] = useState(false);
 
   async function archive() {
-    if (!recipeId) return;
-    if (!window.confirm("Archive this recipe? (You can unarchive later)")) return;
+    if (!window.confirm("Archive this recipe? (You can restore later)")) return;
     try {
       setBusy(true);
       const { error } = await supabase
@@ -27,12 +26,7 @@ export default function ArchiveRecipeButton({
   }
 
   return (
-    <button
-      disabled={busy}
-      onClick={archive}
-      className="text-xs underline"
-      title="Archive recipe"
-    >
+    <button disabled={busy} onClick={archive} className="text-xs underline" title="Archive">
       Archive
     </button>
   );

@@ -5,13 +5,13 @@ import { useState } from "react";
 export default function DeleteMenuButton({
   menuId,
   onDeleted,
-}: { menuId: string; onDeleted?: () => void }) {
+}: { menuId: string | null; onDeleted?: () => void }) {
   const [busy, setBusy] = useState(false);
 
+  if (!menuId) return null;
+
   async function doDelete() {
-    if (!menuId) return;
-    const ok = window.confirm("Delete this menu and its lines?");
-    if (!ok) return;
+    if (!window.confirm("Delete this menu and its lines?")) return;
     try {
       setBusy(true);
       await supabase.from("menu_recipes").delete().eq("menu_id", menuId);

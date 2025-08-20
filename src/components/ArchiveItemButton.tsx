@@ -9,7 +9,6 @@ export default function ArchiveItemButton({
   const [busy, setBusy] = useState(false);
 
   async function archive() {
-    if (!itemId) return;
     if (!window.confirm("Archive this inventory item?")) return;
     try {
       setBusy(true);
@@ -27,12 +26,7 @@ export default function ArchiveItemButton({
   }
 
   return (
-    <button
-      disabled={busy}
-      onClick={archive}
-      className="text-xs underline"
-      title="Archive item"
-    >
+    <button disabled={busy} onClick={archive} className="text-xs underline" title="Archive">
       Archive
     </button>
   );
