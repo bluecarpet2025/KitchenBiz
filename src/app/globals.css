@@ -30,3 +30,13 @@ body {
 .table-cozy tbody td {
   padding: 0.5rem 0.75rem;
 }
+
+/* Dark select */
+select {
+  background-color: #000;
+  color: #fff;
+}
+option {
+  background-color: #111;
+  color: #fff;
+}
