@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 
-type MenuRow = { id: string; name: string | null; updated_at: string | null };
+type MenuRow = { id: string; name: string | null; created_at: string | null };
 type Recipe = {
   id: string;
   name: string | null;
@@ -13,9 +13,7 @@ type Recipe = {
   batch_yield_unit: string | null;
   yield_pct: number | null;
 };
-
-// recipe_id -> portions
-type Sel = Record<string, number>;
+type Sel = Record<string, number>; // recipeId -> portions
 
 export default function MenuBuilder() {
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -29,27 +27,29 @@ export default function MenuBuilder() {
 
   const [shareToken, setShareToken] = useState<string | null>(null);
 
-  // bootstrap: tenant, menus, recipes
+  // boot: get tenant, menus, recipes
   useEffect(() => {
     (async () => {
       const { data: u } = await supabase.auth.getUser();
       const uid = u.user?.id;
       if (!uid) { setStatus('Sign in required.'); return; }
 
-      const { data: prof } = await supabase.from('profiles')
-        .select('tenant_id').eq('id', uid).maybeSingle();
-      if (!prof?.tenant_id) { setStatus('No tenant. Visit /app.'); return; }
+      const { data: prof } = await supabase
+        .from('profiles').select('tenant_id').eq('id', uid).maybeSingle();
+      if (!prof?.tenant_id) { setStatus('No tenant.'); return; }
       setTenantId(prof.tenant_id);
 
+      // Menus (NO updated_at usage — order by created_at)
       const { data: ms } = await supabase
         .from('menus')
-        .select('id,name,updated_at')
+        .select('id,name,created_at')
         .eq('tenant_id', prof.tenant_id)
-        .order('updated_at', { ascending: false });
+        .order('created_at', { ascending: false });
       const list = (ms ?? []) as MenuRow[];
       setMenus(list);
-      setSelectedMenuId(list[0]?.id ?? null);
+      setSelectedMenuId(list?.[0]?.id ?? null);
 
+      // Recipes (for the left panel)
       const { data: recs } = await supabase
         .from('recipes')
         .select('id,name,batch_yield_qty,batch_yield_unit,yield_pct')
@@ -59,7 +59,7 @@ export default function MenuBuilder() {
     })();
   }, []);
 
-  // when menu changes: load its lines + existing share token
+  // when a menu is selected, load its lines + any share
   useEffect(() => {
     (async () => {
       if (!selectedMenuId) { setSel({}); setShareToken(null); return; }
@@ -82,7 +82,6 @@ export default function MenuBuilder() {
     })();
   }, [selectedMenuId]);
 
-  // --- UI helpers
   function addRecipe(id: string) {
     setSel(s => ({ ...s, [id]: s[id] ?? 1 }));
   }
@@ -97,21 +96,22 @@ export default function MenuBuilder() {
     setSel(s => ({ ...s, [id]: Math.max(0, Math.floor(n)) }));
   }
 
+  // New menu
   async function createNewMenu() {
     try {
       if (!tenantId) return;
       setBusy(true);
-      const name = window.prompt('Menu name:', `New Menu • ${new Date().toLocaleDateString()}`);
+      const name = window.prompt('Menu name:', 'New Menu');
       if (!name) return;
 
       const { data: ins, error } = await supabase
         .from('menus')
         .insert({ tenant_id: tenantId, name })
-        .select('id,updated_at')
+        .select('id, name, created_at')
         .single();
       if (error) throw error;
 
-      setMenus(m => [{ id: ins!.id, name, updated_at: ins!.updated_at ?? new Date().toISOString() }, ...m]);
+      setMenus(m => [{ id: ins!.id, name: ins!.name, created_at: ins!.created_at }, ...m]);
       setSelectedMenuId(ins!.id);
       setSel({});
       setShareToken(null);
@@ -123,44 +123,45 @@ export default function MenuBuilder() {
     }
   }
 
+  // Save current (UPSERT lines; no menus.updated_at touch)
   async function saveCurrentMenu() {
     try {
       if (!selectedMenuId) { alert('No menu selected'); return; }
       setBusy(true);
 
-      const entries = Object.entries(sel).filter(([, v]) => v > 0);
+      const entries = Object.entries(sel)
+        .filter(([, v]) => v > 0)
+        // de-dup any accidental dup keys just in case
+        .reduce((acc, [rid, servings]) => (acc.set(rid, servings), acc), new Map<string, number>());
 
-      // **overwrite by clearing old lines first** (prevents duplicate-key errors)
-      const { error: delErr } = await supabase.from('menu_recipes').delete().eq('menu_id', selectedMenuId);
-      if (delErr) throw delErr;
+      const rows = Array.from(entries.entries()).map(([recipe_id, servings]) => ({
+        menu_id: selectedMenuId,
+        recipe_id,
+        servings: Number(servings),
+        price: 0, // satisfy NOT NULL
+      }));
 
-      if (entries.length) {
-        const rows = entries.map(([recipe_id, servings]) => ({
-          menu_id: selectedMenuId,
-          recipe_id,
-          servings: Number(servings),
-          // models/table has NOT NULL on price; keep zero for now
-          price: 0
-        }));
-        const { error: insErr } = await supabase.from('menu_recipes').insert(rows);
-        if (insErr) throw insErr;
-      }
-
-      await supabase.from('menus')
-        .update({ updated_at: new Date().toISOString() })
-        .eq('id', selectedMenuId);
-
-      // refresh list so “Saved menus” shows newest first
-      if (tenantId) {
-        const { data: ms } = await supabase
-          .from('menus')
-          .select('id,name,updated_at')
-          .eq('tenant_id', tenantId)
-          .order('updated_at', { ascending: false });
-        setMenus((ms ?? []) as MenuRow[]);
+      // UPSERT on composite unique (menu_id, recipe_id)
+      if (rows.length) {
+        const { error } = await supabase
+          .from('menu_recipes')
+          .upsert(rows, { onConflict: 'menu_id,recipe_id' });
+        if (error) throw error;
+      } else {
+        // If empty, clear lines for current menu
+        await supabase.from('menu_recipes').delete().eq('menu_id', selectedMenuId);
       }
 
       setStatus('Menu saved.');
+      // refresh the menu list for ordering
+      if (tenantId) {
+        const { data: ms } = await supabase
+          .from('menus')
+          .select('id,name,created_at')
+          .eq('tenant_id', tenantId)
+          .order('created_at', { ascending: false });
+        setMenus((ms ?? []) as MenuRow[]);
+      }
     } catch (err: any) {
       alert(err.message ?? 'Error saving menu');
     } finally {
@@ -168,7 +169,8 @@ export default function MenuBuilder() {
     }
   }
 
-  async function saveAsNewMenu() {
+  // “Save as” (clone selection into a brand‑new menu)
+  async function saveAsMenu() {
     try {
       if (!tenantId) return;
       const entries = Object.entries(sel).filter(([, v]) => v > 0);
@@ -176,13 +178,13 @@ export default function MenuBuilder() {
 
       setBusy(true);
       const defaultName = `Menu ${new Date().toLocaleDateString()}`;
-      const name = window.prompt('Menu name:', defaultName);
+      const name = window.prompt('New menu name:', defaultName);
       if (!name) return;
 
       const { data: m, error: mErr } = await supabase
         .from('menus')
         .insert({ tenant_id: tenantId, name })
-        .select('id,updated_at')
+        .select('id, name, created_at')
         .single();
       if (mErr) throw mErr;
 
@@ -193,15 +195,18 @@ export default function MenuBuilder() {
         servings: Number(servings),
         price: 0
       }));
-      const { error: rErr } = await supabase.from('menu_recipes').insert(rows);
+
+      const { error: rErr } = await supabase
+        .from('menu_recipes')
+        .upsert(rows, { onConflict: 'menu_id,recipe_id' });
       if (rErr) throw rErr;
 
-      setMenus(ms => [{ id: newId, name, updated_at: m!.updated_at ?? new Date().toISOString() }, ...ms]);
+      setMenus(ms => [{ id: newId, name: m!.name, created_at: m!.created_at }, ...ms]);
       setSelectedMenuId(newId);
       setShareToken(null);
       setStatus('Menu saved.');
     } catch (err: any) {
-      alert(err.message ?? 'Error saving new menu');
+      alert(err.message ?? 'Error saving as new menu');
     } finally {
       setBusy(false);
     }
@@ -216,17 +221,14 @@ export default function MenuBuilder() {
     try {
       if (!selectedMenuId || !tenantId) return;
       setBusy(true);
-
       const token = crypto.randomUUID().replace(/-/g, '').slice(0, 24);
-      const payload = { menu_id: selectedMenuId, name: menus.find(m => m.id === selectedMenuId)?.name ?? 'Menu' };
-
-      const { error } = await supabase.from('menu_shares').insert({
-        token, tenant_id: tenantId, menu_id: selectedMenuId, payload
-      });
+      const payload = { menu_id: selectedMenuId, name: menus.find(m => m.id===selectedMenuId)?.name ?? 'Menu' };
+      const { error } = await supabase
+        .from('menu_shares')
+        .insert({ token, tenant_id: tenantId, menu_id: selectedMenuId, payload });
       if (error) throw error;
-
       setShareToken(token);
-      const origin = window.location.origin;
+      const origin = typeof window !== 'undefined' ? window.location.origin : 'https://kitchenbiz.vercel.app';
       await navigator.clipboard.writeText(`${origin}/share/${token}`).catch(() => {});
       setStatus('Public share link created & copied.');
     } catch (err: any) {
@@ -235,30 +237,15 @@ export default function MenuBuilder() {
       setBusy(false);
     }
   }
-  async function copyShare() {
-    if (!shareToken) { alert('No share link yet'); return; }
-    const origin = window.location.origin;
-    await navigator.clipboard.writeText(`${origin}/share/${shareToken}`).catch(() => {});
-    setStatus('Share link copied.');
-  }
-  async function revokeShare() {
-    try {
-      if (!selectedMenuId) return;
-      setBusy(true);
-      await supabase.from('menu_shares').delete().eq('menu_id', selectedMenuId);
-      setShareToken(null);
-      setStatus('Share link revoked.');
-    } catch (err: any) {
-      alert(err.message ?? 'Error revoking share link');
-    } finally {
-      setBusy(false);
-    }
-  }
 
   const selectedList = useMemo(
     () =>
       Object.keys(sel)
-        .map(id => ({ id, servings: sel[id], name: recipes.find(r => r.id === id)?.name || 'Untitled' }))
+        .map(id => ({
+          id,
+          servings: sel[id],
+          name: recipes.find(r => r.id === id)?.name || 'Untitled'
+        }))
         .sort((a, b) => a.name.localeCompare(b.name)),
     [sel, recipes]
   );
@@ -269,21 +256,22 @@ export default function MenuBuilder() {
 
       {status && <p className="text-xs text-emerald-400">{status}</p>}
 
-      {/* Controls Row */}
+      {/* Actions row (left + right on same row) */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
-          <form onSubmit={(e) => { e.preventDefault(); /* no-op; selection already bound */ }} className="flex items-center gap-2">
+          <form onSubmit={(e) => { e.preventDefault(); /* no-op triggers effect */ }} className="flex items-center gap-2">
             <label className="text-sm">Saved menus:</label>
             <select
-              className="border rounded-md px-2 py-2 bg-black text-white"
+              className="border rounded-md px-2 py-2 bg-neutral-950 text-neutral-100"
               value={selectedMenuId ?? ''}
               onChange={e => setSelectedMenuId(e.target.value || null)}
             >
               {(menus ?? []).map(m => (
                 <option key={m.id} value={m.id}>
-                  {(m.name || 'Untitled')} • {m.updated_at ? new Date(m.updated_at).toLocaleDateString() : ''}
+                  {(m.name || 'Untitled')}{m.created_at ? ` • ${new Date(m.created_at).toLocaleDateString()}` : ''}
                 </option>
               ))}
+              {(!menus || menus.length === 0) && <option value="">(no menus yet)</option>}
             </select>
             <button className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Load</button>
           </form>
@@ -294,8 +282,8 @@ export default function MenuBuilder() {
           <button disabled={busy} onClick={saveCurrentMenu} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
             Save
           </button>
-          <button disabled={busy} onClick={saveAsNewMenu} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
-            Save as new
+          <button disabled={busy} onClick={saveAsMenu} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
+            Save as
           </button>
         </div>
 
@@ -307,8 +295,30 @@ export default function MenuBuilder() {
             </button>
           ) : (
             <>
-              <button onClick={copyShare} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Copy share</button>
-              <button onClick={revokeShare} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Revoke</button>
+              <button
+                onClick={async () => {
+                  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://kitchenbiz.vercel.app';
+                  await navigator.clipboard.writeText(`${origin}/share/${shareToken}`).catch(() => {});
+                  setStatus('Share link copied.');
+                }}
+                className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+              >
+                Copy share
+              </button>
+              <button
+                disabled={busy}
+                onClick={async () => {
+                  if (!selectedMenuId) return;
+                  setBusy(true);
+                  await supabase.from('menu_shares').delete().eq('menu_id', selectedMenuId);
+                  setShareToken(null);
+                  setBusy(false);
+                  setStatus('Share link revoked.');
+                }}
+                className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+              >
+                Revoke
+              </button>
             </>
           )}
         </div>
@@ -329,9 +339,7 @@ export default function MenuBuilder() {
                 )}
               </div>
             ))}
-            {recipes.length === 0 && (
-              <p className="text-sm text-neutral-400">No recipes yet.</p>
-            )}
+            {recipes.length === 0 && <div className="text-sm text-neutral-400">No recipes yet.</div>}
           </div>
         </div>
 
