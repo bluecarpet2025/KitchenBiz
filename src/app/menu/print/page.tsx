@@ -40,9 +40,10 @@ function PrintButton() {
 }
 
 export default async function MenuPrintPage(
-  props: { searchParams?: { [k: string]: string | string[] } }
+  props: { searchParams?: Promise<Record<string, string | string[]>> }
 ) {
-  const sp = props.searchParams ?? {};
+  // match app-wide Promise style
+  const sp = (await props.searchParams) ?? {};
   const menuId = Array.isArray(sp.menu_id) ? sp.menu_id[0] : sp.menu_id;
   const pctParam = Array.isArray(sp.pct) ? sp.pct[0] : sp.pct;
   const foodPct = (() => {
@@ -162,7 +163,9 @@ export default async function MenuPrintPage(
       <div className="flex items-center justify-between gap-3 print:hidden">
         <div>
           <h1 className="text-2xl font-semibold">{menu.name || "Menu"}</h1>
-          <p className="text-sm opacity-80">Created {fmt(menu.created_at)} • Food cost target {(foodPct*100).toFixed(0)}%</p>
+          <p className="text-sm opacity-80">
+            Created {fmt(menu.created_at)} • Food cost target {(foodPct*100).toFixed(0)}%
+          </p>
         </div>
         <div className="flex gap-2">
           <PrintButton />

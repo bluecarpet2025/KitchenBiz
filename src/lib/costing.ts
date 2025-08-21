@@ -44,7 +44,6 @@ export function qtyPerServing(
   const qty = n(ingQtyBase);
   const batch = n(recipeBatchYieldQty) || 1;
   const ypct = n(recipeYieldPct) || 1;
-  // earlier logic: perServing = qty * yieldPct / batchYieldQty
   return batch > 0 ? (qty * (ypct || 1)) / batch : qty;
 }
 
@@ -67,9 +66,20 @@ export function costPerPortion(
 }
 
 /** Price suggestion from cost and target food-cost pct (e.g. 0.30). */
-export function priceFromCost(costPerPortion: number, foodPct = 0.3) {
+export function priceFromCost(costPerPortionValue: number, foodPct = 0.3) {
   const pct = foodPct > 0 ? foodPct : 0.3;
-  const price = costPerPortion / pct;
-  // Round to nearest 0.05 for nicer prices
-  return Math.round(price / 0.05) * 0.05;
+  const price = costPerPortionValue / pct;
+  return Math.round(price / 0.05) * 0.05; // round to $0.05
+}
+
+/* --------- Back‑compat exports used by /recipes/[id] --------- */
+export const costPerServing = costPerPortion;
+export const suggestedPrice = priceFromCost;
+
+export function fmtUSD(v: number) {
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(v || 0);
+  } catch {
+    return `$${(v || 0).toFixed(2)}`;
+  }
 }
