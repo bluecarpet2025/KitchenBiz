@@ -1,179 +1,165 @@
 'use client';
+export const dynamic = 'force-dynamic';
 
-import { useEffect, useMemo, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import { costPerBaseUnit } from '@/lib/costing';
+import { costPerServing, fmtUSD, suggestedPrice } from '@/lib/costing';
 
-type RI = { id: string; item_id: string | null; sub_recipe_id: string | null; qty: number | null; unit: string | null };
-type Item = {
-  id: string; name: string;
-  base_unit: string; purchase_unit: string;
-  pack_to_base_factor: number | null;
-  last_price: number | null;
+type RecipeRow = {
+  id: string;
+  name: string | null;
+  created_at: string | null;
+  batch_yield_qty: number | null;
+  batch_yield_unit: string | null;
+  yield_pct: number | null;
 };
+type IngredientRow = { recipe_id: string; item_id: string; qty: number | null };
+type ItemRow = { id: string; name: string | null; last_price: number | null; pack_to_base_factor: number | null };
 
-export default function RecipeDetailPage() {
-  const params = useParams<{ id: string }>();
-  const router = useRouter();
+export default function RecipesPage() {
+  const [tenantId, setTenantId] = useState<string | null>(null);
+  const [recipes, setRecipes] = useState<RecipeRow[]>([]);
+  const [ingredients, setIngredients] = useState<IngredientRow[]>([]);
+  const [itemsById, setItemsById] = useState<Record<string, ItemRow>>({});
+  const [targetPct, setTargetPct] = useState<number>(() => {
+    const saved = localStorage.getItem('targetFoodPct');
+    return saved ? Number(saved) : 0.30;
+  });
+  const [status, setStatus] = useState<string | null>(null);
 
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
-
-  const [recipe, setRecipe] = useState<any>(null);
-  const [ings, setIngs] = useState<RI[]>([]);
-  const [itemsById, setItemsById] = useState<Record<string, Item>>({});
+  useEffect(() => {
+    localStorage.setItem('targetFoodPct', String(targetPct));
+  }, [targetPct]);
 
   useEffect(() => {
     (async () => {
-      setLoading(true);
-      setErr(null);
-      const id = params.id;
+      try {
+        const { data: u } = await supabase.auth.getUser();
+        const uid = u.user?.id;
+        if (!uid) { setStatus('Sign in required.'); return; }
 
-      // recipe (grab everything so we can be flexible about column names)
-      const { data: r, error: rErr } = await supabase
-        .from('recipes')
-        .select('*')
-        .eq('id', id)
-        .single();
-      if (rErr) { setErr(rErr.message); setLoading(false); return; }
-      setRecipe(r);
+        const { data: prof } = await supabase.from('profiles').select('tenant_id').eq('id', uid).maybeSingle();
+        if (!prof?.tenant_id) { setStatus('No tenant.'); return; }
+        setTenantId(prof.tenant_id);
 
-      // ingredients
-      const { data: ris, error: iErr } = await supabase
-        .from('recipe_ingredients')
-        .select('id,item_id,sub_recipe_id,qty,unit')
-        .eq('recipe_id', id)
-        .order('id');
-      if (iErr) { setErr(iErr.message); setLoading(false); return; }
-      const list = (ris ?? []) as RI[];
-      setIngs(list);
+        const { data: recs } = await supabase
+          .from('recipes')
+          .select('id,name,created_at,batch_yield_qty,batch_yield_unit,yield_pct')
+          .eq('tenant_id', prof.tenant_id)
+          .order('name');
+        setRecipes((recs ?? []) as RecipeRow[]);
 
-      // fetch inventory items used
-      const itemIds = Array.from(new Set(list.map(x => x.item_id).filter(Boolean))) as string[];
-      if (itemIds.length) {
-        const { data: its, error: itErr } = await supabase
-          .from('inventory_items')
-          .select('id,name,base_unit,purchase_unit,pack_to_base_factor,last_price')
-          .in('id', itemIds);
-        if (itErr) { setErr(itErr.message); setLoading(false); return; }
-        const map: Record<string, Item> = {};
-        (its ?? []).forEach((it: any) => { map[it.id] = it as Item; });
-        setItemsById(map);
+        const rids = (recs ?? []).map((r: any) => r.id);
+        const { data: ings } = await supabase
+          .from('recipe_ingredients')
+          .select('recipe_id,item_id,qty')
+          .in('recipe_id', rids);
+        setIngredients((ings ?? []) as IngredientRow[]);
+
+        const itemIds = Array.from(new Set((ings ?? []).map((i: any) => i.item_id)));
+        if (itemIds.length) {
+          const { data: items } = await supabase
+            .from('inventory_items')
+            .select('id,name,last_price,pack_to_base_factor')
+            .in('id', itemIds);
+          const map: Record<string, ItemRow> = {};
+          (items ?? []).forEach((it: any) => { map[it.id] = it as ItemRow; });
+          setItemsById(map);
+        }
+      } catch (e: any) {
+        setStatus(e?.message ?? 'Error loading recipes');
       }
-
-      setLoading(false);
     })();
-  }, [params.id]);
+  }, []);
 
-  // Flexible fallbacks
-  const portions: number = recipe?.portions ?? recipe?.servings ?? recipe?.portion_qty ?? 1;
-  const portionUnit: string = recipe?.portion_unit ?? recipe?.serving_unit ?? recipe?.unit ?? 'each';
-  const yieldPct: number = recipe?.yield_pct ?? recipe?.yield ?? 1;
+  const ingByRecipe = useMemo(() => {
+    const m = new Map<string, IngredientRow[]>();
+    for (const row of ingredients) {
+      if (!m.has(row.recipe_id)) m.set(row.recipe_id, []);
+      m.get(row.recipe_id)!.push(row);
+    }
+    return m;
+  }, [ingredients]);
 
   const rows = useMemo(() => {
-    return ings.map(ri => {
-      const it = ri.item_id ? itemsById[ri.item_id] : undefined;
-      const qty = Number(ri.qty ?? 0);
-      const perServingQty = portions ? (qty * yieldPct) / portions : qty;
-
-      let unitCost = 0;
-      let baseUnit = it?.base_unit ?? ri.unit ?? '';
-      if (it?.last_price && it?.pack_to_base_factor) {
-        unitCost = costPerBaseUnit(Number(it.last_price), Number(it.pack_to_base_factor));
-      }
-      const costPerServing = unitCost * perServingQty;
-
+    return recipes.map(rec => {
+      const parts = ingByRecipe.get(rec.id) ?? [];
+      const cps = costPerServing({ recipe: rec, ingredients: parts, itemsById });
       return {
-        name: it?.name ?? '(missing item)',
-        totalQty: qty,
-        perServingQty,
-        baseUnit,
-        costPerServing,
+        id: rec.id,
+        name: rec.name ?? 'Untitled',
+        created_at: rec.created_at,
+        costPerServing: cps,
+        suggested: suggestedPrice(cps, targetPct),
       };
     });
-  }, [ings, itemsById, portions, yieldPct]);
-
-  const batchCost = rows.reduce((s, r) => s + r.costPerServing * (portions || 1), 0);
-  const effectiveBatch = yieldPct ? batchCost / yieldPct : batchCost;
-  const costPerServing = portions ? effectiveBatch / portions : 0;
-
-  if (loading) return null;
-  if (err) return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Recipe</h1>
-        <a className="underline text-sm" onClick={() => router.back()}>← Back</a>
-      </div>
-      <p className="text-red-500">{err}</p>
-    </div>
-  );
+  }, [recipes, ingByRecipe, itemsById, targetPct]);
 
   return (
-    <div className="space-y-6">
-      {/* Header with Edit + Back */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">{recipe?.name}</h1>
-        <div className="flex items-center gap-2">
-          <Link
-            href={`/recipes/${params.id}/edit`}
-            className="border rounded px-3 py-1 hover:bg-neutral-900"
-            title="Edit this recipe"
-          >
-            Edit
-          </Link>
-          <Link className="underline text-sm" href="/recipes">← Back to list</Link>
-        </div>
+    <main className="max-w-5xl mx-auto p-6 space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-semibold">Recipes</h1>
+        <Link
+          href="/recipes/new"
+          className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+        >
+          New Recipe
+        </Link>
       </div>
 
-      {/* stat cards */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <div className="border rounded p-4">
-          <div className="text-sm opacity-75">Portions</div>
-          <div className="text-lg font-medium">{portions} {portionUnit}</div>
-          <div className="text-sm opacity-75">Yield %: {Math.round(yieldPct * 100)}%</div>
-        </div>
-        <div className="border rounded p-4">
-          <div className="text-sm opacity-75">Batch cost</div>
-          <div className="text-lg font-medium">${batchCost.toFixed(2)}</div>
-          <div className="text-sm opacity-75">Effective (after yield): ${effectiveBatch.toFixed(2)}</div>
-        </div>
-        <div className="border rounded p-4">
-          <div className="text-sm opacity-75">Cost per serving</div>
-          <div className="text-lg font-medium">${costPerServing.toFixed(2)}</div>
-        </div>
+      {/* Pricing controls */}
+      <div className="border rounded-lg p-4 flex items-center gap-4">
+        <div className="font-medium">Target food cost %</div>
+        <input
+          type="range"
+          min={0.20}
+          max={0.45}
+          step={0.01}
+          value={targetPct}
+          onChange={(e) => setTargetPct(Number(e.target.value))}
+          className="w-48"
+        />
+        <div className="tabular-nums">{Math.round(targetPct * 100)}%</div>
+        <div className="text-sm opacity-70">Suggested price = cost ÷ target%</div>
       </div>
 
-      {/* ingredients table */}
-      <div>
-        <h2 className="font-semibold mb-2">Ingredients (per serving)</h2>
-        <table className="table-cozy w-full text-sm table-auto border-separate border-spacing-y-1">
-          <thead>
-            <tr className="text-left text-neutral-300">
-              <th>Ingredient</th>
-              <th>Total Qty</th>
-              <th>Per Serving</th>
-              <th>Base Unit</th>
-              <th>Cost / Serving</th>
+      {status && <p className="text-sm text-rose-400">{status}</p>}
+
+      <div className="mt-2 border rounded-lg overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-neutral-900/60">
+            <tr>
+              <th className="text-left p-2">Recipe</th>
+              <th className="text-right p-2">Cost / serving</th>
+              <th className="text-right p-2">Suggested price</th>
+              <th className="text-left p-2">Created</th>
+              <th className="text-left p-2">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, i) => (
-              <tr key={i} className="bg-neutral-950/60 rounded">
-                <td className="px-3 py-2 rounded-l">{r.name}</td>
-                <td className="px-3 py-2">{r.totalQty.toFixed(3)}</td>
-                <td className="px-3 py-2">{r.perServingQty.toFixed(3)}</td>
-                <td className="px-3 py-2">{r.baseUnit}</td>
-                <td className="px-3 py-2 rounded-r">${r.costPerServing.toFixed(4)}</td>
+            {rows.map(r => (
+              <tr key={r.id} className="border-t">
+                <td className="p-2">
+                  <Link href={`/recipes/${r.id}`} className="underline">{r.name}</Link>
+                </td>
+                <td className="p-2 text-right tabular-nums">{fmtUSD(r.costPerServing)}</td>
+                <td className="p-2 text-right tabular-nums">{fmtUSD(r.suggested)}</td>
+                <td className="p-2">{r.created_at ? new Date(r.created_at).toLocaleDateString() : '-'}</td>
+                <td className="p-2">
+                  <Link href={`/recipes/${r.id}?dup=1`} className="underline mr-3">Duplicate</Link>
+                  <Link href={`/recipes/${r.id}`} className="underline">Open</Link>
+                </td>
               </tr>
             ))}
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={5} className="p-3 text-neutral-400">No recipes yet.</td>
+              </tr>
+            )}
           </tbody>
         </table>
-        <p className="text-xs opacity-70 mt-2">
-          Quantities are shown in each item’s base unit (e.g., grams). Costs use current inventory prices.
-        </p>
       </div>
-    </div>
+    </main>
   );
 }
