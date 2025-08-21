@@ -4,7 +4,7 @@ import { createServerClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-export const runtime = "nodejs"; // hard-pin Node runtime (avoid Edge issues)
+export const runtime = "nodejs"; // force Node runtime to avoid Edge quirks
 
 type LineRow = { recipe_id: string; servings: number };
 type RecipeRow = { id: string; name: string | null };
@@ -19,8 +19,14 @@ function ErrorBox({ title, detail }: { title: string; detail?: string }) {
     <main className="max-w-4xl mx-auto p-6">
       <h1 className="text-2xl font-semibold">Menu – Print</h1>
       <p className="mt-4 text-red-400">{title}</p>
-      {detail && <pre className="mt-2 text-xs opacity-80 whitespace-pre-wrap">{detail}</pre>}
-      <Link href="/menu" className="underline mt-6 inline-block">Back to Menu</Link>
+      {detail && (
+        <pre className="mt-2 text-xs opacity-80 whitespace-pre-wrap">
+          {detail}
+        </pre>
+      )}
+      <Link href="/menu" className="underline mt-6 inline-block">
+        Back to Menu
+      </Link>
     </main>
   );
 }
@@ -39,16 +45,12 @@ function PrintButton() {
 }
 
 export default async function MenuPrintPage(
-  props: { searchParams?: Promise<Record<string, string | string[]>> | Record<string, string | string[]> }
+  props: { searchParams?: Promise<any> } // <-- keep your app's expected type
 ) {
-  // Handle both shapes: Promise or plain object
+  // Safely resolve search params (your app passes a Promise)
   let sp: Record<string, string | string[]> = {};
-  const maybe = (props as any)?.searchParams;
   try {
-    sp =
-      maybe && typeof maybe.then === "function"
-        ? (await maybe)
-        : (maybe ?? {});
+    sp = (props.searchParams ? await props.searchParams : {}) ?? {};
   } catch {
     sp = {};
   }
@@ -58,7 +60,7 @@ export default async function MenuPrintPage(
   // Supabase server client
   const supabase = await createServerClient();
 
-  // Get user → tenant
+  // Resolve user → tenant
   let userId: string | null = null;
   let tenantId: string | null = null;
   try {
@@ -87,14 +89,10 @@ export default async function MenuPrintPage(
     return <ErrorBox title="Could not resolve tenant." detail={String(e?.message ?? e)} />;
   }
 
-  if (!tenantId) {
-    return <ErrorBox title="Missing tenant." />;
-  }
-  if (!menuId) {
-    return <ErrorBox title="Missing menu id." />;
-  }
+  if (!tenantId) return <ErrorBox title="Missing tenant." />;
+  if (!menuId)   return <ErrorBox title="Missing menu id." />;
 
-  // Load the menu (scoped to tenant)
+  // Load menu (scoped to tenant)
   let menu: { id: string; name: string | null; created_at: string | null } | null = null;
   try {
     const { data, error } = await supabase
@@ -110,9 +108,7 @@ export default async function MenuPrintPage(
     return <ErrorBox title="Failed to load menu." detail={String(e?.message ?? e)} />;
   }
 
-  if (!menu) {
-    return <ErrorBox title="Menu not found for this tenant." />;
-  }
+  if (!menu) return <ErrorBox title="Menu not found for this tenant." />;
 
   // Load lines
   let lines: LineRow[] = [];
@@ -125,7 +121,6 @@ export default async function MenuPrintPage(
     lines = (data ?? []) as LineRow[];
   } catch (e: any) {
     console.error("menu_recipes catch", e);
-    // Keep going with empty lines
     lines = [];
   }
 
