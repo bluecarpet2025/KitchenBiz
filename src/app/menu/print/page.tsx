@@ -1,127 +1,161 @@
 // src/app/menu/print/page.tsx
-import { createServerClient } from "@/lib/supabase/server";
 import Link from "next/link";
+import { createServerClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
-type MR = { recipe_id: string; servings: number };
-type Recipe = {
-  id: string;
-  name: string | null;
-  batch_yield_qty: number | null;
-  batch_yield_unit: string | null;
-  yield_pct: number | null;
-};
+type MenuRow = { id: string; name: string | null; created_at: string | null };
+type LineRow = { recipe_id: string; servings: number };
+type RecipeRow = { id: string; name: string | null };
+
+function fmt(d?: string | null) {
+  if (!d) return "";
+  try { return new Date(d).toLocaleString(); } catch { return ""; }
+}
+
+/** Small client button so users can print */
+function PrintButton() {
+  "use client";
+  return (
+    <button
+      onClick={() => window.print()}
+      className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900 print:hidden"
+    >
+      Print
+    </button>
+  );
+}
 
 export default async function MenuPrintPage(
-  props: { searchParams?: Promise<Record<string, string>> }
+  props: { searchParams?: Promise<Record<string, string | string[]>> }
 ) {
-  const supabase = await createServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
+  // In this project searchParams is a Promise → await it
   const sp = (await props.searchParams) ?? {};
-  let selectedId: string | null = sp["menu_id"] ?? null;
+  const menuId = Array.isArray(sp.menu_id) ? sp.menu_id[0] : sp.menu_id;
 
-  if (!user) {
+  const supabase = await createServerClient();
+
+  // user → tenant
+  const { data: u } = await supabase.auth.getUser();
+  const userId = u.user?.id ?? null;
+  if (!userId) {
     return (
-      <main className="max-w-3xl mx-auto p-6">
-        <h1 className="text-2xl font-semibold">Print Menu</h1>
-        <p className="mt-4">Sign in required.</p>
-        <Link className="underline" href="/login?redirect=/menu/print">Go to login</Link>
+      <main className="max-w-4xl mx-auto p-6">
+        <h1 className="text-2xl font-semibold">Menu – Print</h1>
+        <p className="mt-4">You need to sign in to view this menu.</p>
+        <Link className="underline" href="/login?redirect=/menu">Go to login</Link>
+      </main>
+    );
+  }
+  const { data: prof } = await supabase
+    .from("profiles")
+    .select("tenant_id")
+    .eq("id", userId)
+    .maybeSingle();
+  const tenantId = prof?.tenant_id ?? null;
+
+  if (!tenantId || !menuId) {
+    return (
+      <main className="max-w-4xl mx-auto p-6">
+        <h1 className="text-2xl font-semibold">Menu – Print</h1>
+        <p className="mt-4">Missing menu or tenant.</p>
+        <Link className="underline" href="/menu">Back to Menu</Link>
       </main>
     );
   }
 
-  const { data: profile } = await supabase
-    .from("profiles").select("tenant_id").eq("id", user.id).single();
-  const tenantId = profile?.tenant_id ?? null;
-
-  if (!tenantId) {
-    return (
-      <main className="max-w-3xl mx-auto p-6">
-        <h1 className="text-2xl font-semibold">Print Menu</h1>
-        <p className="mt-4">No tenant.</p>
-      </main>
-    );
-  }
-
-  // Fallback to the most recently created menu (we do NOT use updated_at)
-  if (!selectedId) {
-    const { data: m } = await supabase
-      .from("menus")
-      .select("id,name,created_at")
-      .eq("tenant_id", tenantId)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    selectedId = m?.id ?? null;
-  }
-
-  if (!selectedId) {
-    return (
-      <main className="max-w-3xl mx-auto p-6">
-        <h1 className="text-2xl font-semibold">Print Menu</h1>
-        <p className="mt-4">
-          No menus yet. Create one in <Link className="underline" href="/menu">Menu</Link>.
-        </p>
-      </main>
-    );
-  }
-
+  // Get the menu (safe‑check tenant ownership)
   const { data: menu } = await supabase
     .from("menus")
     .select("id,name,created_at,tenant_id")
+    .eq("id", menuId)
     .eq("tenant_id", tenantId)
-    .eq("id", selectedId)
     .maybeSingle();
 
-  const { data: mrs } = await supabase
-    .from("menu_recipes")
-    .select("recipe_id,servings")
-    .eq("menu_id", selectedId);
-
-  const rids = (mrs ?? []).map(r => r.recipe_id);
-  let recipes: Recipe[] = [];
-  if (rids.length) {
-    const { data: rs } = await supabase
-      .from("recipes")
-      .select("id,name,batch_yield_qty,batch_yield_unit,yield_pct")
-      .in("id", rids)
-      .eq("tenant_id", tenantId);
-    recipes = (rs ?? []) as Recipe[];
+  if (!menu) {
+    return (
+      <main className="max-w-4xl mx-auto p-6">
+        <h1 className="text-2xl font-semibold">Menu – Print</h1>
+        <p className="mt-4">Menu not found.</p>
+        <Link className="underline" href="/menu">Back to Menu</Link>
+      </main>
+    );
   }
 
+  // Lines
+  const { data: lines } = await supabase
+    .from("menu_recipes")
+    .select("recipe_id,servings")
+    .eq("menu_id", menu.id);
+
+  const rids = (lines ?? []).map(l => l.recipe_id);
+  let recipes: RecipeRow[] = [];
+  if (rids.length) {
+    const { data: recs } = await supabase
+      .from("recipes")
+      .select("id,name")
+      .in("id", rids);
+    recipes = (recs ?? []) as RecipeRow[];
+  }
+
+  // Map recipe names
+  const nameById = new Map<string, string>();
+  recipes.forEach(r => nameById.set(r.id, r.name ?? "Untitled"));
+
+  // Stable order by name for print
+  const rows = (lines ?? [])
+    .map(l => ({ name: nameById.get(l.recipe_id) ?? "Untitled", servings: l.servings }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
   return (
-    <main className="mx-auto p-8 print:p-0 max-w-3xl">
-      <div className="flex items-center justify-between mb-4 print:hidden">
+    <main className="mx-auto p-8 max-w-3xl">
+      {/* Header (hidden when printing) */}
+      <div className="flex items-center justify-between gap-3 print:hidden">
         <div>
-          <h1 className="text-2xl font-semibold">{menu?.name ?? "Menu"}</h1>
-          <p className="text-sm opacity-80">
-            {menu?.created_at ? `Created ${new Date(menu.created_at).toLocaleString()}` : ""}
-          </p>
+          <h1 className="text-2xl font-semibold">{menu.name || "Menu"}</h1>
+          <p className="text-sm opacity-80">Created {fmt(menu.created_at)}</p>
         </div>
         <div className="flex gap-2">
-          <Link href="/menu" className="px-3 py-2 border rounded-md text-sm">Back</Link>
-          <button onClick={() => window.print()} className="px-3 py-2 border rounded-md text-sm">Print</button>
+          <PrintButton />
+          <Link href="/menu" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
+            Back to Menu
+          </Link>
         </div>
       </div>
 
-      <div className="border rounded-lg p-6">
-        <ol className="space-y-2 list-decimal pl-6">
-          {(mrs ?? []).map((row: MR, i) => {
-            const r = recipes.find(x => x.id === row.recipe_id);
-            return (
-              <li key={i} className="flex justify-between">
-                <span>{r?.name ?? "Untitled"}</span>
-                <span className="tabular-nums">{row.servings}</span>
-              </li>
-            );
-          })}
-          {(!mrs || mrs.length === 0) && (
-            <li className="text-neutral-400 list-none">No recipes on this menu.</li>
-          )}
-        </ol>
-      </div>
+      {/* Printable content */}
+      <section className="mt-6 border rounded-lg p-6">
+        {rows.length === 0 ? (
+          <p className="text-neutral-400">No recipes in this menu.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="print:table-header-group bg-neutral-900/60">
+              <tr>
+                <th className="text-left p-2">Recipe</th>
+                <th className="text-right p-2">Portions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i} className="border-t">
+                  <td className="p-2">{r.name}</td>
+                  <td className="p-2 text-right tabular-nums">{r.servings}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      {/* Simple print styles */}
+      <style>{`
+        @media print {
+          .print\\:hidden { display: none !important; }
+          main { padding: 0 !important; }
+          section { border: none !important; }
+          table { page-break-inside: avoid; }
+        }
+      `}</style>
     </main>
   );
 }
