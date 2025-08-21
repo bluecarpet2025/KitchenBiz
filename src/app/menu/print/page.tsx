@@ -1,171 +1,130 @@
-// src/app/menu/print/page.tsx
-import Link from "next/link";
-import { createServerClient } from "@/lib/supabase/server";
+'use client';
+export const dynamic = 'force-dynamic';
 
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-export const runtime = "nodejs"; // force Node runtime to avoid Edge quirks
+import Link from 'next/link';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { supabase } from '@/lib/supabase';
 
 type LineRow = { recipe_id: string; servings: number };
 type RecipeRow = { id: string; name: string | null };
 
 function fmt(d?: string | null) {
-  if (!d) return "";
-  try { return new Date(d).toLocaleString(); } catch { return ""; }
+  if (!d) return '';
+  try { return new Date(d).toLocaleString(); } catch { return ''; }
 }
 
-function ErrorBox({ title, detail }: { title: string; detail?: string }) {
-  return (
-    <main className="max-w-4xl mx-auto p-6">
-      <h1 className="text-2xl font-semibold">Menu – Print</h1>
-      <p className="mt-4 text-red-400">{title}</p>
-      {detail && (
-        <pre className="mt-2 text-xs opacity-80 whitespace-pre-wrap">
-          {detail}
-        </pre>
-      )}
-      <Link href="/menu" className="underline mt-6 inline-block">
-        Back to Menu
-      </Link>
-    </main>
-  );
-}
+export default function MenuPrintClientPage() {
+  const sp = useSearchParams();
+  const menuId = sp.get('menu_id') || '';
 
-/** Small client-only print button */
-function PrintButton() {
-  "use client";
-  return (
-    <button
-      onClick={() => window.print()}
-      className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900 print:hidden"
-    >
-      Print
-    </button>
-  );
-}
+  const [tenantId, setTenantId] = useState<string | null>(null);
+  const [title, setTitle] = useState<string>('Menu');
+  const [createdAt, setCreatedAt] = useState<string | null>(null);
+  const [rows, setRows] = useState<{ name: string; servings: number }[]>([]);
+  const [status, setStatus] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-export default async function MenuPrintPage(
-  props: { searchParams?: Promise<any> } // <-- keep your app's expected type
-) {
-  // Safely resolve search params (your app passes a Promise)
-  let sp: Record<string, string | string[]> = {};
-  try {
-    sp = (props.searchParams ? await props.searchParams : {}) ?? {};
-  } catch {
-    sp = {};
-  }
-  const menuIdRaw = sp["menu_id"];
-  const menuId = Array.isArray(menuIdRaw) ? menuIdRaw[0] : menuIdRaw;
+  // Load using browser session (no server rendering)
+  useEffect(() => {
+    (async () => {
+      try {
+        setLoading(true);
 
-  // Supabase server client
-  const supabase = await createServerClient();
+        // Require a session
+        const { data: u, error: uErr } = await supabase.auth.getUser();
+        if (uErr) throw uErr;
+        const uid = u?.user?.id;
+        if (!uid) { setStatus('Sign in required.'); setLoading(false); return; }
 
-  // Resolve user → tenant
-  let userId: string | null = null;
-  let tenantId: string | null = null;
-  try {
-    const { data: u, error: uErr } = await supabase.auth.getUser();
-    if (uErr) console.error("auth.getUser error", uErr);
-    userId = u?.user?.id ?? null;
+        // tenant
+        const { data: prof, error: pErr } = await supabase
+          .from('profiles')
+          .select('tenant_id')
+          .eq('id', uid)
+          .maybeSingle();
+        if (pErr) throw pErr;
+        const t = prof?.tenant_id ?? null;
+        setTenantId(t);
+        if (!t) { setStatus('No tenant.'); setLoading(false); return; }
 
-    if (!userId) {
-      return (
-        <ErrorBox
-          title="You need to sign in to view this menu."
-          detail="No user session."
-        />
-      );
-    }
+        if (!menuId) { setStatus('Missing menu id.'); setLoading(false); return; }
 
-    const { data: prof, error: pErr } = await supabase
-      .from("profiles")
-      .select("tenant_id")
-      .eq("id", userId)
-      .maybeSingle();
-    if (pErr) console.error("profiles error", pErr);
-    tenantId = prof?.tenant_id ?? null;
-  } catch (e: any) {
-    console.error("tenant lookup failure", e);
-    return <ErrorBox title="Could not resolve tenant." detail={String(e?.message ?? e)} />;
-  }
+        // menu (scoped to tenant)
+        const { data: m, error: mErr } = await supabase
+          .from('menus')
+          .select('id,name,created_at,tenant_id')
+          .eq('id', menuId)
+          .eq('tenant_id', t)
+          .maybeSingle();
+        if (mErr) throw mErr;
+        if (!m) { setStatus('Menu not found.'); setLoading(false); return; }
+        setTitle(m.name || 'Menu');
+        setCreatedAt(m.created_at);
 
-  if (!tenantId) return <ErrorBox title="Missing tenant." />;
-  if (!menuId)   return <ErrorBox title="Missing menu id." />;
+        // lines
+        const { data: lines, error: lErr } = await supabase
+          .from('menu_recipes')
+          .select('recipe_id,servings')
+          .eq('menu_id', m.id);
+        if (lErr) throw lErr;
 
-  // Load menu (scoped to tenant)
-  let menu: { id: string; name: string | null; created_at: string | null } | null = null;
-  try {
-    const { data, error } = await supabase
-      .from("menus")
-      .select("id,name,created_at,tenant_id")
-      .eq("id", menuId)
-      .eq("tenant_id", tenantId)
-      .maybeSingle();
-    if (error) console.error("menus error", error);
-    menu = data ? { id: data.id, name: data.name, created_at: data.created_at } : null;
-  } catch (e: any) {
-    console.error("menus catch", e);
-    return <ErrorBox title="Failed to load menu." detail={String(e?.message ?? e)} />;
-  }
+        const ids = [...new Set((lines ?? []).map(l => l.recipe_id))];
+        let nameById = new Map<string, string>();
+        if (ids.length) {
+          const { data: recs, error: rErr } = await supabase
+            .from('recipes')
+            .select('id,name')
+            .in('id', ids);
+          if (rErr) throw rErr;
+          (recs ?? []).forEach((r: RecipeRow) => nameById.set(r.id, r.name ?? 'Untitled'));
+        }
 
-  if (!menu) return <ErrorBox title="Menu not found for this tenant." />;
+        const out = (lines ?? [])
+          .map((l: LineRow) => ({
+            name: nameById.get(l.recipe_id) ?? 'Untitled',
+            servings: l.servings
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name));
 
-  // Load lines
-  let lines: LineRow[] = [];
-  try {
-    const { data, error } = await supabase
-      .from("menu_recipes")
-      .select("recipe_id,servings")
-      .eq("menu_id", menu.id);
-    if (error) console.error("menu_recipes error", error);
-    lines = (data ?? []) as LineRow[];
-  } catch (e: any) {
-    console.error("menu_recipes catch", e);
-    lines = [];
-  }
-
-  // Load recipe names
-  let recipes: RecipeRow[] = [];
-  const recipeIds = [...new Set(lines.map(l => l.recipe_id))];
-  if (recipeIds.length) {
-    try {
-      const { data, error } = await supabase
-        .from("recipes")
-        .select("id,name")
-        .in("id", recipeIds);
-      if (error) console.error("recipes error", error);
-      recipes = (data ?? []) as RecipeRow[];
-    } catch (e: any) {
-      console.error("recipes catch", e);
-      recipes = [];
-    }
-  }
-
-  const nameById = new Map<string, string>();
-  recipes.forEach(r => nameById.set(r.id, r.name ?? "Untitled"));
-
-  const rows = lines
-    .map(l => ({ name: nameById.get(l.recipe_id) ?? "Untitled", servings: l.servings }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+        setRows(out);
+        setStatus(null);
+      } catch (e: any) {
+        setStatus(e?.message ?? 'Error loading print view.');
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [menuId]);
 
   return (
     <main className="mx-auto p-8 max-w-3xl">
-      {/* Header (hidden on print) */}
+      {/* Header (hidden when printing) */}
       <div className="flex items-center justify-between gap-3 print:hidden">
         <div>
-          <h1 className="text-2xl font-semibold">{menu.name || "Menu"}</h1>
+          <h1 className="text-2xl font-semibold">{title}</h1>
+          {createdAt && <p className="text-sm opacity-80">Created {fmt(createdAt)}</p>}
         </div>
         <div className="flex gap-2">
-          <PrintButton />
+          <button
+            onClick={() => window.print()}
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
+            Print
+          </button>
           <Link href="/menu" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
             Back to Menu
           </Link>
         </div>
       </div>
 
-      {/* Content */}
+      {/* Body */}
       <section className="mt-6 border rounded-lg p-6">
-        {rows.length === 0 ? (
+        {loading ? (
+          <p className="text-neutral-400">Loading…</p>
+        ) : status ? (
+          <p className="text-red-400">{status}</p>
+        ) : rows.length === 0 ? (
           <p className="text-neutral-400">No recipes in this menu.</p>
         ) : (
           <table className="w-full text-sm">
@@ -185,10 +144,9 @@ export default async function MenuPrintPage(
             </tbody>
           </table>
         )}
-        <p className="mt-3 text-xs opacity-70 print:hidden">Created {fmt(menu.created_at)}</p>
       </section>
 
-      {/* Simple print styles */}
+      {/* Print-only tweaks */}
       <style>{`
         @media print {
           .print\\:hidden { display: none !important; }
