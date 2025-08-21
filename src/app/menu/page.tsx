@@ -4,7 +4,6 @@ export const dynamic = 'force-dynamic';
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
-
 type MenuRow = { id: string; name: string | null; created_at: string | null };
 type Recipe = {
   id: string;
