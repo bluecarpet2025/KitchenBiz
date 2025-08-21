@@ -13,28 +13,37 @@ export function fmtUSD(n: number): string {
 }
 
 /**
- * Base-unit cost for an inventory item.
+ * Base‑unit cost for an inventory item.
  * last_price = price per *purchase pack*
  * pack_to_base_factor = how many base units in one purchase pack
  * -> cost per base unit = last_price / pack_to_base_factor
  */
-export function baseUnitCost(item?: { last_price: number | null; pack_to_base_factor: number | null }): number {
+export function baseUnitCost(item?: {
+  last_price: number | null;
+  pack_to_base_factor: number | null;
+}): number {
   if (!item) return 0;
   const price = num(item.last_price, 0);
   const pack = Math.max(1, num(item.pack_to_base_factor, 1));
   return price / pack;
 }
 
+// Back‑compat for older imports (inventory/page.tsx expects this name)
+export const costPerBaseUnit = baseUnitCost;
+
 /**
  * Compute cost per serving for a recipe.
  * - ingredients qty is per *batch*
- * - per-serving qty = (qty * yieldPct) / batchQty
+ * - per‑serving qty = (qty * yieldPct) / batchQty
  * - line cost = perServingQty * baseUnitCost(item)
  */
 export function costPerServing(opts: {
   recipe?: { batch_yield_qty: number | null; yield_pct: number | null };
   ingredients: Array<{ item_id: string; qty: number | null }>;
-  itemsById: Record<string, { last_price: number | null; pack_to_base_factor: number | null }>;
+  itemsById: Record<
+    string,
+    { last_price: number | null; pack_to_base_factor: number | null }
+  >;
 }): number {
   const r = opts.recipe || { batch_yield_qty: 1, yield_pct: 1 };
   const batchQty = Math.max(1, num(r.batch_yield_qty, 1));
