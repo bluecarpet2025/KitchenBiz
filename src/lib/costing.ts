@@ -1,106 +1,100 @@
 // src/lib/costing.ts
 
-export type Recipe = {
-  id: string;
-  batch_yield_qty: number | null;
-  yield_pct: number | null;
-};
-
-export type IngredientRow = {
-  recipe_id: string;
-  item_id: string;
-  qty: number | null; // in item base units
-};
-
-export type ItemCostRow = {
-  id: string;
-  last_price: number | null;
-  pack_to_base_factor: number | null;
-};
-
-/** safe number */
-function n(v: number | null | undefined) {
+/** Always return a safe number */
+function n(v: unknown, def = 0): number {
   const x = Number(v);
-  return Number.isFinite(x) ? x : 0;
+  return Number.isFinite(x) ? x : def;
 }
 
-/** $ per base unit from last purchase */
+/** USD formatter */
+export function fmtUSD(v: number): string {
+  try {
+    return v.toLocaleString("en-US", { style: "currency", currency: "USD" });
+  } catch {
+    return `$${v.toFixed(2)}`;
+  }
+}
+
+/** $ per base unit (e.g., $/gram, $/ml, $/piece) */
 export function costPerBaseUnit(
-  lastPrice: number | null | undefined,
-  packToBaseFactor: number | null | undefined
-) {
-  const price = n(lastPrice);
-  const factor = n(packToBaseFactor);
-  if (price <= 0 || factor <= 0) return 0;
+  lastPrice?: number | null,
+  packToBaseFactor?: number | null
+): number {
+  const price = n(lastPrice, 0);
+  const factor = n(packToBaseFactor, 1);
+  if (factor <= 0) return 0;
   return price / factor;
 }
 
-/** qty of an ingredient used per *serving* after batch yield and yield% */
-export function qtyPerServing(
-  ingQtyBase: number | null | undefined,
-  recipeBatchYieldQty: number | null | undefined,
-  recipeYieldPct: number | null | undefined
-) {
-  const qty = n(ingQtyBase);
-  const batch = n(recipeBatchYieldQty) || 1;
-  const ypct = n(recipeYieldPct) || 1;
-  return batch > 0 ? (qty * (ypct || 1)) / batch : qty;
+/** Suggested price from cost and margin % (e.g., 30 => 30%) */
+export function suggestedPrice(cost: number, marginPct = 30): number {
+  const m = n(marginPct, 0) / 100;
+  if (m >= 1) return cost; // avoid div by zero
+  return cost / (1 - m);
 }
 
-/** Cost per portion (serving) of a recipe. */
-export function costPerPortion(
-  recipe: Recipe,
-  ingredients: IngredientRow[],
-  itemCostById: Record<string, number>
-) {
-  const batch = n(recipe.batch_yield_qty) || 1;
-  const ypct = n(recipe.yield_pct) || 1;
+/** Types used by the calculators */
+export type RecipeLike = {
+  batch_yield_qty: number | null;
+  yield_pct: number | null; // 0..1 (e.g., 0.92) – treat null as 1
+};
 
-  let total = 0;
-  for (const ing of ingredients) {
-    const perServing = qtyPerServing(ing.qty, batch, ypct);
-    const unitCost = itemCostById[ing.item_id] || 0;
-    total += perServing * unitCost;
-  }
-  return total; // $ per portion
-}
+export type IngredientLine = {
+  item_id: string;
+  /** qty in the item base unit for the whole batch */
+  qty: number | null;
+};
 
-/** Price suggestion from cost and target food-cost pct (e.g. 0.30). */
-export function priceFromCost(costPerPortionValue: number, foodPct = 0.3) {
-  const pct = foodPct > 0 ? foodPct : 0.3;
-  const price = costPerPortionValue / pct;
-  return Math.round(price / 0.05) * 0.05; // round to $0.05
-}
-
-/* ---------- Back‑compat + named exports used elsewhere ---------- */
-
-// Overloads so you can call either positional or object style
+/**
+ * Cost per serving.
+ * Accepts either positional (recipe, ingredients, itemCostById) or
+ * object style { recipe, ingredients, itemCostById }.
+ */
 export function costPerServing(
-  recipe: Recipe,
-  ingredients: IngredientRow[],
+  recipe: RecipeLike,
+  ingredients: IngredientLine[],
   itemCostById: Record<string, number>
 ): number;
 export function costPerServing(args: {
-  recipe: Recipe;
-  ingredients: IngredientRow[];
-  itemsById?: Record<string, number>;
-  itemCostById?: Record<string, number>;
+  recipe: RecipeLike;
+  ingredients: IngredientLine[];
+  itemCostById: Record<string, number>;
 }): number;
-// implementation
-export function costPerServing(a: any, b?: any, c?: any): number {
-  if (a && typeof a === "object" && "recipe" in a) {
-    const { recipe, ingredients, itemsById, itemCostById } = a;
-    return costPerPortion(recipe, ingredients, itemCostById ?? itemsById ?? {});
-  }
-  return costPerPortion(a, b, c);
-}
+export function costPerServing(
+  a:
+    | RecipeLike
+    | {
+        recipe: RecipeLike;
+        ingredients: IngredientLine[];
+        itemCostById: Record<string, number>;
+      },
+  b?: IngredientLine[],
+  c?: Record<string, number>
+): number {
+  let recipe: RecipeLike;
+  let ingredients: IngredientLine[];
+  let itemCostById: Record<string, number>;
 
-export const suggestedPrice = priceFromCost;
-
-export function fmtUSD(v: number) {
-  try {
-    return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(v || 0);
-  } catch {
-    return `$${(v || 0).toFixed(2)}`;
+  if (typeof a === "object" && "recipe" in a) {
+    recipe = a.recipe;
+    ingredients = a.ingredients;
+    itemCostById = a.itemCostById;
+  } else {
+    recipe = a as RecipeLike;
+    ingredients = b ?? [];
+    itemCostById = c ?? {};
   }
+
+  const batchQty = n(recipe.batch_yield_qty, 1);
+  const yieldPct = recipe.yield_pct == null ? 1 : n(recipe.yield_pct, 1);
+  const effectiveBatch = Math.max(1e-9, batchQty * yieldPct); // avoid /0
+
+  let totalPerServing = 0;
+  for (const line of ingredients) {
+    const perBatchQty = n(line.qty, 0); // already in base units
+    const perServingQty = perBatchQty / effectiveBatch;
+    const unitCost = n(itemCostById[line.item_id], 0);
+    totalPerServing += perServingQty * unitCost;
+  }
+  return totalPerServing;
 }
