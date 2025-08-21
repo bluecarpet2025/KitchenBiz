@@ -4,38 +4,27 @@ import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
-type ShareRow = {
-  token: string;
-  payload: {
-    name: string;
-    created_at?: string;
-    items: { name: string; servings: number }[];
-  } | null;
+type PayloadItem = { name: string; servings: number };
+type SharePayload = {
+  name: string;
+  created_at?: string;
+  items: PayloadItem[];
 };
 
 export default async function PublicSharePage(
-  { params }: { params: { token: string } }
+  props: { params?: Promise<{ token: string }> }
 ) {
-  const supabase = await createServerClient();
+  // In your project, params is a Promise — await it:
+  const { token } = (await props.params) ?? { token: "" };
 
-  // Public view: just read the shared payload
-  const { data: share, error } = await supabase
+  const supabase = await createServerClient();
+  const { data: share } = await supabase
     .from("menu_shares")
-    .select("token,payload")
-    .eq("token", params.token)
+    .select("payload")
+    .eq("token", token)
     .maybeSingle();
 
-  if (error) {
-    return (
-      <main className="max-w-3xl mx-auto p-6">
-        <h1 className="text-2xl font-semibold">Shared Menu</h1>
-        <p className="mt-4 text-red-300">Error loading share.</p>
-        <Link className="underline" href="/">Home</Link>
-      </main>
-    );
-  }
-
-  const payload = (share as ShareRow | null)?.payload;
+  const payload = (share?.payload ?? null) as SharePayload | null;
 
   if (!payload) {
     return (
