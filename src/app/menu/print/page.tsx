@@ -3,8 +3,9 @@ import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const runtime = "nodejs"; // hard-pin Node runtime (avoid Edge issues)
 
-type MenuRow = { id: string; name: string | null; created_at: string | null };
 type LineRow = { recipe_id: string; servings: number };
 type RecipeRow = { id: string; name: string | null };
 
@@ -13,7 +14,18 @@ function fmt(d?: string | null) {
   try { return new Date(d).toLocaleString(); } catch { return ""; }
 }
 
-/** Small client button so users can print */
+function ErrorBox({ title, detail }: { title: string; detail?: string }) {
+  return (
+    <main className="max-w-4xl mx-auto p-6">
+      <h1 className="text-2xl font-semibold">Menu – Print</h1>
+      <p className="mt-4 text-red-400">{title}</p>
+      {detail && <pre className="mt-2 text-xs opacity-80 whitespace-pre-wrap">{detail}</pre>}
+      <Link href="/menu" className="underline mt-6 inline-block">Back to Menu</Link>
+    </main>
+  );
+}
+
+/** Small client-only print button */
 function PrintButton() {
   "use client";
   return (
@@ -27,93 +39,126 @@ function PrintButton() {
 }
 
 export default async function MenuPrintPage(
-  props: { searchParams?: Promise<Record<string, string | string[]>> }
+  props: { searchParams?: Promise<Record<string, string | string[]>> | Record<string, string | string[]> }
 ) {
-  // In this project searchParams is a Promise → await it
-  const sp = (await props.searchParams) ?? {};
-  const menuId = Array.isArray(sp.menu_id) ? sp.menu_id[0] : sp.menu_id;
+  // Handle both shapes: Promise or plain object
+  let sp: Record<string, string | string[]> = {};
+  const maybe = (props as any)?.searchParams;
+  try {
+    sp =
+      maybe && typeof maybe.then === "function"
+        ? (await maybe)
+        : (maybe ?? {});
+  } catch {
+    sp = {};
+  }
+  const menuIdRaw = sp["menu_id"];
+  const menuId = Array.isArray(menuIdRaw) ? menuIdRaw[0] : menuIdRaw;
 
+  // Supabase server client
   const supabase = await createServerClient();
 
-  // user → tenant
-  const { data: u } = await supabase.auth.getUser();
-  const userId = u.user?.id ?? null;
-  if (!userId) {
-    return (
-      <main className="max-w-4xl mx-auto p-6">
-        <h1 className="text-2xl font-semibold">Menu – Print</h1>
-        <p className="mt-4">You need to sign in to view this menu.</p>
-        <Link className="underline" href="/login?redirect=/menu">Go to login</Link>
-      </main>
-    );
-  }
-  const { data: prof } = await supabase
-    .from("profiles")
-    .select("tenant_id")
-    .eq("id", userId)
-    .maybeSingle();
-  const tenantId = prof?.tenant_id ?? null;
+  // Get user → tenant
+  let userId: string | null = null;
+  let tenantId: string | null = null;
+  try {
+    const { data: u, error: uErr } = await supabase.auth.getUser();
+    if (uErr) console.error("auth.getUser error", uErr);
+    userId = u?.user?.id ?? null;
 
-  if (!tenantId || !menuId) {
-    return (
-      <main className="max-w-4xl mx-auto p-6">
-        <h1 className="text-2xl font-semibold">Menu – Print</h1>
-        <p className="mt-4">Missing menu or tenant.</p>
-        <Link className="underline" href="/menu">Back to Menu</Link>
-      </main>
-    );
+    if (!userId) {
+      return (
+        <ErrorBox
+          title="You need to sign in to view this menu."
+          detail="No user session."
+        />
+      );
+    }
+
+    const { data: prof, error: pErr } = await supabase
+      .from("profiles")
+      .select("tenant_id")
+      .eq("id", userId)
+      .maybeSingle();
+    if (pErr) console.error("profiles error", pErr);
+    tenantId = prof?.tenant_id ?? null;
+  } catch (e: any) {
+    console.error("tenant lookup failure", e);
+    return <ErrorBox title="Could not resolve tenant." detail={String(e?.message ?? e)} />;
   }
 
-  // Get the menu (safe‑check tenant ownership)
-  const { data: menu } = await supabase
-    .from("menus")
-    .select("id,name,created_at,tenant_id")
-    .eq("id", menuId)
-    .eq("tenant_id", tenantId)
-    .maybeSingle();
+  if (!tenantId) {
+    return <ErrorBox title="Missing tenant." />;
+  }
+  if (!menuId) {
+    return <ErrorBox title="Missing menu id." />;
+  }
+
+  // Load the menu (scoped to tenant)
+  let menu: { id: string; name: string | null; created_at: string | null } | null = null;
+  try {
+    const { data, error } = await supabase
+      .from("menus")
+      .select("id,name,created_at,tenant_id")
+      .eq("id", menuId)
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    if (error) console.error("menus error", error);
+    menu = data ? { id: data.id, name: data.name, created_at: data.created_at } : null;
+  } catch (e: any) {
+    console.error("menus catch", e);
+    return <ErrorBox title="Failed to load menu." detail={String(e?.message ?? e)} />;
+  }
 
   if (!menu) {
-    return (
-      <main className="max-w-4xl mx-auto p-6">
-        <h1 className="text-2xl font-semibold">Menu – Print</h1>
-        <p className="mt-4">Menu not found.</p>
-        <Link className="underline" href="/menu">Back to Menu</Link>
-      </main>
-    );
+    return <ErrorBox title="Menu not found for this tenant." />;
   }
 
-  // Lines
-  const { data: lines } = await supabase
-    .from("menu_recipes")
-    .select("recipe_id,servings")
-    .eq("menu_id", menu.id);
+  // Load lines
+  let lines: LineRow[] = [];
+  try {
+    const { data, error } = await supabase
+      .from("menu_recipes")
+      .select("recipe_id,servings")
+      .eq("menu_id", menu.id);
+    if (error) console.error("menu_recipes error", error);
+    lines = (data ?? []) as LineRow[];
+  } catch (e: any) {
+    console.error("menu_recipes catch", e);
+    // Keep going with empty lines
+    lines = [];
+  }
 
-  const rids = (lines ?? []).map(l => l.recipe_id);
+  // Load recipe names
   let recipes: RecipeRow[] = [];
-  if (rids.length) {
-    const { data: recs } = await supabase
-      .from("recipes")
-      .select("id,name")
-      .in("id", rids);
-    recipes = (recs ?? []) as RecipeRow[];
+  const recipeIds = [...new Set(lines.map(l => l.recipe_id))];
+  if (recipeIds.length) {
+    try {
+      const { data, error } = await supabase
+        .from("recipes")
+        .select("id,name")
+        .in("id", recipeIds);
+      if (error) console.error("recipes error", error);
+      recipes = (data ?? []) as RecipeRow[];
+    } catch (e: any) {
+      console.error("recipes catch", e);
+      recipes = [];
+    }
   }
 
-  // Map recipe names
   const nameById = new Map<string, string>();
   recipes.forEach(r => nameById.set(r.id, r.name ?? "Untitled"));
 
-  // Stable order by name for print
-  const rows = (lines ?? [])
+  const rows = lines
     .map(l => ({ name: nameById.get(l.recipe_id) ?? "Untitled", servings: l.servings }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
   return (
     <main className="mx-auto p-8 max-w-3xl">
-      {/* Header (hidden when printing) */}
+      {/* Header (hidden on print) */}
       <div className="flex items-center justify-between gap-3 print:hidden">
         <div>
           <h1 className="text-2xl font-semibold">{menu.name || "Menu"}</h1>
-          <p className="text-sm opacity-80">Created {fmt(menu.created_at)}</p>
         </div>
         <div className="flex gap-2">
           <PrintButton />
@@ -123,7 +168,7 @@ export default async function MenuPrintPage(
         </div>
       </div>
 
-      {/* Printable content */}
+      {/* Content */}
       <section className="mt-6 border rounded-lg p-6">
         {rows.length === 0 ? (
           <p className="text-neutral-400">No recipes in this menu.</p>
@@ -145,6 +190,7 @@ export default async function MenuPrintPage(
             </tbody>
           </table>
         )}
+        <p className="mt-3 text-xs opacity-70 print:hidden">Created {fmt(menu.created_at)}</p>
       </section>
 
       {/* Simple print styles */}
