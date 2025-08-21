@@ -1,177 +1,154 @@
-// src/components/MenuPageClient.tsx
-"use client";
+'use client';
 
-import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { supabase } from '@/lib/supabase';
 import {
   costPerBaseUnit,
-  costPerServing,
-  suggestedPrice,
+  costPerPortion,
+  priceFromCost,
   fmtUSD,
-  type IngredientLine,
-  type RecipeLike,
-} from "@/lib/costing";
+} from '@/lib/costing';
 
 type MenuRow = { id: string; name: string | null; created_at: string | null };
-type RecipeRow = RecipeLike & {
+type Recipe = {
   id: string;
   name: string | null;
+  batch_yield_qty: number | null;
   batch_yield_unit: string | null;
+  yield_pct: number | null;
 };
+type Ingredient = { recipe_id: string; item_id: string; qty: number | null };
+
+// minimal pricing info for items
+type ItemRow = {
+  id: string;
+  last_price: number | null;
+  pack_to_base_factor: number | null;
+};
+
 type Sel = Record<string, number>; // recipeId -> portions
 
 export default function MenuPageClient() {
   const [tenantId, setTenantId] = useState<string | null>(null);
+
   const [menus, setMenus] = useState<MenuRow[]>([]);
   const [selectedMenuId, setSelectedMenuId] = useState<string | null>(null);
-  const [recipes, setRecipes] = useState<RecipeRow[]>([]);
+
+  const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [sel, setSel] = useState<Sel>({});
+
+  const [shareToken, setShareToken] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [shareToken, setShareToken] = useState<string | null>(null);
 
-  // pricing maps for currently selected items (recipeId -> priceEach)
-  const [priceByRecipeId, setPriceByRecipeId] = useState<Record<string, number>>(
-    {}
-  );
-  const DEFAULT_MARGIN = 30;
+  // pricing state (margin slider)
+  const [marginPct, setMarginPct] = useState<number>(0.3);
 
-  // boot: get tenant, menus, recipes
+  // for pricing calculations
+  const [ingredients, setIngredients] = useState<Ingredient[]>([]);
+  const [itemPricing, setItemPricing] = useState<Record<string, number>>({}); // itemId -> cost per base unit
+
+  // ─────────────────────────────────────────────
+  // boot: tenant, menus, recipes, item pricing
   useEffect(() => {
     (async () => {
       const { data: u } = await supabase.auth.getUser();
       const uid = u.user?.id;
       if (!uid) {
-        setStatus("Sign in required.");
+        setStatus('Sign in required.');
         return;
       }
       const { data: prof } = await supabase
-        .from("profiles")
-        .select("tenant_id")
-        .eq("id", uid)
+        .from('profiles')
+        .select('tenant_id')
+        .eq('id', uid)
         .maybeSingle();
-      if (!prof?.tenant_id) {
-        setStatus("No tenant.");
+      const tId = prof?.tenant_id ?? null;
+      if (!tId) {
+        setStatus('No tenant.');
         return;
       }
-      setTenantId(prof.tenant_id);
+      setTenantId(tId);
 
+      // Menus
       const { data: ms } = await supabase
-        .from("menus")
-        .select("id,name,created_at")
-        .eq("tenant_id", prof.tenant_id)
-        .order("created_at", { ascending: false });
+        .from('menus')
+        .select('id,name,created_at')
+        .eq('tenant_id', tId)
+        .order('created_at', { ascending: false });
       const list = (ms ?? []) as MenuRow[];
       setMenus(list);
       setSelectedMenuId(list?.[0]?.id ?? null);
 
+      // Recipes (include yield fields for cost calcs)
       const { data: recs } = await supabase
-        .from("recipes")
-        .select("id,name,batch_yield_qty,batch_yield_unit,yield_pct")
-        .eq("tenant_id", prof.tenant_id)
-        .order("name");
-      setRecipes((recs ?? []) as RecipeRow[]);
+        .from('recipes')
+        .select('id,name,batch_yield_qty,batch_yield_unit,yield_pct')
+        .eq('tenant_id', tId)
+        .order('name');
+      setRecipes((recs ?? []) as Recipe[]);
+
+      // Items pricing (last_price / pack_to_base_factor → base‑unit cost)
+      const { data: itemsRaw } = await supabase
+        .from('inventory_items')
+        .select('id,last_price,pack_to_base_factor')
+        .eq('tenant_id', tId);
+      const byId: Record<string, number> = {};
+      (itemsRaw ?? []).forEach((it: ItemRow) => {
+        const unit = costPerBaseUnit(
+          Number(it.last_price ?? 0),
+          Number(it.pack_to_base_factor ?? 0)
+        );
+        byId[it.id] = unit;
+      });
+      setItemPricing(byId);
     })();
   }, []);
 
-  // when a menu is selected, load its lines + any share
+  // when a menu is selected, load its lines + share + the needed ingredients
   useEffect(() => {
     (async () => {
       if (!selectedMenuId) {
         setSel({});
         setShareToken(null);
-        setPriceByRecipeId({});
+        setIngredients([]);
         return;
       }
+      // lines
       const { data: rows } = await supabase
-        .from("menu_recipes")
-        .select("recipe_id, servings")
-        .eq("menu_id", selectedMenuId);
+        .from('menu_recipes')
+        .select('recipe_id,servings')
+        .eq('menu_id', selectedMenuId);
 
       const next: Sel = {};
-      (rows ?? []).forEach((r: any) => {
-        next[r.recipe_id] = Number(r.servings || 1);
-      });
+      (rows ?? []).forEach((r) => (next[r.recipe_id] = Number(r.servings || 1)));
       setSel(next);
 
+      // share (if any)
       const { data: shares } = await supabase
-        .from("menu_shares")
-        .select("token")
-        .eq("menu_id", selectedMenuId)
+        .from('menu_shares')
+        .select('token')
+        .eq('menu_id', selectedMenuId)
         .limit(1);
       setShareToken(shares?.[0]?.token ?? null);
+
+      // ingredients only for the recipes actually on this menu
+      const rids = Object.keys(next);
+      if (rids.length) {
+        const { data: ing } = await supabase
+          .from('recipe_ingredients')
+          .select('recipe_id,item_id,qty')
+          .in('recipe_id', rids);
+        setIngredients((ing ?? []) as Ingredient[]);
+      } else {
+        setIngredients([]);
+      }
     })();
   }, [selectedMenuId]);
 
-  // recompute pricing for the current selection
-  useEffect(() => {
-    (async () => {
-      if (!tenantId) return;
-      const recipeIds = Object.keys(sel).filter((k) => sel[k] > 0);
-      if (!recipeIds.length) {
-        setPriceByRecipeId({});
-        return;
-      }
-
-      // ingredients for chosen recipes
-      const { data: ing } = await supabase
-        .from("recipe_ingredients")
-        .select("recipe_id,item_id,qty")
-        .in("recipe_id", recipeIds);
-      const ingRows =
-        (ing ?? []) as { recipe_id: string; item_id: string; qty: number | null }[];
-
-      // items
-      const itemIds = Array.from(new Set(ingRows.map((r) => r.item_id)));
-      type ItemRow = {
-        id: string;
-        last_price: number | null;
-        pack_to_base_factor: number | null;
-      };
-      let itemRows: ItemRow[] = [];
-      if (itemIds.length) {
-        const { data: its } = await supabase
-          .from("inventory_items")
-          .select("id,last_price,pack_to_base_factor")
-          .in("id", itemIds)
-          .eq("tenant_id", tenantId);
-        itemRows = (its ?? []) as ItemRow[];
-      }
-
-      const unitCostByItemId: Record<string, number> = {};
-      itemRows.forEach((it) => {
-        unitCostByItemId[it.id] = costPerBaseUnit(
-          it.last_price,
-          it.pack_to_base_factor
-        );
-      });
-
-      // group ingredients
-      const ingByRecipe = new Map<string, IngredientLine[]>();
-      for (const row of ingRows) {
-        if (!ingByRecipe.has(row.recipe_id)) ingByRecipe.set(row.recipe_id, []);
-        ingByRecipe.get(row.recipe_id)!.push({
-          item_id: row.item_id,
-          qty: row.qty,
-        });
-      }
-
-      const nextPrices: Record<string, number> = {};
-      for (const rid of recipeIds) {
-        const rec = recipes.find((r) => r.id === rid);
-        if (!rec) continue;
-        const ings = ingByRecipe.get(rid) ?? [];
-        const cps = costPerServing({
-          recipe: rec,
-          ingredients: ings,
-          itemCostById: unitCostByItemId,
-        });
-        nextPrices[rid] = suggestedPrice(cps, DEFAULT_MARGIN);
-      }
-      setPriceByRecipeId(nextPrices);
-    })();
-  }, [sel, tenantId, recipes]);
-
+  // ─────────────────────────────────────────────
+  // actions
   function addRecipe(id: string) {
     setSel((s) => ({ ...s, [id]: s[id] ?? 1 }));
   }
@@ -186,18 +163,17 @@ export default function MenuPageClient() {
     setSel((s) => ({ ...s, [id]: Math.max(0, Math.floor(n)) }));
   }
 
-  // New menu
   async function createNewMenu() {
     try {
       if (!tenantId) return;
       setBusy(true);
-      const name = window.prompt("Menu name:", "New Menu");
+      const name = window.prompt('Menu name:', 'New Menu');
       if (!name) return;
 
       const { data: ins, error } = await supabase
-        .from("menus")
+        .from('menus')
         .insert({ tenant_id: tenantId, name })
-        .select("id, name, created_at")
+        .select('id,name,created_at')
         .single();
       if (error) throw error;
 
@@ -208,19 +184,19 @@ export default function MenuPageClient() {
       setSelectedMenuId(ins!.id);
       setSel({});
       setShareToken(null);
-      setStatus("Menu created.");
+      setStatus('Menu created.');
     } catch (err: any) {
-      alert(err.message ?? "Error creating menu");
+      alert(err.message ?? 'Error creating menu');
     } finally {
       setBusy(false);
     }
   }
 
-  // Save current (UPSERT lines)
+  // Save (upsert lines)
   async function saveCurrentMenu() {
     try {
       if (!selectedMenuId) {
-        alert("No menu selected");
+        alert('No menu selected');
         return;
       }
       setBusy(true);
@@ -232,38 +208,33 @@ export default function MenuPageClient() {
           new Map<string, number>()
         );
 
-      const rows = Array.from(entries.entries()).map(
-        ([recipe_id, servings]) => ({
-          menu_id: selectedMenuId!,
-          recipe_id,
-          servings: Number(servings),
-          price: 0,
-        })
-      );
+      const rows = Array.from(entries.entries()).map(([recipe_id, servings]) => ({
+        menu_id: selectedMenuId,
+        recipe_id,
+        servings: Number(servings),
+        price: 0, // NOT NULL on table
+      }));
 
       if (rows.length) {
         const { error } = await supabase
-          .from("menu_recipes")
-          .upsert(rows, { onConflict: "menu_id,recipe_id" });
+          .from('menu_recipes')
+          .upsert(rows, { onConflict: 'menu_id,recipe_id' });
         if (error) throw error;
       } else {
-        await supabase
-          .from("menu_recipes")
-          .delete()
-          .eq("menu_id", selectedMenuId!);
+        await supabase.from('menu_recipes').delete().eq('menu_id', selectedMenuId);
       }
 
-      setStatus("Menu saved.");
+      setStatus('Menu saved.');
       if (tenantId) {
         const { data: ms } = await supabase
-          .from("menus")
-          .select("id,name,created_at")
-          .eq("tenant_id", tenantId)
-          .order("created_at", { ascending: false });
+          .from('menus')
+          .select('id,name,created_at')
+          .eq('tenant_id', tenantId)
+          .order('created_at', { ascending: false });
         setMenus((ms ?? []) as MenuRow[]);
       }
     } catch (err: any) {
-      alert(err.message ?? "Error saving menu");
+      alert(err.message ?? 'Error saving menu');
     } finally {
       setBusy(false);
     }
@@ -275,19 +246,19 @@ export default function MenuPageClient() {
       if (!tenantId) return;
       const entries = Object.entries(sel).filter(([, v]) => v > 0);
       if (entries.length === 0) {
-        alert("Add at least one recipe.");
+        alert('Add at least one recipe.');
         return;
       }
 
       setBusy(true);
       const defaultName = `Menu ${new Date().toLocaleDateString()}`;
-      const name = window.prompt("New menu name:", defaultName);
+      const name = window.prompt('New menu name:', defaultName);
       if (!name) return;
 
       const { data: m, error: mErr } = await supabase
-        .from("menus")
+        .from('menus')
         .insert({ tenant_id: tenantId, name })
-        .select("id, name, created_at")
+        .select('id,name,created_at')
         .single();
       if (mErr) throw mErr;
 
@@ -300,8 +271,8 @@ export default function MenuPageClient() {
       }));
 
       const { error: rErr } = await supabase
-        .from("menu_recipes")
-        .upsert(rows, { onConflict: "menu_id,recipe_id" });
+        .from('menu_recipes')
+        .upsert(rows, { onConflict: 'menu_id,recipe_id' });
       if (rErr) throw rErr;
 
       setMenus((ms) => [
@@ -310,9 +281,41 @@ export default function MenuPageClient() {
       ]);
       setSelectedMenuId(newId);
       setShareToken(null);
-      setStatus("Menu saved.");
+      setStatus('Menu saved.');
     } catch (err: any) {
-      alert(err.message ?? "Error saving as new menu");
+      alert(err.message ?? 'Error saving as new menu');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Delete the selected menu
+  async function deleteMenu() {
+    try {
+      if (!selectedMenuId) return;
+      if (!confirm('Delete this saved menu?')) return;
+      setBusy(true);
+
+      // delete share & lines first (safer under RLS)
+      await supabase.from('menu_shares').delete().eq('menu_id', selectedMenuId);
+      await supabase.from('menu_recipes').delete().eq('menu_id', selectedMenuId);
+      await supabase.from('menus').delete().eq('id', selectedMenuId);
+
+      // refresh list
+      const { data: ms } = await supabase
+        .from('menus')
+        .select('id,name,created_at')
+        .eq('tenant_id', tenantId)
+        .order('created_at', { ascending: false });
+
+      const refreshed = (ms ?? []) as MenuRow[];
+      setMenus(refreshed);
+      setSelectedMenuId(refreshed?.[0]?.id ?? null);
+      setSel({});
+      setShareToken(null);
+      setStatus('Menu deleted.');
+    } catch (err: any) {
+      alert(err.message ?? 'Error deleting menu');
     } finally {
       setBusy(false);
     }
@@ -320,10 +323,10 @@ export default function MenuPageClient() {
 
   function doPrint() {
     if (!selectedMenuId) {
-      alert("No menu selected");
+      alert('No menu selected');
       return;
     }
-    window.open(`/menu/print?menu_id=${selectedMenuId}`, "_blank");
+    window.open(`/menu/print?menu_id=${selectedMenuId}`, '_blank');
   }
 
   async function createShare() {
@@ -331,23 +334,18 @@ export default function MenuPageClient() {
       if (!selectedMenuId || !tenantId) return;
       setBusy(true);
 
-      const name =
-        menus.find((m) => m.id === selectedMenuId)?.name ?? "Menu";
+      const name = menus.find((m) => m.id === selectedMenuId)?.name ?? 'Menu';
       const items = Object.keys(sel)
         .filter((id) => sel[id] > 0)
         .map((id) => ({
-          name: recipes.find((r) => r.id === id)?.name || "Untitled",
+          name: recipes.find((r) => r.id === id)?.name || 'Untitled',
           servings: sel[id],
         }));
 
-      const token = crypto.randomUUID().replace(/-/g, "").slice(0, 24);
-      const payload = {
-        name,
-        created_at: new Date().toISOString(),
-        items,
-      };
+      const token = crypto.randomUUID().replace(/-/g, '').slice(0, 24);
+      const payload = { name, created_at: new Date().toISOString(), items };
 
-      const { error } = await supabase.from("menu_shares").insert({
+      const { error } = await supabase.from('menu_shares').insert({
         token,
         tenant_id: tenantId,
         menu_id: selectedMenuId,
@@ -356,23 +354,69 @@ export default function MenuPageClient() {
       if (error) throw error;
 
       setShareToken(token);
-
       const origin =
-        typeof window !== "undefined"
+        typeof window !== 'undefined'
           ? window.location.origin
-          : "https://kitchenbiz.vercel.app";
-
+          : 'https://kitchenbiz.vercel.app';
       await navigator.clipboard
         .writeText(`${origin}/share/${token}`)
         .catch(() => {});
-
-      setStatus("Public share link created & copied.");
+      setStatus('Public share link created & copied.');
     } catch (err: any) {
-      alert(err.message ?? "Error creating share link");
+      alert(err.message ?? 'Error creating share link');
     } finally {
       setBusy(false);
     }
   }
+
+  // ─────────────────────────────────────────────
+  // derived pricing rows
+  type PriceRow = {
+    id: string;
+    name: string;
+    qty: number; // portions
+    unitPrice: number; // price per portion at slider margin
+    line: number; // qty * unitPrice
+    showCostEach: string; // friendly "$0.84 each" style (cost, before margin)
+  };
+
+  const rows: PriceRow[] = useMemo(() => {
+    if (!recipes.length) return [];
+
+    // group ingredients by recipe for quick lookup
+    const ingByRecipe = new Map<string, Ingredient[]>();
+    (ingredients ?? []).forEach((ing) => {
+      if (!ingByRecipe.has(ing.recipe_id)) ingByRecipe.set(ing.recipe_id, []);
+      ingByRecipe.get(ing.recipe_id)!.push(ing);
+    });
+
+    return Object.keys(sel)
+      .map((rid) => {
+        const recipe = recipes.find((r) => r.id === rid);
+        if (!recipe) return null;
+
+        const parts = ingByRecipe.get(rid) ?? [];
+        // compute raw cost per portion
+        const costEach = costPerPortion(recipe, parts, itemPricing);
+        // convert to selling price using slider margin
+        const unitPrice = priceFromCost(costEach, marginPct);
+        const qty = sel[rid];
+        return {
+          id: rid,
+          name: recipe.name ?? 'Untitled',
+          qty,
+          unitPrice,
+          line: unitPrice * qty,
+          showCostEach: `${fmtUSD(costEach)} each`,
+        } as PriceRow;
+      })
+      .filter(Boolean) as PriceRow[];
+  }, [recipes, sel, ingredients, itemPricing, marginPct]);
+
+  const grandTotal = useMemo(
+    () => rows.reduce((s, r) => s + r.line, 0),
+    [rows]
+  );
 
   const selectedList = useMemo(
     () =>
@@ -380,22 +424,19 @@ export default function MenuPageClient() {
         .map((id) => ({
           id,
           servings: sel[id],
-          name: recipes.find((r) => r.id === id)?.name || "Untitled",
+          name: recipes.find((r) => r.id === id)?.name || 'Untitled',
         }))
         .sort((a, b) => a.name.localeCompare(b.name)),
     [sel, recipes]
   );
 
-  const total = selectedList.reduce(
-    (acc, r) => acc + (priceByRecipeId[r.id] ?? 0) * (r.servings ?? 0),
-    0
-  );
-
+  // ─────────────────────────────────────────────
   return (
     <main className="max-w-5xl mx-auto p-6 space-y-4">
       <h1 className="text-2xl font-semibold">Menu</h1>
       {status && <p className="text-xs text-emerald-400">{status}</p>}
 
+      {/* Actions row */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <form
@@ -405,15 +446,15 @@ export default function MenuPageClient() {
             <label className="text-sm">Saved menus:</label>
             <select
               className="border rounded-md px-2 py-2 bg-neutral-950 text-neutral-100"
-              value={selectedMenuId ?? ""}
+              value={selectedMenuId ?? ''}
               onChange={(e) => setSelectedMenuId(e.target.value || null)}
             >
               {(menus ?? []).map((m) => (
                 <option key={m.id} value={m.id}>
-                  {(m.name || "Untitled")}
+                  {(m.name || 'Untitled')}
                   {m.created_at
                     ? ` • ${new Date(m.created_at).toLocaleDateString()}`
-                    : ""}
+                    : ''}
                 </option>
               ))}
               {(!menus || menus.length === 0) && (
@@ -446,6 +487,16 @@ export default function MenuPageClient() {
           >
             Save as
           </button>
+
+          {/* Delete button for the selected saved menu */}
+          <button
+            disabled={busy || !selectedMenuId}
+            onClick={deleteMenu}
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900 text-red-300"
+            title="Delete selected saved menu"
+          >
+            Delete
+          </button>
         </div>
 
         <div className="flex items-center gap-2">
@@ -455,6 +506,7 @@ export default function MenuPageClient() {
           >
             Print
           </button>
+
           {!shareToken ? (
             <button
               disabled={busy}
@@ -467,13 +519,13 @@ export default function MenuPageClient() {
             <button
               onClick={async () => {
                 const origin =
-                  typeof window !== "undefined"
+                  typeof window !== 'undefined'
                     ? window.location.origin
-                    : "https://kitchenbiz.vercel.app";
+                    : 'https://kitchenbiz.vercel.app';
                 await navigator.clipboard
                   .writeText(`${origin}/share/${shareToken}`)
                   .catch(() => {});
-                setStatus("Share link copied.");
+                setStatus('Share link copied.');
               }}
               className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
             >
@@ -483,9 +535,29 @@ export default function MenuPageClient() {
         </div>
       </div>
 
+      {/* Margin slider */}
+      <div className="flex items-center gap-3">
+        <label className="text-sm">Margin:</label>
+        <input
+          type="range"
+          min={0}
+          max={0.9}
+          step={0.01}
+          value={marginPct}
+          onChange={(e) => setMarginPct(Number(e.target.value))}
+          className="w-56"
+        />
+        <span className="text-sm tabular-nums">
+          {(marginPct * 100).toFixed(0)}%
+        </span>
+        <span className="text-xs opacity-70">
+          (affects suggested selling price)
+        </span>
+      </div>
+
       {/* Two panels */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Pick list */}
+        {/* Left: all recipes pick list */}
         <div className="border rounded p-4">
           <div className="font-semibold mb-2">Pick recipes</div>
           <div className="space-y-2 max-h-[60vh] overflow-auto pr-2">
@@ -518,46 +590,44 @@ export default function MenuPageClient() {
           </div>
         </div>
 
-        {/* Quantities + price */}
+        {/* Right: selected list with portions and prices */}
         <div className="border rounded p-4">
           <div className="font-semibold mb-2">Quantities (portions)</div>
           {selectedList.length === 0 ? (
             <p className="text-sm text-neutral-400">Add recipes on the left.</p>
           ) : (
-            <div className="space-y-2">
-              {selectedList.map((row) => {
-                const priceEach = priceByRecipeId[row.id] ?? 0;
-                const line = priceEach * (row.servings ?? 0);
-                return (
-                  <div
-                    key={row.id}
-                    className="grid grid-cols-6 gap-2 items-center"
-                  >
-                    <div className="col-span-4">
+            <div className="space-y-3">
+              {rows
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map((row) => (
+                  <div key={row.id} className="grid grid-cols-6 gap-2 items-center">
+                    <div className="col-span-3">
                       <div className="font-medium">{row.name}</div>
-                      <div className="text-xs opacity-70">
-                        {fmtUSD(priceEach)} each
-                      </div>
+                      <div className="text-xs opacity-70">{row.showCostEach}</div>
                     </div>
+
                     <input
                       className="border rounded p-1 col-span-1 text-right"
                       type="number"
                       min={0}
                       step={1}
                       value={sel[row.id]}
-                      onChange={(e) =>
-                        setQty(row.id, Number(e.target.value))
-                      }
+                      onChange={(e) => setQty(row.id, Number(e.target.value))}
                     />
+
                     <div className="col-span-1 text-right tabular-nums">
-                      {fmtUSD(line)}
+                      {fmtUSD(row.unitPrice)}
+                    </div>
+                    <div className="col-span-1 text-right tabular-nums">
+                      {fmtUSD(row.line)}
                     </div>
                   </div>
-                );
-              })}
-              <div className="flex justify-end pt-2 border-t mt-2">
-                <div className="text-sm font-semibold">
-                  Total: {fmtUSD(total)}
+                ))}
+
+              <div className="mt-4 border-t pt-2 grid grid-cols-6">
+                <div className="col-span-5 font-semibold text-right">Total:</div>
+                <div className="col-span-1 text-right font-semibold tabular-nums">
+                  {fmtUSD(grandTotal)}
                 </div>
               </div>
             </div>

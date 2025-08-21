@@ -1,33 +1,18 @@
 // src/app/menu/print/page.tsx
-import Link from "next/link";
-import { createServerClient } from "@/lib/supabase/server";
+import Link from 'next/link';
+import { createServerClient } from '@/lib/supabase/server';
 import {
   costPerBaseUnit,
-  costPerServing,
-  suggestedPrice,
+  costPerPortion,
+  priceFromCost,
   fmtUSD,
-  type IngredientLine,
-  type RecipeLike,
-} from "@/lib/costing";
+} from '@/lib/costing';
 
-export const dynamic = "force-dynamic";
+export const dynamic = 'force-dynamic';
 
-type MenuRow = { id: string; name: string | null; created_at: string | null };
-type LineRow = { recipe_id: string; servings: number };
-type RecipeRow = RecipeLike & { id: string; name: string | null };
-
-function fmtDate(d?: string | null) {
-  if (!d) return "";
-  try {
-    return new Date(d).toLocaleString();
-  } catch {
-    return "";
-  }
-}
-
-/** Small client button so users can print */
+// tiny client-only button so the page can print
 function PrintButton() {
-  "use client";
+  'use client';
   return (
     <button
       onClick={() => window.print()}
@@ -38,16 +23,41 @@ function PrintButton() {
   );
 }
 
-export default async function MenuPrintPage(props: {
+type RecipeRow = {
+  id: string;
+  name: string | null;
+  batch_yield_qty: number | null;
+  batch_yield_unit: string | null;
+  yield_pct: number | null;
+};
+type IngredientRow = { recipe_id: string; item_id: string; qty: number | null };
+
+function fmtDate(d?: string | null) {
+  if (!d) return '';
+  try {
+    return new Date(d).toLocaleString();
+  } catch {
+    return '';
+  }
+}
+
+export default async function Page({
+  searchParams,
+}: {
   searchParams?: Promise<Record<string, string | string[]>>;
 }) {
-  // In this project searchParams is a Promise → await it
-  const sp = (await props.searchParams) ?? {};
+  // Next 15 passes searchParams as a Promise
+  const sp = (await searchParams) ?? {};
   const menuId = Array.isArray(sp.menu_id) ? sp.menu_id[0] : sp.menu_id;
+  const marginParam = Array.isArray(sp.margin) ? sp.margin[0] : sp.margin;
+  const margin = Math.min(
+    0.9,
+    Math.max(0, marginParam ? Number(marginParam) : 0.3)
+  ); // default 30%
 
   const supabase = await createServerClient();
 
-  // user → tenant
+  // Require auth → tenant
   const { data: u } = await supabase.auth.getUser();
   const userId = u.user?.id ?? null;
   if (!userId) {
@@ -62,9 +72,9 @@ export default async function MenuPrintPage(props: {
     );
   }
   const { data: prof } = await supabase
-    .from("profiles")
-    .select("tenant_id")
-    .eq("id", userId)
+    .from('profiles')
+    .select('tenant_id')
+    .eq('id', userId)
     .maybeSingle();
   const tenantId = prof?.tenant_id ?? null;
 
@@ -80,12 +90,12 @@ export default async function MenuPrintPage(props: {
     );
   }
 
-  // Get the menu (safe‑check tenant ownership)
+  // Load the menu (scoped to tenant)
   const { data: menu } = await supabase
-    .from("menus")
-    .select("id,name,created_at,tenant_id")
-    .eq("id", menuId)
-    .eq("tenant_id", tenantId)
+    .from('menus')
+    .select('id,name,created_at,tenant_id')
+    .eq('id', menuId)
+    .eq('tenant_id', tenantId)
     .maybeSingle();
 
   if (!menu) {
@@ -100,110 +110,83 @@ export default async function MenuPrintPage(props: {
     );
   }
 
-  // Lines in this menu
-  const { data: linesRaw } = await supabase
-    .from("menu_recipes")
-    .select("recipe_id,servings")
-    .eq("menu_id", menu.id);
-  const lines: LineRow[] = (linesRaw ?? []) as LineRow[];
+  // Lines
+  const { data: lines } = await supabase
+    .from('menu_recipes')
+    .select('recipe_id,servings')
+    .eq('menu_id', menu.id);
 
-  const rids = lines.map((l) => l.recipe_id);
+  const rids = (lines ?? []).map((l) => l.recipe_id);
+  const servingsByRecipe = new Map<string, number>();
+  (lines ?? []).forEach((l) => {
+    servingsByRecipe.set(l.recipe_id, Number(l.servings ?? 0));
+  });
+
+  // Recipes with yield fields (for costing)
   let recipes: RecipeRow[] = [];
   if (rids.length) {
     const { data: recs } = await supabase
-      .from("recipes")
-      .select("id,name,batch_yield_qty,yield_pct")
-      .in("id", rids)
-      .eq("tenant_id", tenantId);
+      .from('recipes')
+      .select('id,name,batch_yield_qty,batch_yield_unit,yield_pct')
+      .in('id', rids);
     recipes = (recs ?? []) as RecipeRow[];
   }
 
   // Ingredients for those recipes
-  let ingRows: { recipe_id: string; item_id: string; qty: number | null }[] =
-    [];
+  let ingredients: IngredientRow[] = [];
   if (rids.length) {
     const { data: ing } = await supabase
-      .from("recipe_ingredients")
-      .select("recipe_id,item_id,qty")
-      .in("recipe_id", rids);
-    ingRows = (ing ?? []) as any[];
+      .from('recipe_ingredients')
+      .select('recipe_id,item_id,qty')
+      .in('recipe_id', rids);
+    ingredients = (ing ?? []) as IngredientRow[];
   }
 
-  // All item_ids referenced by the ingredients
-  const itemIds = Array.from(new Set(ingRows.map((r) => r.item_id)));
-  type ItemRow = {
-    id: string;
-    last_price: number | null;
-    pack_to_base_factor: number | null;
-  };
-  let itemRows: ItemRow[] = [];
-  if (itemIds.length) {
-    const { data: its } = await supabase
-      .from("inventory_items")
-      .select("id,last_price,pack_to_base_factor")
-      .in("id", itemIds)
-      .eq("tenant_id", tenantId);
-    itemRows = (its ?? []) as ItemRow[];
-  }
-
-  // Build unit‑cost map $/base
-  const unitCostByItemId: Record<string, number> = {};
-  (itemRows ?? []).forEach((it) => {
-    unitCostByItemId[it.id] = costPerBaseUnit(
-      it.last_price,
-      it.pack_to_base_factor
+  // Item base-unit costs
+  const { data: itemsRaw } = await supabase
+    .from('inventory_items')
+    .select('id,last_price,pack_to_base_factor')
+    .eq('tenant_id', tenantId);
+  const itemCostById: Record<string, number> = {};
+  (itemsRaw ?? []).forEach((it: any) => {
+    itemCostById[it.id] = costPerBaseUnit(
+      Number(it.last_price ?? 0),
+      Number(it.pack_to_base_factor ?? 0)
     );
   });
 
   // Group ingredients per recipe
-  const ingByRecipe = new Map<string, IngredientLine[]>();
-  for (const row of ingRows) {
-    if (!ingByRecipe.has(row.recipe_id)) ingByRecipe.set(row.recipe_id, []);
-    ingByRecipe.get(row.recipe_id)!.push({
-      item_id: row.item_id,
-      qty: row.qty,
-    });
-  }
+  const ingByRecipe = new Map<string, IngredientRow[]>();
+  (ingredients ?? []).forEach((ing) => {
+    if (!ingByRecipe.has(ing.recipe_id)) ingByRecipe.set(ing.recipe_id, []);
+    ingByRecipe.get(ing.recipe_id)!.push(ing);
+  });
 
-  // Calculate prices
-  const DEFAULT_MARGIN = 30; // %
-  const rows = lines
-    .map((l) => {
-      const rec = recipes.find((r) => r.id === l.recipe_id);
-      if (!rec) return null;
-      const ings = ingByRecipe.get(rec.id) ?? [];
-      const cost = costPerServing({
-        recipe: rec,
-        ingredients: ings,
-        itemCostById: unitCostByItemId,
-      });
-      const priceEach = suggestedPrice(cost, DEFAULT_MARGIN);
-      const line = priceEach * l.servings;
-      return {
-        name: rec.name ?? "Untitled",
-        qty: l.servings,
-        priceEach,
-        line,
-      };
+  type Row = { name: string; qty: number; unit: number; line: number };
+  const rows: Row[] = recipes
+    .map((rec) => {
+      const parts = ingByRecipe.get(rec.id) ?? [];
+      const costEach = costPerPortion(rec, parts, itemCostById); // raw cost/portion
+      const unitPrice = priceFromCost(costEach, margin); // selling price/portion
+      const qty = servingsByRecipe.get(rec.id) ?? 0;
+      return { name: rec.name ?? 'Untitled', qty, unit: unitPrice, line: unitPrice * qty };
     })
-    .filter(Boolean) as { name: string; qty: number; priceEach: number; line: number }[];
+    .sort((a, b) => a.name.localeCompare(b.name));
 
-  const total = rows.reduce((acc, r) => acc + r.line, 0);
+  const total = rows.reduce((s, r) => s + r.line, 0);
 
   return (
     <main className="mx-auto p-8 max-w-3xl">
-      {/* Header (hidden when printing) */}
+      {/* Header (hidden in print) */}
       <div className="flex items-center justify-between gap-3 print:hidden">
         <div>
-          <h1 className="text-2xl font-semibold">{menu.name || "Menu"}</h1>
+          <h1 className="text-2xl font-semibold">{menu.name || 'Menu'}</h1>
           <p className="text-sm opacity-80">Created {fmtDate(menu.created_at)}</p>
+          <p className="text-xs opacity-70">Margin: {(margin * 100).toFixed(0)}%</p>
         </div>
         <div className="flex gap-2">
           <PrintButton />
-          <Link
-            href="/menu"
-            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-          >
+          <Link href="/menu" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
             Back to Menu
           </Link>
         </div>
@@ -228,16 +211,12 @@ export default async function MenuPrintPage(props: {
                 <tr key={i} className="border-t">
                   <td className="p-2">{r.name}</td>
                   <td className="p-2 text-right tabular-nums">{r.qty}</td>
-                  <td className="p-2 text-right tabular-nums">
-                    {fmtUSD(r.priceEach)}
-                  </td>
-                  <td className="p-2 text-right tabular-nums">
-                    {fmtUSD(r.line)}
-                  </td>
+                  <td className="p-2 text-right tabular-nums">{fmtUSD(r.unit)}</td>
+                  <td className="p-2 text-right tabular-nums">{fmtUSD(r.line)}</td>
                 </tr>
               ))}
-              <tr className="border-t bg-neutral-900/40">
-                <td className="p-2 font-medium" colSpan={3}>
+              <tr className="border-t">
+                <td className="p-2 font-semibold" colSpan={3}>
                   Total
                 </td>
                 <td className="p-2 text-right font-semibold tabular-nums">
@@ -249,7 +228,7 @@ export default async function MenuPrintPage(props: {
         )}
       </section>
 
-      {/* Simple print styles */}
+      {/* Print styles */}
       <style>{`
         @media print {
           .print\\:hidden { display: none !important; }

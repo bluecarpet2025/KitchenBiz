@@ -1,7 +1,6 @@
 // src/app/menu/page.tsx
-import MenuPageClient from '@/components/MenuPageClient';
-
 export const dynamic = 'force-dynamic';
+import MenuPageClient from '@/components/MenuPageClient';
 
 export default function MenuPage() {
   return <MenuPageClient />;
