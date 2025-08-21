@@ -19,17 +19,18 @@ type RecipeRow = RecipeLike & {
   batch_yield_unit: string | null;
 };
 
-type IngredientRow = IngredientLine & {
-  // qty is the amount in the item's *base* unit for the whole batch
-  unit: string | null; // kept for display, but not used by math
+type IngredientDBRow = {
+  item_id: string;
+  qty: number | null; // base units
+  unit: string | null; // display only
 };
 
 type ItemRow = {
   id: string;
   name: string | null;
   base_unit: string | null;
-  last_price: number | null; // pack/case price
-  pack_to_base_factor: number | null; // e.g., case -> grams
+  last_price: number | null;
+  pack_to_base_factor: number | null;
 };
 
 function fmtDate(d?: string | null) {
@@ -41,11 +42,11 @@ function fmtDate(d?: string | null) {
   }
 }
 
-export default async function RecipeDetailPage({
-  params,
-}: {
-  params: { id: string };
+export default async function RecipeDetailPage(props: {
+  params: Promise<{ id: string }>;
 }) {
+  const { id } = await props.params;
+
   const supabase = await createServerClient();
 
   // auth -> tenant
@@ -75,7 +76,7 @@ export default async function RecipeDetailPage({
     .select(
       "id,name,created_at,batch_yield_qty,batch_yield_unit,yield_pct,tenant_id"
     )
-    .eq("id", params.id)
+    .eq("id", id)
     .eq("tenant_id", tenantId)
     .maybeSingle();
 
@@ -96,7 +97,7 @@ export default async function RecipeDetailPage({
     .from("recipe_ingredients")
     .select("item_id,qty,unit")
     .eq("recipe_id", recipe.id);
-  const ingredients = (ing ?? []) as IngredientRow[];
+  const ingredients = (ing ?? []) as IngredientDBRow[];
 
   const itemIds = ingredients.map((r) => r.item_id);
   let items: ItemRow[] = [];
@@ -109,7 +110,7 @@ export default async function RecipeDetailPage({
     items = (it ?? []) as ItemRow[];
   }
 
-  // $/base unit lookup for cost calculator
+  // unit costs
   const itemCostById: Record<string, number> = Object.fromEntries(
     items.map((i) => [
       i.id,
@@ -119,11 +120,10 @@ export default async function RecipeDetailPage({
 
   const cps = costPerServing({
     recipe,
-    ingredients,
+    ingredients: ingredients as IngredientLine[],
     itemCostById,
   });
 
-  // build a convenience map to show item names & unit costs in the table
   const itemById = new Map<string, ItemRow>();
   items.forEach((it) => itemById.set(it.id, it));
 
@@ -134,16 +134,14 @@ export default async function RecipeDetailPage({
           <h1 className="text-2xl font-semibold">
             {recipe.name ?? "Untitled recipe"}
           </h1>
-          <p className="text-sm opacity-70">
-            Created {fmtDate(recipe.created_at)}
-          </p>
+          <p className="text-sm opacity-70">Created {fmtDate(recipe.created_at)}</p>
         </div>
         <Link href="/recipes" className="text-sm underline">
           ← Back to recipes
         </Link>
       </div>
 
-      {/* Pricing summary */}
+      {/* Pricing summary with adjustable margin */}
       <RecipePriceBox baseCostPerServing={cps} defaultMarginPct={30} />
 
       {/* Batch yield */}
@@ -179,13 +177,12 @@ export default async function RecipeDetailPage({
               const it = itemById.get(r.item_id);
               const unitCost = itemCostById[r.item_id] ?? 0;
 
-              // per-serving qty = batch qty / (batch_yield_qty * yield_pct)
               const batchQty = Number(recipe.batch_yield_qty ?? 1);
               const yieldPct =
                 recipe.yield_pct == null ? 1 : Number(recipe.yield_pct || 1);
-              const effectiveBatch = Math.max(1e-9, batchQty * yieldPct);
+              const effBatch = Math.max(1e-9, batchQty * yieldPct);
 
-              const perServingQty = Number(r.qty ?? 0) / effectiveBatch;
+              const perServingQty = Number(r.qty ?? 0) / effBatch;
               const perServingCost = perServingQty * unitCost;
 
               return (
