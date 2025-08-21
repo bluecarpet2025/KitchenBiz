@@ -18,7 +18,7 @@ export type ItemCostRow = {
   pack_to_base_factor: number | null;
 };
 
-/** Safe number */
+/** safe number */
 function n(v: number | null | undefined) {
   const x = Number(v);
   return Number.isFinite(x) ? x : 0;
@@ -72,13 +72,34 @@ export function priceFromCost(costPerPortionValue: number, foodPct = 0.3) {
   return Math.round(price / 0.05) * 0.05; // round to $0.05
 }
 
-/* --------- Back‑compat exports used by /recipes/[id] --------- */
-export const costPerServing = costPerPortion;
+/* ---------- Back‑compat + named exports used elsewhere ---------- */
+
+// Overloads so you can call either positional or object style
+export function costPerServing(
+  recipe: Recipe,
+  ingredients: IngredientRow[],
+  itemCostById: Record<string, number>
+): number;
+export function costPerServing(args: {
+  recipe: Recipe;
+  ingredients: IngredientRow[];
+  itemsById?: Record<string, number>;
+  itemCostById?: Record<string, number>;
+}): number;
+// implementation
+export function costPerServing(a: any, b?: any, c?: any): number {
+  if (a && typeof a === "object" && "recipe" in a) {
+    const { recipe, ingredients, itemsById, itemCostById } = a;
+    return costPerPortion(recipe, ingredients, itemCostById ?? itemsById ?? {});
+  }
+  return costPerPortion(a, b, c);
+}
+
 export const suggestedPrice = priceFromCost;
 
 export function fmtUSD(v: number) {
   try {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(v || 0);
+    return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(v || 0);
   } catch {
     return `$${(v || 0).toFixed(2)}`;
   }
