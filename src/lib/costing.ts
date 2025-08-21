@@ -13,10 +13,9 @@ export function fmtUSD(n: number): string {
 }
 
 /**
- * Base‑unit cost for an inventory item.
- * last_price = price per *purchase pack*
- * pack_to_base_factor = how many base units in one purchase pack
- * -> cost per base unit = last_price / pack_to_base_factor
+ * Primary implementation: cost per base unit from an item object.
+ * last_price = price per purchase pack
+ * pack_to_base_factor = base units per pack
  */
 export function baseUnitCost(item?: {
   last_price: number | null;
@@ -28,12 +27,30 @@ export function baseUnitCost(item?: {
   return price / pack;
 }
 
-// Back‑compat for older imports (inventory/page.tsx expects this name)
-export const costPerBaseUnit = baseUnitCost;
+/**
+ * Backward‑compatible shim.
+ * Supports BOTH:
+ *  - costPerBaseUnit(item)
+ *  - costPerBaseUnit(last_price, pack_to_base_factor)
+ */
+export function costPerBaseUnit(
+  a?:
+    | { last_price: number | null; pack_to_base_factor: number | null }
+    | number
+    | null,
+  b?: number | null
+): number {
+  if (a && typeof a === "object") {
+    return baseUnitCost(a as any);
+  }
+  const price = num(a, 0);
+  const pack = Math.max(1, num(b, 1));
+  return price / pack;
+}
 
 /**
- * Compute cost per serving for a recipe.
- * - ingredients qty is per *batch*
+ * Cost per serving for a recipe.
+ * - ingredient qty is per *batch*
  * - per‑serving qty = (qty * yieldPct) / batchQty
  * - line cost = perServingQty * baseUnitCost(item)
  */
@@ -53,14 +70,16 @@ export function costPerServing(opts: {
   for (const row of opts.ingredients) {
     const perServingQty = (num(row.qty, 0) * yieldPct) / batchQty;
     const item = opts.itemsById[row.item_id];
-    const buCost = baseUnitCost(item);
-    total += perServingQty * buCost;
+    total += perServingQty * baseUnitCost(item);
   }
   return total;
 }
 
-/** Suggested price from target food cost % (e.g., 0.30) */
-export function suggestedPrice(costPerServing: number, targetFoodPct: number): number {
+/** Suggested price from a target food cost % (e.g., 0.30) */
+export function suggestedPrice(
+  cost_per_serving: number,
+  targetFoodPct: number
+): number {
   const pct = Math.max(0.01, Math.min(0.99, targetFoodPct || 0.3));
-  return costPerServing / pct;
+  return cost_per_serving / pct;
 }
