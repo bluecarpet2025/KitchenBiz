@@ -1,6 +1,8 @@
 // src/app/menu/page.tsx
 export const dynamic = 'force-dynamic';
-import MenuPageClient from '@/components/MenuPageClient';
+import dynamicImport from 'next/dynamic';
+
+const MenuPageClient = dynamicImport(() => import('@/components/MenuPageClient'));
 
 export default function MenuPage() {
   return <MenuPageClient />;
