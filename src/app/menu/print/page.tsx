@@ -1,22 +1,9 @@
-// src/app/menu/print/page.tsx
 import Link from 'next/link';
 import { createServerClient } from '@/lib/supabase/server';
 import { costPerBaseUnit, costPerPortion, priceFromCost, fmtUSD } from '@/lib/costing';
+import PrintButton from '@/components/PrintButton';
 
 export const dynamic = 'force-dynamic';
-
-// tiny client-only button so the page can print
-function PrintButton() {
-  'use client';
-  return (
-    <button
-      onClick={() => window.print()}
-      className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900 print:hidden"
-    >
-      Print
-    </button>
-  );
-}
 
 type RecipeRow = {
   id: string;
@@ -41,7 +28,7 @@ export default async function Page({
   const sp = (await searchParams) ?? {};
   const menuId = Array.isArray(sp.menu_id) ? sp.menu_id[0] : sp.menu_id;
 
-  // margin comes in as 0..1 (string); default 0.30 if missing/bad
+  // margin 0..1 (default 0.30)
   const marginParam = Array.isArray(sp.margin) ? sp.margin[0] : sp.margin;
   let margin = Number(marginParam);
   if (!Number.isFinite(margin)) margin = 0.3;
@@ -49,7 +36,7 @@ export default async function Page({
 
   const supabase = await createServerClient();
 
-  // Require auth → tenant
+  // auth → tenant
   const { data: u } = await supabase.auth.getUser();
   const userId = u.user?.id ?? null;
   if (!userId) {
@@ -79,7 +66,7 @@ export default async function Page({
     );
   }
 
-  // Menu (scoped)
+  // menu
   const { data: menu } = await supabase
     .from('menus')
     .select('id,name,created_at,tenant_id')
@@ -96,7 +83,7 @@ export default async function Page({
     );
   }
 
-  // Lines
+  // lines
   const { data: lines } = await supabase
     .from('menu_recipes')
     .select('recipe_id,servings')
@@ -108,7 +95,7 @@ export default async function Page({
     servingsByRecipe.set(l.recipe_id, Number(l.servings ?? 0));
   });
 
-  // Recipes with yield fields
+  // recipes
   let recipes: RecipeRow[] = [];
   if (rids.length) {
     const { data: recs } = await supabase
@@ -118,7 +105,7 @@ export default async function Page({
     recipes = (recs ?? []) as RecipeRow[];
   }
 
-  // Ingredients (normalize qty)
+  // ingredients
   let ingredients: IngredientRow[] = [];
   if (rids.length) {
     const { data: ing } = await supabase
@@ -128,12 +115,11 @@ export default async function Page({
     ingredients = (ing ?? []) as IngredientRow[];
   }
 
-  // Item base-unit costs (guard bad pack factors)
+  // item base costs
   const { data: itemsRaw } = await supabase
     .from('inventory_items')
     .select('id,last_price,pack_to_base_factor')
     .eq('tenant_id', tenantId);
-
   const itemCostById: Record<string, number> = {};
   (itemsRaw ?? []).forEach((it: any) => {
     const price = Number(it.last_price ?? 0);
@@ -141,31 +127,21 @@ export default async function Page({
     itemCostById[it.id] = costPerBaseUnit(price, factor);
   });
 
-  // Group ingredients per recipe with safe qty
+  // group ingredients by recipe with safe qty
   const ingByRecipe = new Map<string, IngredientRow[]>();
   (ingredients ?? []).forEach((ing) => {
     if (!ingByRecipe.has(ing.recipe_id)) ingByRecipe.set(ing.recipe_id, []);
-    // push a normalized copy (qty always a number)
-    ingByRecipe.get(ing.recipe_id)!.push({
-      ...ing,
-      qty: Number(ing.qty ?? 0),
-    });
+    ingByRecipe.get(ing.recipe_id)!.push({ ...ing, qty: Number(ing.qty ?? 0) });
   });
 
   type Row = { name: string; qty: number; unit: number; line: number };
-
   const rows: Row[] = recipes
     .map((rec) => {
       const parts = ingByRecipe.get(rec.id) ?? [];
-      const costEach = costPerPortion(rec, parts, itemCostById); // cost/portion
-      const unitPrice = priceFromCost(costEach, margin);         // selling price/portion
+      const costEach = costPerPortion(rec, parts, itemCostById);
+      const unitPrice = priceFromCost(costEach, margin);
       const qty = servingsByRecipe.get(rec.id) ?? 0;
-      return {
-        name: rec.name ?? 'Untitled',
-        qty,
-        unit: unitPrice,
-        line: unitPrice * qty,
-      };
+      return { name: rec.name ?? 'Untitled', qty, unit: unitPrice, line: unitPrice * qty };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
 
@@ -173,7 +149,6 @@ export default async function Page({
 
   return (
     <main className="mx-auto p-8 max-w-3xl">
-      {/* Header (hidden in print) */}
       <div className="flex items-center justify-between gap-3 print:hidden">
         <div>
           <h1 className="text-2xl font-semibold">{menu.name || 'Menu'}</h1>
@@ -181,14 +156,11 @@ export default async function Page({
           <p className="text-xs opacity-70">Margin: {(margin * 100).toFixed(0)}%</p>
         </div>
         <div className="flex gap-2">
-          <PrintButton />
-          <Link href="/menu" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
-            Back to Menu
-          </Link>
+          <PrintButton className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900 print:hidden" />
+          <Link href="/menu" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Back to Menu</Link>
         </div>
       </div>
 
-      {/* Printable content */}
       <section className="mt-6 border rounded-lg p-6">
         {rows.length === 0 ? (
           <p className="text-neutral-400">No recipes in this menu.</p>
