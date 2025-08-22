@@ -1,231 +1,146 @@
 // src/app/recipes/[id]/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
-import RecipePriceBox from "@/components/RecipePriceBox";
-import {
-  costPerBaseUnit,
-  costPerServing,
-  fmtUSD,
-  type IngredientLine,
-  type RecipeLike,
-} from "@/lib/costing";
+import { costPerBaseUnit, costPerPortion, priceFromCost, fmtUSD } from "@/lib/costing";
 
 export const dynamic = "force-dynamic";
 
-type RecipeRow = RecipeLike & {
+type RecipeRow = {
   id: string;
   name: string | null;
-  created_at: string | null;
+  batch_yield_qty: number | null;
   batch_yield_unit: string | null;
+  yield_pct: number | null;
+  menu_description: string | null;
 };
-
-type IngredientDBRow = {
+type IngredientRow = {
+  recipe_id: string;
   item_id: string;
-  qty: number | null; // base units
-  unit: string | null; // display only
+  qty: number | null;
 };
 
-type ItemRow = {
-  id: string;
-  name: string | null;
-  base_unit: string | null;
-  last_price: number | null;
-  pack_to_base_factor: number | null;
-};
-
-function fmtDate(d?: string | null) {
-  if (!d) return "-";
-  try {
-    return new Date(d).toLocaleDateString();
-  } catch {
-    return "-";
-  }
-}
-
-export default async function RecipeDetailPage(props: {
+export default async function RecipePage({
+  params,
+  searchParams,
+}: {
+  // Next.js 15 passes params/searchParams as Promises
   params: Promise<{ id: string }>;
+  searchParams?: Promise<Record<string, string | string[]>>;
 }) {
-  const { id } = await props.params;
+  const { id } = await params;
 
   const supabase = await createServerClient();
-
-  // auth -> tenant
   const { data: u } = await supabase.auth.getUser();
-  const uid = u.user?.id;
-  if (!uid) {
+  const userId = u.user?.id ?? null;
+
+  if (!userId) {
     return (
-      <main className="max-w-5xl mx-auto p-6">
+      <main className="max-w-4xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Recipe</h1>
         <p className="mt-4">Sign in required.</p>
-        <Link className="underline" href="/login?redirect=/recipes">
+        <Link href="/login?redirect=/recipes" className="underline">
           Go to login
         </Link>
       </main>
     );
   }
+
   const { data: prof } = await supabase
     .from("profiles")
     .select("tenant_id")
-    .eq("id", uid)
+    .eq("id", userId)
     .maybeSingle();
   const tenantId = prof?.tenant_id ?? null;
 
-  // recipe
-  const { data: recipe } = await supabase
-    .from("recipes")
-    .select(
-      "id,name,created_at,batch_yield_qty,batch_yield_unit,yield_pct,tenant_id"
-    )
-    .eq("id", id)
-    .eq("tenant_id", tenantId)
-    .maybeSingle();
-
-  if (!recipe) {
+  if (!tenantId) {
     return (
-      <main className="max-w-5xl mx-auto p-6">
+      <main className="max-w-4xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Recipe</h1>
-        <p className="mt-4">Recipe not found.</p>
-        <Link className="underline" href="/recipes">
+        <p className="mt-4">Profile missing tenant.</p>
+        <Link href="/recipes" className="underline">
           Back to recipes
         </Link>
       </main>
     );
   }
 
-  // ingredients
-  const { data: ing } = await supabase
-    .from("recipe_ingredients")
-    .select("item_id,qty,unit")
-    .eq("recipe_id", recipe.id);
-  const ingredients = (ing ?? []) as IngredientDBRow[];
+  // Pull the recipe
+  const { data: recipe } = await supabase
+    .from("recipes")
+    .select("id,name,batch_yield_qty,batch_yield_unit,yield_pct,menu_description,tenant_id")
+    .eq("id", id)
+    .eq("tenant_id", tenantId)
+    .maybeSingle();
 
-  const itemIds = ingredients.map((r) => r.item_id);
-  let items: ItemRow[] = [];
-  if (itemIds.length) {
-    const { data: it } = await supabase
-      .from("inventory_items")
-      .select("id,name,base_unit,last_price,pack_to_base_factor")
-      .in("id", itemIds)
-      .eq("tenant_id", tenantId);
-    items = (it ?? []) as ItemRow[];
+  if (!recipe) {
+    return (
+      <main className="max-w-4xl mx-auto p-6">
+        <h1 className="text-2xl font-semibold">Recipe</h1>
+        <p className="mt-4">Recipe not found.</p>
+        <Link href="/recipes" className="underline">
+          Back to recipes
+        </Link>
+      </main>
+    );
   }
 
-  // unit costs
-  const itemCostById: Record<string, number> = Object.fromEntries(
-    items.map((i) => [
-      i.id,
-      costPerBaseUnit(i.last_price, i.pack_to_base_factor),
-    ])
-  );
+  // Ingredients for this recipe
+  const { data: ingRaw } = await supabase
+    .from("recipe_ingredients")
+    .select("recipe_id,item_id,qty")
+    .eq("recipe_id", recipe.id);
+  const ingredients = (ingRaw ?? []) as IngredientRow[];
 
-  const cps = costPerServing({
-    recipe,
-    ingredients: ingredients as IngredientLine[],
-    itemCostById,
+  // Item costs
+  const { data: itemsRaw } = await supabase
+    .from("inventory_items")
+    .select("id,last_price,pack_to_base_factor")
+    .eq("tenant_id", tenantId);
+
+  // 🔧 IMPORTANT: itemCostById (not itemsById)
+  const itemCostById: Record<string, number> = {};
+  (itemsRaw ?? []).forEach((it: any) => {
+    itemCostById[it.id] = costPerBaseUnit(
+      Number(it.last_price ?? 0),
+      Number(it.pack_to_base_factor ?? 0)
+    );
   });
 
-  const itemById = new Map<string, ItemRow>();
-  items.forEach((it) => itemById.set(it.id, it));
+  // Costs
+  const rawCostPerPortion = costPerPortion(recipe, ingredients, itemCostById);
+  const margin = 0.3; // default 30% suggested margin here
+  const suggested = priceFromCost(rawCostPerPortion, margin);
 
   return (
-    <main className="max-w-5xl mx-auto p-6 space-y-6">
+    <main className="max-w-4xl mx-auto p-6 space-y-4">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">
-            {recipe.name ?? "Untitled recipe"}
-          </h1>
-          <p className="text-sm opacity-70">Created {fmtDate(recipe.created_at)}</p>
-        </div>
+        <h1 className="text-2xl font-semibold">{recipe.name ?? "Untitled"}</h1>
         <Link href="/recipes" className="text-sm underline">
-          ← Back to recipes
+          Back to recipes
         </Link>
       </div>
 
-      {/* Pricing summary with adjustable margin */}
-      <RecipePriceBox baseCostPerServing={cps} defaultMarginPct={30} />
-
-      {/* Batch yield */}
-      <div className="border rounded-lg p-4">
-        <div className="text-sm">
-          <span className="opacity-70">Batch yield:&nbsp;</span>
-          <span className="tabular-nums">
-            {recipe.batch_yield_qty ?? 1} {recipe.batch_yield_unit ?? ""}
-          </span>
-          &nbsp; · &nbsp;
-          <span className="opacity-70">Yield %:&nbsp;</span>
-          <span className="tabular-nums">
-            {recipe.yield_pct == null
-              ? "100%"
-              : `${Math.round((recipe.yield_pct || 0) * 100)}%`}
-          </span>
+      <div className="grid md:grid-cols-2 gap-6">
+        <div className="border rounded p-4">
+          <div className="font-semibold mb-2">Costing</div>
+          <dl className="text-sm space-y-2">
+            <div className="flex justify-between">
+              <dt>Raw cost per portion</dt>
+              <dd className="tabular-nums">{fmtUSD(rawCostPerPortion)}</dd>
+            </div>
+            <div className="flex justify-between">
+              <dt>Suggested price (30% margin)</dt>
+              <dd className="tabular-nums">{fmtUSD(suggested)}</dd>
+            </div>
+          </dl>
         </div>
-      </div>
 
-      {/* Ingredients & unit costs */}
-      <div className="border rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-neutral-900/60">
-            <tr>
-              <th className="text-left p-2">Item</th>
-              <th className="text-right p-2">Qty (batch)</th>
-              <th className="text-right p-2">$ / base unit</th>
-              <th className="text-right p-2">Cost / serving</th>
-            </tr>
-          </thead>
-          <tbody>
-            {ingredients.map((r, i) => {
-              const it = itemById.get(r.item_id);
-              const unitCost = itemCostById[r.item_id] ?? 0;
-
-              const batchQty = Number(recipe.batch_yield_qty ?? 1);
-              const yieldPct =
-                recipe.yield_pct == null ? 1 : Number(recipe.yield_pct || 1);
-              const effBatch = Math.max(1e-9, batchQty * yieldPct);
-
-              const perServingQty = Number(r.qty ?? 0) / effBatch;
-              const perServingCost = perServingQty * unitCost;
-
-              return (
-                <tr className="border-t" key={i}>
-                  <td className="p-2">
-                    {it?.name ?? "(missing)"}{" "}
-                    {it?.base_unit ? (
-                      <span className="opacity-60 text-xs">
-                        ({it.base_unit})
-                      </span>
-                    ) : null}
-                  </td>
-                  <td className="p-2 text-right tabular-nums">
-                    {Number(r.qty ?? 0).toLocaleString()}
-                  </td>
-                  <td className="p-2 text-right tabular-nums">
-                    {fmtUSD(unitCost)}
-                  </td>
-                  <td className="p-2 text-right tabular-nums">
-                    {fmtUSD(perServingCost)}
-                  </td>
-                </tr>
-              );
-            })}
-            {ingredients.length === 0 && (
-              <tr>
-                <td colSpan={4} className="p-3 text-neutral-400">
-                  No ingredients yet.
-                </td>
-              </tr>
-            )}
-            {ingredients.length > 0 && (
-              <tr className="border-t bg-neutral-900/40">
-                <td className="p-2 font-medium">Total</td>
-                <td className="p-2" />
-                <td className="p-2" />
-                <td className="p-2 text-right font-semibold tabular-nums">
-                  {fmtUSD(cps)}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+        <div className="border rounded p-4">
+          <div className="font-semibold mb-2">Menu description</div>
+          <p className="text-sm whitespace-pre-line opacity-90">
+            {(recipe.menu_description ?? "").trim() || "—"}
+          </p>
+        </div>
       </div>
     </main>
   );
