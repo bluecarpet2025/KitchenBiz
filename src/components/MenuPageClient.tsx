@@ -2,14 +2,8 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
-import {
-  costPerBaseUnit,
-  costPerPortion,
-  priceFromCost,
-  fmtUSD,
-} from '@/lib/costing';
+import { costPerBaseUnit, costPerPortion, priceFromCost, fmtUSD } from '@/lib/costing';
 
 type MenuRow = { id: string; name: string | null; created_at: string | null };
 type Recipe = {
@@ -19,20 +13,23 @@ type Recipe = {
   batch_yield_unit: string | null;
   yield_pct: number | null;
 };
+type IngredientRow = { recipe_id: string; item_id: string; qty: number | null };
 type Sel = Record<string, number>; // recipeId -> portions
 
 export default function MenuPageClient() {
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [menus, setMenus] = useState<MenuRow[]>([]);
   const [selectedMenuId, setSelectedMenuId] = useState<string | null>(null);
+
   const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [ingredients, setIngredients] = useState<IngredientRow[]>([]); // NEW
+
   const [sel, setSel] = useState<Sel>({});
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [shareToken, setShareToken] = useState<string | null>(null);
 
-  // pricing
-  const [marginPct, setMarginPct] = useState<number>(30); // percent 0..100
+  const [marginPct, setMarginPct] = useState<number>(30);
 
   // boot
   useEffect(() => {
@@ -48,35 +45,46 @@ export default function MenuPageClient() {
         .select('tenant_id')
         .eq('id', uid)
         .maybeSingle();
-
       if (!prof?.tenant_id) {
         setStatus('No tenant.');
         return;
       }
       setTenantId(prof.tenant_id);
 
-      // menus (order by created_at desc)
+      // Menus (descending by created_at)
       const { data: ms } = await supabase
         .from('menus')
         .select('id,name,created_at')
         .eq('tenant_id', prof.tenant_id)
         .order('created_at', { ascending: false });
-
       const list = (ms ?? []) as MenuRow[];
       setMenus(list);
       setSelectedMenuId(list?.[0]?.id ?? null);
 
-      // recipes
+      // Recipes
       const { data: recs } = await supabase
         .from('recipes')
         .select('id,name,batch_yield_qty,batch_yield_unit,yield_pct')
         .eq('tenant_id', prof.tenant_id)
         .order('name');
-      setRecipes((recs ?? []) as Recipe[]);
+      const rlist = (recs ?? []) as Recipe[];
+      setRecipes(rlist);
+
+      // Ingredients for those recipes (this is what was missing before)
+      const rids = rlist.map((r) => r.id);
+      if (rids.length) {
+        const { data: ing } = await supabase
+          .from('recipe_ingredients')
+          .select('recipe_id,item_id,qty')
+          .in('recipe_id', rids);
+        setIngredients((ing ?? []) as IngredientRow[]);
+      } else {
+        setIngredients([]);
+      }
     })();
   }, []);
 
-  // load selected menu lines + share
+  // when a menu is selected, load its lines + share
   useEffect(() => {
     (async () => {
       if (!selectedMenuId) {
@@ -88,7 +96,6 @@ export default function MenuPageClient() {
         .from('menu_recipes')
         .select('recipe_id,servings')
         .eq('menu_id', selectedMenuId);
-
       const next: Sel = {};
       (rows ?? []).forEach((r: any) => {
         next[r.recipe_id] = Number(r.servings || 1);
@@ -115,15 +122,15 @@ export default function MenuPageClient() {
         .eq('tenant_id', tenantId);
       const map: Record<string, number> = {};
       (items ?? []).forEach((it: any) => {
-        map[it.id] = costPerBaseUnit(
-          Number(it.last_price ?? 0),
-          Number(it.pack_to_base_factor ?? 0)
-        );
+        const price = Number(it.last_price ?? 0);
+        const factor = Number(it.pack_to_base_factor ?? 0);
+        map[it.id] = costPerBaseUnit(price, factor);
       });
       setItemCostById(map);
     })();
   }, [tenantId]);
 
+  // helpers
   function addRecipe(id: string) {
     setSel((s) => ({ ...s, [id]: s[id] ?? 1 }));
   }
@@ -240,7 +247,6 @@ export default function MenuPageClient() {
     if (!selectedMenuId) return;
     if (!confirm('Delete this menu? This will remove its lines and shares.')) return;
     setBusy(true);
-    // cascade: shares then lines then menu
     await supabase.from('menu_shares').delete().eq('menu_id', selectedMenuId);
     await supabase.from('menu_recipes').delete().eq('menu_id', selectedMenuId);
     await supabase.from('menus').delete().eq('id', selectedMenuId);
@@ -261,62 +267,38 @@ export default function MenuPageClient() {
     window.open(`/menu/print?menu_id=${selectedMenuId}&margin=${margin}`, '_blank');
   }
 
-  async function createShare() {
-    try {
-      if (!selectedMenuId || !tenantId) return;
-      setBusy(true);
-      const name = menus.find((m) => m.id === selectedMenuId)?.name ?? 'Menu';
-      const items = Object.keys(sel)
-        .filter((id) => sel[id] > 0)
-        .map((id) => ({
-          name: recipes.find((r) => r.id === id)?.name || 'Untitled',
-          servings: sel[id],
-        }));
-      const token = crypto.randomUUID().replace(/-/g, '').slice(0, 24);
-      const payload = { name, created_at: new Date().toISOString(), items };
-      const { error } = await supabase
-        .from('menu_shares')
-        .insert({ token, tenant_id: tenantId, menu_id: selectedMenuId, payload });
-      if (error) throw error;
-      setShareToken(token);
-      const origin =
-        typeof window !== 'undefined' ? window.location.origin : 'https://kitchenbiz.vercel.app';
-      await navigator.clipboard.writeText(`${origin}/share/${token}`).catch(() => {});
-      setStatus('Public share link created & copied.');
-    } catch (err: any) {
-      alert(err.message ?? 'Error creating share link');
-    } finally {
-      setBusy(false);
-    }
-  }
+  // group ingredients by recipe_id
+  const ingByRecipe = useMemo(() => {
+    const map = new Map<string, IngredientRow[]>();
+    (ingredients ?? []).forEach((ing) => {
+      if (!map.has(ing.recipe_id)) map.set(ing.recipe_id, []);
+      map.get(ing.recipe_id)!.push(ing);
+    });
+    return map;
+  }, [ingredients]);
 
-  // compute pricing rows
+  // compute pricing rows (NOW with real parts)
   const rows = useMemo(() => {
     const m = Math.max(0, Math.min(1, marginPct / 100));
     return Object.keys(sel)
       .map((id) => {
         const r = recipes.find((x) => x.id === id);
         const qty = sel[id] ?? 0;
-        if (!r) {
-          return { id, name: 'Untitled', qty, eachCost: 0, eachSuggested: 0, line: 0 };
-        }
-        // cost per portion (base costs from inventory)
-        const parts = []; // we only need costPerPortion's signature items map + recipe; it will fetch via qty fields in recipe_ingredients in print; here we approximate with 0 if we lack parts
-        // NOTE: on the client we don’t have ingredients handy; use server for exact print.
-        // For UI, use “best effort” by reading items map if qtys exist later; otherwise 0.
-        const eachCost = costPerPortion(r, [], itemCostById);
+        if (!r) return { id, name: 'Untitled', qty, eachSuggested: 0, line: 0 };
+
+        const parts = ingByRecipe.get(r.id) ?? [];
+        const eachCost = costPerPortion(r, parts, itemCostById);
         const eachSuggested = priceFromCost(eachCost, m);
         return {
           id,
           name: r.name ?? 'Untitled',
           qty,
-          eachCost,
           eachSuggested,
           line: eachSuggested * qty,
         };
       })
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [sel, recipes, itemCostById, marginPct]);
+  }, [sel, recipes, ingByRecipe, itemCostById, marginPct]);
 
   const grand = rows.reduce((s, r) => s + r.line, 0);
 
@@ -376,7 +358,25 @@ export default function MenuPageClient() {
             Print
           </button>
           {!shareToken ? (
-            <button disabled={busy} onClick={createShare} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
+            <button disabled={busy} onClick={async () => {
+              if (!selectedMenuId || !tenantId) return;
+              setBusy(true);
+              const name = menus.find((m) => m.id === selectedMenuId)?.name ?? 'Menu';
+              const items = Object.keys(sel)
+                .filter((id) => sel[id] > 0)
+                .map((id) => ({
+                  name: recipes.find((r) => r.id === id)?.name || 'Untitled',
+                  servings: sel[id],
+                }));
+              const token = crypto.randomUUID().replace(/-/g, '').slice(0, 24);
+              const payload = { name, created_at: new Date().toISOString(), items };
+              const { error } = await supabase
+                .from('menu_shares')
+                .insert({ token, tenant_id: tenantId, menu_id: selectedMenuId, payload });
+              if (!error) setShareToken(token);
+              setBusy(false);
+              setStatus(error ? 'Error creating share' : 'Public share link created & copied.');
+            }} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
               Create share link
             </button>
           ) : (
