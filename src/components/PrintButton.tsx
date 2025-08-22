@@ -1,6 +1,8 @@
 'use client';
 
-type Props = { className?: string };
+type Props = {
+  className?: string;
+};
 
 export default function PrintButton({ className }: Props) {
   return (
