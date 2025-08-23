@@ -1,111 +1,90 @@
 // src/lib/costing.ts
 
-/** Always return a safe number */
-function n(v: unknown, def = 0): number {
-  const x = Number(v);
-  return Number.isFinite(x) ? x : def;
-}
+/** ---- Shared types ------------------------------------------------------ */
 
-/** USD formatter */
-export function fmtUSD(v: number): string {
-  try {
-    return v.toLocaleString("en-US", { style: "currency", currency: "USD" });
-  } catch {
-    return `$${v.toFixed(2)}`;
-  }
-}
+export type ItemCostById = Record<string, number>;
 
-/** $ per base unit (e.g., $/gram, $/ml, $/piece) */
-export function costPerBaseUnit(
-  lastPrice?: number | null,
-  packToBaseFactor?: number | null
-): number {
-  const price = n(lastPrice, 0);
-  const factor = n(packToBaseFactor, 1);
-  if (factor <= 0) return 0;
-  return price / factor;
-}
-
-/** Suggested selling price from cost and margin % (e.g., 30 => 30%) */
-export function suggestedPrice(cost: number, marginPct = 30): number {
-  const m = n(marginPct, 0) / 100;
-  if (m >= 1) return cost; // avoid div by zero / infinity
-  return cost / (1 - m);
-}
-
-/** Types used by calculators */
 export type RecipeLike = {
-  batch_yield_qty: number | null;
-  yield_pct: number | null; // 0..1 (null => 1)
+  id: string;
+  name: string | null;
+  batch_yield_qty: number | null;    // e.g. 8 slices
+  batch_yield_unit: string | null;   // e.g. "slice"
+  yield_pct: number | null;          // 0-1 loss factor (null => 1)
+  menu_description?: string | null;
 };
 
 export type IngredientLine = {
-  item_id: string;
-  /** qty in the item base unit for the whole batch */
-  qty: number | null;
+  recipe_id: string | null;
+  item_id: string | null;
+  qty: number | null;                // qty in the inventory item’s base unit
 };
 
-/** Cost per serving */
-export function costPerServing(
-  recipe: RecipeLike,
-  ingredients: IngredientLine[],
-  itemCostById: Record<string, number>
-): number;
-export function costPerServing(args: {
-  recipe: RecipeLike;
-  ingredients: IngredientLine[];
-  itemCostById: Record<string, number>;
-}): number;
-export function costPerServing(
-  a:
-    | RecipeLike
-    | {
-        recipe: RecipeLike;
-        ingredients: IngredientLine[];
-        itemCostById: Record<string, number>;
-      },
-  b?: IngredientLine[],
-  c?: Record<string, number>
-): number {
-  let recipe: RecipeLike;
-  let ingredients: IngredientLine[];
-  let itemCostById: Record<string, number>;
+/** ---- Utilities --------------------------------------------------------- */
 
-  if (typeof a === "object" && "recipe" in a) {
-    recipe = a.recipe;
-    ingredients = a.ingredients;
-    itemCostById = a.itemCostById;
-  } else {
-    recipe = a as RecipeLike;
-    ingredients = b ?? [];
-    itemCostById = c ?? {};
-  }
-
-  const batchQty = n(recipe.batch_yield_qty, 1);
-  const yieldPct = recipe.yield_pct == null ? 1 : n(recipe.yield_pct, 1);
-  const effectiveBatch = Math.max(1e-9, batchQty * yieldPct);
-
-  let totalPerServing = 0;
-  for (const line of ingredients) {
-    const perBatchQty = n(line.qty, 0); // already base units
-    const perServingQty = perBatchQty / effectiveBatch;
-    const unitCost = n(itemCostById[line.item_id], 0);
-    totalPerServing += perServingQty * unitCost;
-  }
-  return totalPerServing;
+export function fmtUSD(n: number): string {
+  if (!isFinite(n)) return '$0.00';
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(n);
 }
 
-/* ------------------------------------------------------------------
-   Backwards‑compat aliases so older files keep compiling:
-   - costPerPortion   -> costPerServing
-   - priceFromCost    -> suggestedPrice
-   - IngredientRow    -> IngredientLine
-   - ItemCostRow      -> a simple { item_id, unit_cost } shape (rarely used)
-   - Recipe           -> RecipeLike
--------------------------------------------------------------------*/
-export const costPerPortion = costPerServing;
-export const priceFromCost = suggestedPrice;
+/**
+ * Convert a purchase price for a pack to the cost for ONE base unit.
+ * Ex: last_price=$12.00 for a case, pack_to_base_factor=24 → $0.50 each.
+ */
+export function costPerBaseUnit(lastPrice?: number | null, packToBase?: number | null): number {
+  const price = Number(lastPrice ?? 0);
+  const factor = Number(packToBase ?? 0);
+  if (price <= 0 || factor <= 0) return 0;
+  return price / factor;
+}
 
-export type IngredientRow = IngredientLine;
-export type ItemCostRow = { item_id: string; unit_cost: number };
-export type Recipe = RecipeLike;
+/**
+ * Raw food cost PER SERVING/PORTION for a recipe.
+ * - `recipe.batch_yield_qty` tells how many servings a full batch yields
+ * - `yield_pct` (0..1) is an optional waste/shrink factor (defaults to 1)
+ * - Sums ingredient extended costs using `itemCostById`
+ */
+export function costPerPortion(
+  recipe: RecipeLike,
+  ingredients: IngredientLine[],
+  itemCostById: ItemCostById
+): number {
+  const yieldQty = Number(recipe.batch_yield_qty ?? 0);
+  if (yieldQty <= 0) return 0;
+
+  const shrink = clamp01(recipe.yield_pct ?? 1);
+
+  let batchCost = 0;
+  for (const line of ingredients) {
+    const id = line.item_id ?? '';
+    const unitCost = itemCostById[id] ?? 0;
+    const qty = Number(line.qty ?? 0);
+    if (unitCost > 0 && qty > 0) batchCost += unitCost * qty;
+  }
+
+  // Adjust for yield (if 80% yield, effective usable is 0.8)
+  const effectiveBatchCost = batchCost / (shrink > 0 ? shrink : 1);
+  return effectiveBatchCost / yieldQty;
+}
+
+/**
+ * Selling price from raw food cost and a food‑cost percentage (margin).
+ * If margin = 0.30, then price = cost / 0.30 (NOT cost * 1.30).
+ */
+export function priceFromCost(rawCost: number, margin: number): number {
+  const m = clamp01(margin);
+  if (rawCost <= 0 || m <= 0) return 0;
+  return rawCost / m;
+}
+
+/** ---- helpers ----------------------------------------------------------- */
+function clamp01(n: number) {
+  if (!isFinite(n)) return 0;
+  if (n < 0) return 0;
+  if (n > 1) return 1;
+  return n;
+}
