@@ -6,45 +6,14 @@ import {
   costPerPortion,
   priceFromCost,
   fmtUSD,
+  type RecipeLike,
+  type IngredientLine,
 } from "@/lib/costing";
+import PrintCopyActions from "@/components/PrintCopyActions"; // client-only buttons
 
 export const dynamic = "force-dynamic";
 
-/** Small client-only header actions (Print / Copy link) */
-function HeaderActions() {
-  "use client";
-  async function copyLink() {
-    try {
-      await navigator.clipboard.writeText(window.location.href);
-      alert("Link copied to clipboard.");
-    } catch {
-      alert("Couldn’t copy link.");
-    }
-  }
-  return (
-    <div className="flex gap-2 print:hidden">
-      <button
-        onClick={() => window.print()}
-        className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-      >
-        Print
-      </button>
-      <button
-        onClick={copyLink}
-        className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-      >
-        Copy link
-      </button>
-      <Link
-        href="/menu"
-        className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-      >
-        Back to Menu
-      </Link>
-    </div>
-  );
-}
-
+/* ---------- small helpers ---------- */
 function dt(d?: string | null) {
   if (!d) return "";
   try {
@@ -54,63 +23,48 @@ function dt(d?: string | null) {
   }
 }
 
-/** Shapes we use locally (looser than DB types to avoid null/undefined errors) */
-type RecipeRow = {
-  id: string;
+type RecipeRow = RecipeLike & {
   name: string | null;
-  batch_yield_qty: number | null;
-  batch_yield_unit: string | null;
-  yield_pct: number | null;
   menu_description: string | null;
 };
 
-type IngredientLine = {
-  recipe_id: string | null;
-  item_id: string | null;
-  qty: number | null;
-};
-
-export default async function Page(props: {
-  // Next 15 may pass searchParams as a Promise; accept both
-  searchParams?:
-    | Record<string, string | string[]>
-    | Promise<Record<string, string | string[]>>;
-}) {
-  const sp =
-    (await Promise.resolve(props.searchParams)) ??
-    ({} as Record<string, string | string[]>);
-
+/**
+ * NOTE (Next 15): `searchParams` comes in as a Promise.
+ * To avoid the PageProps constraint error, accept `any`
+ * and await it explicitly.
+ */
+export default async function Page({ searchParams }: any) {
+  // Resolve search params safely
+  const sp: Record<string, string | string[]> = (await searchParams) ?? {};
   const menuIdRaw = Array.isArray(sp.menu_id) ? sp.menu_id[0] : sp.menu_id;
   const marginRaw = Array.isArray(sp.margin) ? sp.margin[0] : sp.margin;
 
-  const menuId = (menuIdRaw ?? "").toString();
-  // margin is food‑cost %, default 0.30 (30%)
-  const margin = Math.min(
-    0.9,
-    Math.max(0, marginRaw ? Number(marginRaw) : 0.3)
-  );
+  // Defaults: menuId -> "", margin -> 0.30 (30%)
+  const menuId = String(menuIdRaw ?? "");
+  const margin = Math.min(0.95, Math.max(0, marginRaw ? Number(marginRaw) : 0.3));
 
   const supabase = await createServerClient();
 
   // auth → tenant
   const { data: u } = await supabase.auth.getUser();
   const userId = u.user?.id ?? null;
+
   if (!userId) {
     return (
       <main className="max-w-4xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Menu</h1>
         <p className="mt-4">You need to sign in to view this menu.</p>
-        <Link className="underline" href="/login?redirect=/menu">
-          Go to login
-        </Link>
+        <Link className="underline" href="/login?redirect=/menu">Go to login</Link>
       </main>
     );
   }
+
   const { data: prof } = await supabase
     .from("profiles")
     .select("tenant_id")
     .eq("id", userId)
     .maybeSingle();
+
   const tenantId = prof?.tenant_id ?? null;
 
   if (!tenantId || !menuId) {
@@ -118,9 +72,7 @@ export default async function Page(props: {
       <main className="max-w-4xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Menu</h1>
         <p className="mt-4">Missing menu or tenant.</p>
-        <Link className="underline" href="/menu">
-          Back to Menu
-        </Link>
+        <Link className="underline" href="/menu">Back to Menu</Link>
       </main>
     );
   }
@@ -132,47 +84,44 @@ export default async function Page(props: {
     .eq("id", menuId)
     .eq("tenant_id", tenantId)
     .maybeSingle();
+
   if (!menu) {
     return (
       <main className="max-w-4xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Menu</h1>
         <p className="mt-4">Menu not found.</p>
-        <Link className="underline" href="/menu">
-          Back to Menu
-        </Link>
+        <Link className="underline" href="/menu">Back to Menu</Link>
       </main>
     );
   }
 
-  // lines (we don’t show qty now, but it scopes which recipes appear)
+  // lines (we filter by recipes that are in this menu)
   const { data: lines } = await supabase
     .from("menu_recipes")
     .select("recipe_id,servings")
     .eq("menu_id", menu.id);
 
-  const rids = (lines ?? [])
-    .map((l) => (l as any).recipe_id as string)
-    .filter(Boolean);
+  const recipeIds = (lines ?? []).map((l) => l.recipe_id as string);
 
-  // recipes with printable description
+  // recipes (include menu_description for print)
   let recipes: RecipeRow[] = [];
-  if (rids.length) {
+  if (recipeIds.length) {
     const { data: recs } = await supabase
       .from("recipes")
-      .select(
-        "id,name,batch_yield_qty,batch_yield_unit,yield_pct,menu_description"
-      )
-      .in("id", rids);
+      .select("id,name,batch_yield_qty,batch_yield_unit,yield_pct,menu_description")
+      .in("id", recipeIds);
+
     recipes = (recs ?? []) as RecipeRow[];
   }
 
   // ingredients for those recipes
   let ingredients: IngredientLine[] = [];
-  if (rids.length) {
+  if (recipeIds.length) {
     const { data: ing } = await supabase
       .from("recipe_ingredients")
       .select("recipe_id,item_id,qty")
-      .in("recipe_id", rids);
+      .in("recipe_id", recipeIds);
+
     ingredients = (ing ?? []) as IngredientLine[];
   }
 
@@ -184,40 +133,34 @@ export default async function Page(props: {
 
   const itemCostById: Record<string, number> = {};
   (itemsRaw ?? []).forEach((it: any) => {
-    const id = (it.id ?? "").toString();
-    if (!id) return;
-    const unit = costPerBaseUnit(
-      Number(it.last_price ?? 0),
-      Number(it.pack_to_base_factor ?? 0)
-    );
-    itemCostById[id] = unit;
+    const id = String(it?.id ?? "");
+    const last = Number(it?.last_price ?? 0);
+    const factor = Number(it?.pack_to_base_factor ?? 0);
+    itemCostById[id] = costPerBaseUnit(last, factor);
   });
 
-  // group ingredients per recipe (normalize keys to strings)
+  // group ingredients per recipe
   const ingByRecipe = new Map<string, IngredientLine[]>();
   (ingredients ?? []).forEach((ing) => {
-    const rid = (ing.recipe_id ?? "").toString();
-    if (!rid) return;
-    if (!ingByRecipe.has(rid)) ingByRecipe.set(rid, []);
-    ingByRecipe.get(rid)!.push(ing);
+    const key = String(ing.recipe_id ?? "");
+    if (!ingByRecipe.has(key)) ingByRecipe.set(key, []);
+    ingByRecipe.get(key)!.push(ing);
   });
 
   // rows for print (name, description, price)
   const rows = recipes
     .map((rec) => {
-      const rid = (rec.id ?? "").toString();
-      const parts = ingByRecipe.get(rid) ?? [];
+      const parts = ingByRecipe.get(String(rec.id)) ?? [];
       const costEach = costPerPortion(rec, parts, itemCostById);
       const price = priceFromCost(costEach, margin);
 
-      // clean description (fallback if empty)
-      const descrClean = (rec.menu_description ?? "").toString().trim();
+      // description: prefer menu_description; else a polite generic
       const descr =
-        descrClean ||
-        `Classic ${(rec.name ?? "item").toString().toLowerCase()}.`;
+        (rec.menu_description ?? "").trim() ||
+        `Classic ${String(rec.name ?? "item").toLowerCase()}.`;
 
       return {
-        name: rec.name ?? "Untitled",
+        name: String(rec.name ?? "Untitled"),
         descr,
         price,
       };
@@ -226,12 +169,13 @@ export default async function Page(props: {
 
   return (
     <main className="mx-auto p-8 max-w-4xl">
+      {/* Header (actions are a client component) */}
       <div className="flex items-start justify-between gap-3 print:hidden">
         <div>
           <h1 className="text-2xl font-semibold">{menu.name || "Menu"}</h1>
           <p className="text-sm opacity-80">Created {dt(menu.created_at)}</p>
         </div>
-        <HeaderActions />
+        <PrintCopyActions />
       </div>
 
       <section className="mt-6 border rounded-lg p-6">
@@ -250,12 +194,8 @@ export default async function Page(props: {
               {rows.map((r, i) => (
                 <tr key={i} className="border-t align-top">
                   <td className="p-2">{r.name}</td>
-                  <td className="p-2 whitespace-pre-wrap">
-                    {r.descr || "—"}
-                  </td>
-                  <td className="p-2 text-right tabular-nums">
-                    {fmtUSD(r.price)}
-                  </td>
+                  <td className="p-2 whitespace-pre-wrap">{r.descr || "—"}</td>
+                  <td className="p-2 text-right tabular-nums">{fmtUSD(r.price)}</td>
                 </tr>
               ))}
             </tbody>
