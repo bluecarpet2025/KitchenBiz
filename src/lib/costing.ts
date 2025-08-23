@@ -1,90 +1,82 @@
 // src/lib/costing.ts
+// Shared pricing/costing helpers + light types that both client/server can import.
 
-/** ---- Shared types ------------------------------------------------------ */
-
-export type ItemCostById = Record<string, number>;
+export type ItemCostById = Record<string, number>; // inventory_items.id -> cost per BASE unit
 
 export type RecipeLike = {
   id: string;
-  name: string | null;
-  batch_yield_qty: number | null;    // e.g. 8 slices
-  batch_yield_unit: string | null;   // e.g. "slice"
-  yield_pct: number | null;          // 0-1 loss factor (null => 1)
+  name?: string | null;
+  batch_yield_qty?: number | null;    // how many portions a batch makes
+  batch_yield_unit?: string | null;   // not used for math, only display elsewhere
+  yield_pct?: number | null;          // loss (trim/cook) multiplier, e.g. 0.9
   menu_description?: string | null;
 };
 
 export type IngredientLine = {
-  recipe_id: string | null;
-  item_id: string | null;
-  qty: number | null;                // qty in the inventory item’s base unit
+  recipe_id?: string | null;
+  item_id?: string | null;
+  qty?: number | null;                // quantity of the base unit consumed per portion
 };
 
-/** ---- Utilities --------------------------------------------------------- */
-
+// nice currency
 export function fmtUSD(n: number): string {
-  if (!isFinite(n)) return '$0.00';
-  return new Intl.NumberFormat(undefined, {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(n);
+  if (!Number.isFinite(n)) return '$0.00';
+  return n.toLocaleString(undefined, { style: 'currency', currency: 'USD' });
 }
 
 /**
- * Convert a purchase price for a pack to the cost for ONE base unit.
- * Ex: last_price=$12.00 for a case, pack_to_base_factor=24 → $0.50 each.
+ * Convert a last purchase price for a packaged item into **cost per base unit**.
+ * lastPrice: price you paid for the package
+ * packToBaseFactor: how many "base units" you get from that package
  */
-export function costPerBaseUnit(lastPrice?: number | null, packToBase?: number | null): number {
-  const price = Number(lastPrice ?? 0);
-  const factor = Number(packToBase ?? 0);
+export function costPerBaseUnit(lastPrice: number, packToBaseFactor: number): number {
+  const price = Number(lastPrice) || 0;
+  const factor = Number(packToBaseFactor) || 0;
   if (price <= 0 || factor <= 0) return 0;
   return price / factor;
 }
 
 /**
- * Raw food cost PER SERVING/PORTION for a recipe.
- * - `recipe.batch_yield_qty` tells how many servings a full batch yields
- * - `yield_pct` (0..1) is an optional waste/shrink factor (defaults to 1)
- * - Sums ingredient extended costs using `itemCostById`
+ * Compute **raw cost per portion** for a recipe.
+ * We assume `ingredients` quantities are expressed in base units per **one portion**.
+ * If your data is per-batch, make sure you pre-divide by portions elsewhere.
  */
 export function costPerPortion(
   recipe: RecipeLike,
   ingredients: IngredientLine[],
   itemCostById: ItemCostById
 ): number {
-  const yieldQty = Number(recipe.batch_yield_qty ?? 0);
-  if (yieldQty <= 0) return 0;
-
-  const shrink = clamp01(recipe.yield_pct ?? 1);
-
-  let batchCost = 0;
-  for (const line of ingredients) {
-    const id = line.item_id ?? '';
-    const unitCost = itemCostById[id] ?? 0;
+  const loss = (recipe.yield_pct ?? 1) || 1; // if 0 or null -> treat as 1
+  // basic sum of cost of each ingredient qty * unit cost
+  const raw = (ingredients ?? []).reduce((sum, line) => {
+    const itemId = String(line.item_id ?? '');
     const qty = Number(line.qty ?? 0);
-    if (unitCost > 0 && qty > 0) batchCost += unitCost * qty;
-  }
-
-  // Adjust for yield (if 80% yield, effective usable is 0.8)
-  const effectiveBatchCost = batchCost / (shrink > 0 ? shrink : 1);
-  return effectiveBatchCost / yieldQty;
+    const unit = itemCostById[itemId] ?? 0;
+    return sum + qty * unit;
+  }, 0);
+  // account for yield loss (if yield_pct < 1, cost goes up slightly)
+  return raw / (loss > 0 ? loss : 1);
 }
 
 /**
- * Selling price from raw food cost and a food‑cost percentage (margin).
- * If margin = 0.30, then price = cost / 0.30 (NOT cost * 1.30).
+ * Convert a raw **cost** to a **selling price** given a FOOD‑COST percent.
+ * Example: cost = 0.59, foodCostPct = 0.30 -> price ≈ 1.966...
+ * (because cost / price = 0.30  ⇒  price = cost / 0.30)
  */
-export function priceFromCost(rawCost: number, margin: number): number {
-  const m = clamp01(margin);
-  if (rawCost <= 0 || m <= 0) return 0;
-  return rawCost / m;
+export function priceFromCost(cost: number, foodCostPct: number): number {
+  const c = Math.max(0, Number(cost) || 0);
+  const f = Math.min(0.95, Math.max(0.05, Number(foodCostPct) || 0.3)); // clamp 5–95%
+  return f > 0 ? c / f : c;
 }
 
-/** ---- helpers ----------------------------------------------------------- */
-function clamp01(n: number) {
-  if (!isFinite(n)) return 0;
-  if (n < 0) return 0;
-  if (n > 1) return 1;
-  return n;
+/**
+ * Round a price to a “psychological” ending (.00, .49, .79, .99, etc).
+ * ending must be in [0, 1). Example 0.99 → $X.99 ; 0.49 → $X.49
+ */
+export function roundToEnding(price: number, ending: number): number {
+  const p = Math.max(0, Number(price) || 0);
+  const e = Math.max(0, Math.min(0.99, Number(ending) || 0));
+  const whole = Math.floor(p);               // drop decimals
+  if (p <= whole + e) return whole + e;      // already below/at the target edge for this dollar
+  return whole + 1 + e;                      // bump to next dollar, add ending
 }
