@@ -1,15 +1,12 @@
-// src/components/MenuPageClient.tsx
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import {
   fmtUSD,
   costPerBaseUnit,
   costPerPortion,
   priceFromCost,
-  roundToEnding,
   type ItemCostById,
   type RecipeLike,
   type IngredientLine,
@@ -17,17 +14,25 @@ import {
 
 type MenuRow = { id: string; name: string | null; created_at: string | null };
 type RecipeRow = RecipeLike;
-type Sel = Record<string, number>;              // recipeId -> portions
-type PriceOverrides = Record<string, number>;   // recipeId -> manual price (per portion)
+type Sel = Record<string, number>;                  // recipeId -> portions
+type Overrides = Record<string, number | undefined> // recipeId -> manual price override
 
-const PRICE_ENDINGS: { label: string; val: number }[] = [
-  { label: '.00', val: 0.0 },
-  { label: '.25', val: 0.25 },
-  { label: '.49', val: 0.49 },
-  { label: '.79', val: 0.79 },
-  { label: '.95', val: 0.95 },
-  { label: '.99', val: 0.99 },
-];
+// rounding rules
+type RoundRule = 'none' | '.00' | '.49' | '.95' | '.97' | '.99';
+
+function applyRounding(value: number, rule: RoundRule): number {
+  if (!isFinite(value)) return 0;
+  if (rule === 'none') return Math.max(0, value);
+
+  const whole = Math.floor(value);
+  switch (rule) {
+    case '.00': return whole + 0.00;
+    case '.49': return whole + 0.49;
+    case '.95': return whole + 0.95;
+    case '.97': return whole + 0.97;
+    case '.99': return whole + 0.99;
+  }
+}
 
 export default function MenuPageClient() {
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -40,10 +45,9 @@ export default function MenuPageClient() {
   const [itemCostById, setItemCostById] = useState<ItemCostById>({});
 
   const [sel, setSel] = useState<Sel>({});
-  const [margin, setMargin] = useState(0.30); // FOOD‑COST PERCENT (30% default)
-  const [roundEnding, setRoundEnding] = useState<number>(0.99);
-
-  const [priceOverrides, setPriceOverrides] = useState<PriceOverrides>({}); // editable per-row
+  const [margin, setMargin] = useState(0.30);           // food‑cost percent (30% default)
+  const [roundRule, setRoundRule] = useState<RoundRule>('.99');
+  const [overrides, setOverrides] = useState<Overrides>({});
 
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -75,7 +79,7 @@ export default function MenuPageClient() {
       setMenus(list);
       setSelectedMenuId(list?.[0]?.id ?? null);
 
-      // Recipes
+      // Recipes (include description used by print)
       const { data: recs } = await supabase
         .from('recipes')
         .select('id,name,batch_yield_qty,batch_yield_unit,yield_pct,menu_description')
@@ -83,14 +87,14 @@ export default function MenuPageClient() {
         .order('name');
       setRecipes((recs ?? []) as RecipeRow[]);
 
-      // Ingredients for all recipes (per‑portion quantities)
-      const { data: ing } = await supabase
+      // Ingredients for ALL recipes IN TENANT
+      // NOTE: recipe_ingredients typically does NOT have tenant_id → filter by recipe ids only (we’ll do it again later after we know selections).
+      const { data: ingAll } = await supabase
         .from('recipe_ingredients')
-        .select('recipe_id,item_id,qty')
-        .eq('tenant_id', tId);
-      setIngredients((ing ?? []) as IngredientLine[]);
+        .select('recipe_id,item_id,qty');
+      setIngredients((ingAll ?? []) as IngredientLine[]);
 
-      // Inventory item costs → base unit cost
+      // Inventory item costs
       const { data: items } = await supabase
         .from('inventory_items')
         .select('id,last_price,pack_to_base_factor')
@@ -107,25 +111,21 @@ export default function MenuPageClient() {
     })();
   }, []);
 
-  // when a menu is selected, load its lines + possible saved price overrides
+  // when a menu is selected, load its lines
   useEffect(() => {
     (async () => {
-      if (!selectedMenuId) { setSel({}); setPriceOverrides({}); return; }
-
+      if (!selectedMenuId) { setSel({}); return; }
       const { data: rows } = await supabase
         .from('menu_recipes')
-        .select('recipe_id, servings, price')
+        .select('recipe_id, servings')
         .eq('menu_id', selectedMenuId);
 
-      const nextSel: Sel = {};
-      const nextOverrides: PriceOverrides = {};
-      (rows ?? []).forEach(r => {
-        nextSel[r.recipe_id] = Number(r.servings || 1);
-        const p = Number(r.price ?? 0);
-        if (p > 0) nextOverrides[r.recipe_id] = p; // per portion override
-      });
-      setSel(nextSel);
-      setPriceOverrides(nextOverrides);
+      const next: Sel = {};
+      (rows ?? []).forEach(r => { next[r.recipe_id] = Number(r.servings || 1); });
+      setSel(next);
+
+      // reset overrides when switching menus (keeps UI predictable)
+      setOverrides({});
     })();
   }, [selectedMenuId]);
 
@@ -138,8 +138,8 @@ export default function MenuPageClient() {
       delete c[id];
       return c;
     });
-    setPriceOverrides(prev => {
-      const n = { ...prev };
+    setOverrides(o => {
+      const n = { ...o };
       delete n[id];
       return n;
     });
@@ -147,11 +147,11 @@ export default function MenuPageClient() {
   function setQty(id: string, n: number) {
     setSel(s => ({ ...s, [id]: Math.max(0, Math.floor(n)) }));
   }
-  function setOverride(id: string, val: number) {
-    setPriceOverrides(p => ({ ...p, [id]: Math.max(0, Number(val) || 0) }));
+  function setOverride(id: string, v: number | undefined) {
+    setOverrides(o => ({ ...o, [id]: v }));
   }
 
-  // Save current lines (including per‑portion price overrides)
+  // Save current lines
   async function saveCurrentMenu() {
     try {
       if (!selectedMenuId) { alert('No menu selected'); return; }
@@ -165,8 +165,7 @@ export default function MenuPageClient() {
         menu_id: selectedMenuId!,
         recipe_id,
         servings: Number(servings),
-        // store **per‑portion** override price (0 if none)
-        price: Number(priceOverrides[recipe_id] ?? 0),
+        price: 0,
       }));
 
       if (rows.length) {
@@ -204,7 +203,7 @@ export default function MenuPageClient() {
       setMenus(m => [{ id: ins!.id, name: ins!.name, created_at: ins!.created_at }, ...m]);
       setSelectedMenuId(ins!.id);
       setSel({});
-      setPriceOverrides({});
+      setOverrides({});
       setStatus('Menu created.');
     } catch (err: any) {
       alert(err.message ?? 'Error creating menu');
@@ -237,7 +236,7 @@ export default function MenuPageClient() {
         menu_id: newId,
         recipe_id,
         servings: Number(servings),
-        price: Number(priceOverrides[recipe_id] ?? 0),
+        price: 0,
       }));
 
       const { error: rErr } = await supabase
@@ -264,7 +263,7 @@ export default function MenuPageClient() {
       setMenus(ms => ms.filter(m => m.id !== selectedMenuId));
       setSelectedMenuId(menus?.[0]?.id ?? null);
       setSel({});
-      setPriceOverrides({});
+      setOverrides({});
       setStatus('Menu deleted.');
     } catch (err: any) {
       alert(err.message ?? 'Error deleting menu');
@@ -273,23 +272,29 @@ export default function MenuPageClient() {
     }
   }
 
-  // Open Share (combined Print/Share)
+  // “Share” → open print page; query string carries margin
   function openShare() {
     if (!selectedMenuId) { alert('No menu selected'); return; }
     const pct = Math.round(margin * 100);
     window.open(`/menu/print?menu_id=${selectedMenuId}&margin=${pct / 100}`, '_blank');
   }
 
-  // ---------- Derived maps
+  // lookups
   const ingByRecipe = useMemo(() => {
     const map = new Map<string, IngredientLine[]>();
     for (const ing of ingredients) {
-      const rid = String(ing.recipe_id ?? '');
-      if (!map.has(rid)) map.set(rid, []);
-      map.get(rid)!.push(ing);
+      if (!ing.recipe_id) continue;
+      if (!map.has(ing.recipe_id)) map.set(ing.recipe_id, []);
+      map.get(ing.recipe_id)!.push(ing);
     }
     return map;
   }, [ingredients]);
+
+  const recipesById = useMemo(() => {
+    const m = new Map<string, RecipeRow>();
+    for (const r of recipes) m.set(r.id, r);
+    return m;
+  }, [recipes]);
 
   const selectedList = useMemo(
     () =>
@@ -297,13 +302,13 @@ export default function MenuPageClient() {
         .map(id => ({
           id,
           servings: sel[id],
-          name: recipes.find(r => r.id === id)?.name || 'Untitled'
+          name: recipesById.get(id)?.name || 'Untitled'
         }))
         .sort((a, b) => a.name.localeCompare(b.name)),
-    [sel, recipes]
+    [sel, recipesById]
   );
 
-  // ---------- UI
+  // UI
   return (
     <main className="max-w-5xl mx-auto p-6 space-y-4">
       <h1 className="text-2xl font-semibold">Menu</h1>
@@ -345,8 +350,8 @@ export default function MenuPageClient() {
         </button>
       </div>
 
-      {/* Price controls */}
-      <div className="flex items-center flex-wrap gap-4">
+      {/* Margin + rounding */}
+      <div className="flex items-center gap-4 flex-wrap">
         <div className="flex items-center gap-3">
           <label className="text-sm">Margin:</label>
           <input
@@ -361,15 +366,18 @@ export default function MenuPageClient() {
         </div>
 
         <div className="flex items-center gap-2">
-          <label className="text-sm">Round to:</label>
+          <span className="text-sm">Round to:</span>
           <select
             className="border rounded-md px-2 py-1 bg-neutral-950 text-neutral-100"
-            value={roundEnding}
-            onChange={(e) => setRoundEnding(Number(e.target.value))}
+            value={roundRule}
+            onChange={(e) => setRoundRule(e.target.value as RoundRule)}
           >
-            {PRICE_ENDINGS.map(opt => (
-              <option key={opt.val} value={opt.val}>{opt.label}</option>
-            ))}
+            <option value="none">no rounding</option>
+            <option value=".00">.00</option>
+            <option value=".49">.49</option>
+            <option value=".95">.95</option>
+            <option value=".97">.97</option>
+            <option value=".99">.99</option>
           </select>
         </div>
       </div>
@@ -394,73 +402,77 @@ export default function MenuPageClient() {
           </div>
         </div>
 
-        {/* Quantities + pricing */}
+        {/* Quantities */}
         <div className="border rounded p-4">
-          <div className="font-semibold mb-3">Quantities (portions)</div>
+          <div className="font-semibold mb-2">Quantities (portions)</div>
 
           {selectedList.length === 0 ? (
             <p className="text-sm text-neutral-400">Add recipes on the left.</p>
           ) : (
-            <>
-              {/* header row for right panel */}
-              <div className="grid grid-cols-8 gap-2 text-xs uppercase opacity-70 mb-1">
+            <div className="space-y-3">
+              {/* headers */}
+              <div className="grid grid-cols-8 gap-2 text-xs uppercase opacity-70">
                 <div className="col-span-5">Item</div>
                 <div className="col-span-2 text-right">Qty</div>
                 <div className="col-span-1 text-right">Suggested</div>
               </div>
 
-              <div className="space-y-3">
-                {selectedList.map(row => {
-                  const recipe = recipes.find(r => r.id === row.id)!;
-                  const parts = ingByRecipe.get(row.id) ?? [];
-                  const costEach = costPerPortion(recipe, parts, itemCostById);         // raw cost/portion
-                  const suggestedRaw = priceFromCost(costEach, margin);                  // math suggestion
-                  const suggestedRounded = roundToEnding(suggestedRaw, roundEnding);     // rounded
-                  const effective = priceOverrides[row.id] ?? suggestedRounded;          // editable override wins
+              {selectedList.map(row => {
+                const recipe = recipesById.get(row.id)!;
+                const parts = ingByRecipe.get(row.id) ?? [];
+                const rawCostEach = costPerPortion(recipe, parts, itemCostById);
 
-                  return (
-                    <div key={row.id} className="grid grid-cols-8 gap-2 items-center">
-                      <div className="col-span-5">
-                        <div className="font-medium">{row.name}</div>
-                        <div className="text-xs opacity-70">{fmtUSD(costEach)} each (raw cost)</div>
+                const autoSuggested = applyRounding(
+                  priceFromCost(rawCostEach, margin),
+                  roundRule
+                );
+
+                const effective = overrides[row.id] ?? autoSuggested;
+
+                return (
+                  <div key={row.id} className="grid grid-cols-8 gap-2 items-center">
+                    <div className="col-span-5">
+                      <div className="font-medium">{row.name}</div>
+                      <div className="text-xs opacity-70">
+                        {fmtUSD(rawCostEach)} each (raw cost)
                       </div>
-
-                      <input
-                        className="border rounded p-1 col-span-2 text-right"
-                        type="number" min={0} step={1}
-                        value={row.servings}
-                        onChange={(e) => setQty(row.id, Number(e.target.value))}
-                      />
-
-                      {/* per-portion editable price */}
-                      <input
-                        className="border rounded p-1 col-span-1 text-right tabular-nums"
-                        type="number" step="0.01" min={0}
-                        value={Number(effective).toFixed(2)}
-                        onChange={(e) => setOverride(row.id, Number(e.target.value))}
-                        title="Per-portion selling price (override). Leave as-is to use rounded suggestion."
-                      />
                     </div>
-                  );
-                })}
 
-                {/* Total using effective prices x quantities */}
-                <div className="mt-4 text-right font-semibold">
-                  Total:{' '}
-                  {
-                    fmtUSD(selectedList.reduce((sum, row) => {
-                      const recipe = recipes.find(r => r.id === row.id)!;
-                      const parts = ingByRecipe.get(row.id) ?? [];
-                      const costEach = costPerPortion(recipe, parts, itemCostById);
-                      const suggestedRaw = priceFromCost(costEach, margin);
-                      const suggestedRounded = roundToEnding(suggestedRaw, roundEnding);
-                      const effective = priceOverrides[row.id] ?? suggestedRounded;
-                      return sum + effective * Number(row.servings || 0);
-                    }, 0))
-                  }
-                </div>
+                    <input
+                      className="border rounded p-1 col-span-2 text-right"
+                      type="number" min={0} step={1}
+                      value={row.servings}
+                      onChange={(e) => setQty(row.id, Number(e.target.value))}
+                    />
+
+                    <input
+                      className="border rounded p-1 col-span-1 text-right tabular-nums"
+                      type="number" min={0} step={0.01}
+                      value={Number.isFinite(effective) ? Number(effective).toFixed(2) : '0.00'}
+                      onChange={(e) => {
+                        const v = Number(e.target.value);
+                        setOverride(row.id, Number.isFinite(v) ? v : undefined);
+                      }}
+                    />
+                  </div>
+                );
+              })}
+
+              {/* Total suggested */}
+              <div className="mt-4 text-right font-semibold">
+                Total:{' '}
+                {fmtUSD(
+                  selectedList.reduce((sum, row) => {
+                    const recipe = recipesById.get(row.id)!;
+                    const parts = ingByRecipe.get(row.id) ?? [];
+                    const base = costPerPortion(recipe, parts, itemCostById);
+                    const auto = applyRounding(priceFromCost(base, margin), roundRule);
+                    const eff = overrides[row.id] ?? auto;
+                    return sum + (eff * Number(row.servings || 0));
+                  }, 0)
+                )}
               </div>
-            </>
+            </div>
           )}
         </div>
       </div>
