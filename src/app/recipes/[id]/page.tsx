@@ -14,7 +14,7 @@ type RecipeRow = {
   name: string | null;
   batch_yield_qty: number | null;
   batch_yield_unit: string | null;
-  yield_pct: number | null;           // 0.9 = 90% usable after loss
+  yield_pct: number | null;
   menu_description: string | null;
   tenant_id: string;
 };
@@ -23,8 +23,8 @@ type IngredientRow = {
   id: string;
   recipe_id: string;
   item_id: string | null;
-  qty: number | null;                 // per serving (your convention)
-  unit: string | null;                // base unit snapshot at time of entry
+  qty: number | null; // per serving
+  unit: string | null;
 };
 
 type InvItem = {
@@ -36,7 +36,6 @@ type InvItem = {
 };
 
 type RoundEnding = ".00" | ".49" | ".79" | ".89" | ".95" | ".99";
-
 function applyEnding(n: number, ending: RoundEnding) {
   const whole = Math.floor(n);
   const cents = Number(ending.slice(1));
@@ -45,14 +44,16 @@ function applyEnding(n: number, ending: RoundEnding) {
 }
 
 export default async function RecipePage({
+  // ✅ Next 15 requires Promise params for PageProps
   params,
 }: {
-  params: { id: string }; // ✅ non-Promise params for prod stability
+  params: Promise<{ id: string }>;
 }) {
-  const { id } = params;
+  const { id } = await params;
+
   const supabase = await createServerClient();
 
-  // Auth -> tenant
+  // Auth → tenant
   const { data: u } = await supabase.auth.getUser();
   const userId = u.user?.id ?? null;
   if (!userId) {
@@ -105,7 +106,7 @@ export default async function RecipePage({
     .order("id", { ascending: true });
   const ingredients = (ingRaw ?? []) as IngredientRow[];
 
-  // Inventory items (for names + live $/base)
+  // Inventory items (names + live $/base)
   const { data: itemsRaw } = await supabase
     .from("inventory_items")
     .select("id,name,base_unit,last_price,pack_to_base_factor")
@@ -125,8 +126,7 @@ export default async function RecipePage({
   // Costs
   const rawCostPerPortion = costPerPortion(recipe, ingredients, itemCostById);
 
-  // Default pricing controls (match Menu defaults)
-  const defaultMargin = 0.30;        // 30%
+  const defaultMargin = 0.30;               // 30%
   const defaultEnding: RoundEnding = ".99";
   const suggested = applyEnding(
     priceFromCost(rawCostPerPortion, defaultMargin),
@@ -139,10 +139,7 @@ export default async function RecipePage({
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">{recipe.name ?? "Untitled"}</h1>
         <div className="flex items-center gap-2">
-          <Link
-            href="/recipes"
-            className="text-sm underline opacity-80 hover:opacity-100"
-          >
+          <Link href="/recipes" className="text-sm underline opacity-80 hover:opacity-100">
             Back to recipes
           </Link>
           <Link
@@ -193,9 +190,7 @@ export default async function RecipePage({
         <dl className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
           <div className="flex justify-between sm:block">
             <dt className="opacity-70">Batch yield qty</dt>
-            <dd className="tabular-nums">
-              {Number(recipe.batch_yield_qty ?? 0) || "—"}
-            </dd>
+            <dd className="tabular-nums">{Number(recipe.batch_yield_qty ?? 0) || "—"}</dd>
           </div>
           <div className="flex justify-between sm:block">
             <dt className="opacity-70">Batch yield unit</dt>
@@ -235,32 +230,22 @@ export default async function RecipePage({
                   <td className="p-2">{it?.name ?? "—"}</td>
                   <td className="p-2 text-right tabular-nums">{qty.toFixed(4)}</td>
                   <td className="p-2">{baseUnit}</td>
-                  <td className="p-2 text-right tabular-nums">
-                    {unitCost ? fmtUSD(unitCost) : "—"}
-                  </td>
-                  <td className="p-2 text-right tabular-nums">
-                    {fmtUSD(lineCost)}
-                  </td>
+                  <td className="p-2 text-right tabular-nums">{unitCost ? fmtUSD(unitCost) : "—"}</td>
+                  <td className="p-2 text-right tabular-nums">{fmtUSD(lineCost)}</td>
                 </tr>
               );
             })}
             {ingredients.length === 0 && (
               <tr>
-                <td colSpan={5} className="p-3 text-neutral-400">
-                  No ingredients yet.
-                </td>
+                <td colSpan={5} className="p-3 text-neutral-400">No ingredients yet.</td>
               </tr>
             )}
           </tbody>
           {ingredients.length > 0 && (
             <tfoot>
               <tr className="border-t bg-neutral-900/20">
-                <td className="p-2 font-medium text-right" colSpan={4}>
-                  Raw cost per portion
-                </td>
-                <td className="p-2 text-right tabular-nums font-medium">
-                  {fmtUSD(rawCostPerPortion)}
-                </td>
+                <td className="p-2 font-medium text-right" colSpan={4}>Raw cost per portion</td>
+                <td className="p-2 text-right tabular-nums font-medium">{fmtUSD(rawCostPerPortion)}</td>
               </tr>
             </tfoot>
           )}
