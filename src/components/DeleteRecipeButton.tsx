@@ -19,16 +19,30 @@ export default function DeleteRecipeButton({
 
     try {
       setBusy(true);
-      const res = await fetch(`/recipes/${recipeId}/delete`, { method: "POST" });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        alert(j?.error || "Delete failed");
-        setBusy(false);
-        return;
+      const res = await fetch(`/recipes/${recipeId}/delete`, {
+        method: "POST",
+        // ensure cookies are sent (default for same-origin, but explicit is fine)
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      let msg = "";
+      try {
+        const j = await res.json();
+        if (!res.ok || j?.ok === false) {
+          msg = j?.error || "Delete failed";
+          throw new Error(msg);
+        }
+      } catch (jsonErr: any) {
+        // If parsing failed, show status text
+        if (!res.ok && !msg) {
+          throw new Error(res.statusText || "Delete failed");
+        }
       }
+
       router.push(redirectTo);
     } catch (e: any) {
-      alert(e?.message || "Network error");
+      alert(e?.message || "Delete failed");
       setBusy(false);
     }
   }
