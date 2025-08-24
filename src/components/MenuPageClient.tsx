@@ -1,13 +1,11 @@
 // src/components/MenuPageClient.tsx
 "use client";
-
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import {
   fmtUSD,
   costPerBaseUnit,
-  costPerPortion,
-  priceFromCost,
+  buildRecipeCostIndex,
   type ItemCostById,
   type RecipeLike,
   type IngredientLine,
@@ -28,19 +26,15 @@ function applyEnding(n: number, ending: RoundEnding) {
 
 export default function MenuPageClient() {
   const [tenantId, setTenantId] = useState<string | null>(null);
-
   const [menus, setMenus] = useState<MenuRow[]>([]);
   const [selectedMenuId, setSelectedMenuId] = useState<string | null>(null);
-
   const [recipes, setRecipes] = useState<RecipeRow[]>([]);
   const [ingredients, setIngredients] = useState<IngredientLine[]>([]);
   const [itemCostById, setItemCostById] = useState<ItemCostById>({});
-
   const [sel, setSel] = useState<Sel>({});
   const [overrides, setOverrides] = useState<Overrides>({});
   const [margin, setMargin] = useState(0.30);
   const [ending, setEnding] = useState<RoundEnding>(".99");
-
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -50,14 +44,11 @@ export default function MenuPageClient() {
       const { data: u } = await supabase.auth.getUser();
       const uid = u.user?.id;
       if (!uid) { setStatus("Sign in required."); return; }
-
       const { data: prof } = await supabase
         .from("profiles").select("tenant_id").eq("id", uid).maybeSingle();
-
       const tId = prof?.tenant_id ?? null;
       if (!tId) { setStatus("No tenant."); return; }
       setTenantId(tId);
-
       // Menus
       const { data: ms } = await supabase
         .from("menus")
@@ -67,7 +58,6 @@ export default function MenuPageClient() {
       const list = (ms ?? []) as MenuRow[];
       setMenus(list);
       setSelectedMenuId(list?.[0]?.id ?? null);
-
       // Recipes
       const { data: recs } = await supabase
         .from("recipes")
@@ -75,19 +65,16 @@ export default function MenuPageClient() {
         .eq("tenant_id", tId)
         .order("name");
       setRecipes((recs ?? []) as RecipeRow[]);
-
-      // Ingredients (recipe scoped; no tenant filter)
+      // Ingredients (now include sub_recipe_id & unit)
       const { data: ing } = await supabase
         .from("recipe_ingredients")
-        .select("recipe_id,item_id,qty");
+        .select("id,recipe_id,item_id,sub_recipe_id,qty,unit");
       setIngredients((ing ?? []) as IngredientLine[]);
-
       // Inventory item costs
       const { data: items } = await supabase
         .from("inventory_items")
         .select("id,last_price,pack_to_base_factor")
         .eq("tenant_id", tId);
-
       const costMap: ItemCostById = {};
       (items ?? []).forEach((it: any) => {
         costMap[it.id] = costPerBaseUnit(
@@ -107,12 +94,10 @@ export default function MenuPageClient() {
         .from("menu_recipes")
         .select("recipe_id, servings, price")
         .eq("menu_id", selectedMenuId);
-      // inside the effect that loads menu_recipes for selectedMenuId
       const nextSel: Sel = {};
       const nextOv: Overrides = {};
       (rows ?? []).forEach((r: any) => {
         nextSel[r.recipe_id] = 1;
-        // ✅ treat 0 as "no override"
         const p = Number(r.price);
         if (!Number.isNaN(p) && p > 0) nextOv[r.recipe_id] = p;
       });
@@ -121,7 +106,12 @@ export default function MenuPageClient() {
     })();
   }, [selectedMenuId]);
 
-  // helpers
+  // pricing helpers
+  const costIndex = useMemo(
+    () => buildRecipeCostIndex(recipes, ingredients, itemCostById),
+    [recipes, ingredients, itemCostById]
+  );
+
   function addRecipe(id: string) {
     setSel(s => ({ ...s, [id]: 1 }));
   }
@@ -138,14 +128,12 @@ export default function MenuPageClient() {
     try {
       if (!selectedMenuId) { alert("No menu selected"); return; }
       setBusy(true);
-
       const rows = Object.keys(sel).map(recipe_id => ({
         menu_id: selectedMenuId!,
         recipe_id,
         servings: 1,
         price: overrides[recipe_id] ?? 0,
       }));
-
       if (rows.length) {
         const { error } = await supabase
           .from("menu_recipes")
@@ -168,14 +156,12 @@ export default function MenuPageClient() {
       setBusy(true);
       const name = window.prompt("Menu name:", "New Menu");
       if (!name) return;
-
       const { data: ins, error } = await supabase
         .from("menus")
         .insert({ tenant_id: tenantId, name })
         .select("id,name,created_at")
         .single();
       if (error) throw error;
-
       setMenus(m => [{ id: ins!.id, name: ins!.name, created_at: ins!.created_at }, ...m]);
       setSelectedMenuId(ins!.id);
       setSel({});
@@ -191,19 +177,16 @@ export default function MenuPageClient() {
       if (!tenantId) return;
       const entries = Object.keys(sel);
       if (entries.length === 0) { alert("Add at least one recipe."); return; }
-
       setBusy(true);
       const defaultName = `Menu ${new Date().toLocaleDateString()}`;
       const name = window.prompt("New menu name:", defaultName);
       if (!name) return;
-
       const { data: m, error: mErr } = await supabase
         .from("menus")
         .insert({ tenant_id: tenantId, name })
         .select("id,name,created_at")
         .single();
       if (mErr) throw mErr;
-
       const newId = m!.id as string;
       const rows = entries.map(recipe_id => ({
         menu_id: newId,
@@ -211,12 +194,10 @@ export default function MenuPageClient() {
         servings: 1,
         price: overrides[recipe_id] ?? 0,
       }));
-
       const { error: rErr } = await supabase
         .from("menu_recipes")
         .upsert(rows, { onConflict: "menu_id,recipe_id" });
       if (rErr) throw rErr;
-
       setMenus(ms => [{ id: newId, name: m!.name, created_at: m!.created_at }, ...ms]);
       setSelectedMenuId(newId);
       setStatus("Menu saved.");
@@ -276,7 +257,7 @@ export default function MenuPageClient() {
       <h1 className="text-2xl font-semibold">Menu</h1>
       {status && <p className="text-xs text-emerald-400">{status}</p>}
 
-      {/* ---- Top controls restored ---- */}
+      {/* Top controls */}
       <div className="flex flex-wrap items-center gap-2">
         <form onSubmit={(e) => e.preventDefault()} className="flex items-center gap-2">
           <label className="text-sm">Saved menus:</label>
@@ -295,7 +276,6 @@ export default function MenuPageClient() {
           </select>
           <button className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Load</button>
         </form>
-
         <button disabled={busy} onClick={createNewMenu}
                 className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">New Menu</button>
         <button disabled={busy} onClick={saveCurrentMenu}
@@ -320,7 +300,6 @@ export default function MenuPageClient() {
         />
         <span className="text-sm">{Math.round(margin * 100)}%</span>
         <span className="text-xs opacity-70">(affects suggested selling price)</span>
-
         <div className="ml-6 flex items-center gap-2">
           <span className="text-sm">Round to:</span>
           <select
@@ -361,50 +340,42 @@ export default function MenuPageClient() {
         {/* Menu items (suggested price only) */}
         <div className="border rounded p-4">
           <div className="font-semibold mb-2">Menu items</div>
-
           <div className="grid grid-cols-[1fr_180px] gap-3 text-xs uppercase opacity-70 mb-2">
             <div>Item</div>
             <div className="text-right">Suggested price</div>
           </div>
-
-          {selectedList.length === 0 ? (
+          {Object.keys(sel).length === 0 ? (
             <p className="text-sm text-neutral-400">Add recipes on the left.</p>
           ) : (
             <div className="space-y-3">
-              {selectedList.map(row => {
-                const recipe = recipes.find(r => r.id === row.id);
-                if (!recipe) return null;
-
-                const parts = ingByRecipe.get(row.id) ?? [];
-                const costEach = costPerPortion(recipe, parts, itemCostById);
-                // inside selectedList.map(...)
-                const suggestedBase = applyEnding(priceFromCost(costEach, margin), ending);
-
-                // ✅ use override only if it's a positive number
-                const ov = Number(overrides[row.id]);
-                const unitPrice = ov > 0 ? ov : suggestedBase;
-
-                return (
-                  <div key={row.id} className="grid grid-cols-[1fr_180px] gap-3 items-center">
-                    <div>
-                      <div className="font-medium text-sm">{row.name}</div>
-                      <div className="text-xs opacity-70">{fmtUSD(costEach)} each (raw cost)</div>
+              {Object.keys(sel)
+                .map(id => ({ id, name: recipes.find(r => r.id === id)?.name || "Untitled" }))
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map(row => {
+                  const costEach = costIndex[row.id] ?? 0;
+                  const suggestedBase = applyEnding(costEach / (margin || 0.3), ending);
+                  const ov = Number(overrides[row.id]);
+                  const unitPrice = ov > 0 ? ov : suggestedBase;
+                  return (
+                    <div key={row.id} className="grid grid-cols-[1fr_180px] gap-3 items-center">
+                      <div>
+                        <div className="font-medium text-sm">{row.name}</div>
+                        <div className="text-xs opacity-70">{fmtUSD(costEach)} each (raw cost)</div>
+                      </div>
+                      <div className="relative">
+                        <span className="absolute left-2 top-1.5 text-xs opacity-70">$</span>
+                        <input
+                          className="border rounded pl-4 pr-2 p-1 text-right w-[180px] tabular-nums"
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={Number(unitPrice).toFixed(2)}
+                          onChange={(e) => setOverride(row.id, Number(e.target.value))}
+                        />
+                      </div>
                     </div>
-
-                    <div className="relative">
-                      <span className="absolute left-2 top-1.5 text-xs opacity-70">$</span>
-                      <input
-                        className="border rounded pl-4 pr-2 p-1 text-right w-[180px] tabular-nums"
-                        type="number"
-                        min={0}
-                        step="0.01"
-                        value={Number(unitPrice).toFixed(2)}
-                        onChange={(e) => setOverride(row.id, Number(e.target.value))}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
             </div>
           )}
         </div>
