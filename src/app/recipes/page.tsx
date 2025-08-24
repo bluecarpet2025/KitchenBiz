@@ -42,57 +42,48 @@ export default async function RecipesPage() {
     );
   }
 
-  // 1) Recipes (with updated_at)
-  const { data: recipesRaw, error: rErr } = await supabase
+  const { data: recipesRaw } = await supabase
     .from("recipes")
     .select("id,name,created_at,updated_at")
     .eq("tenant_id", tenantId)
     .order("name");
-  if (rErr) throw rErr;
   const recipes = (recipesRaw ?? []) as RecipeRow[];
 
-  // 2) Ingredients for makeable calc
   const recipeIds = recipes.map(r => r.id);
   let ingredients: IngredientRow[] = [];
   if (recipeIds.length) {
-    const { data: ingRaw, error: iErr } = await supabase
+    const { data: ingRaw } = await supabase
       .from("recipe_ingredients")
       .select("recipe_id,item_id,qty")
       .in("recipe_id", recipeIds);
-    if (iErr) throw iErr;
     ingredients = (ingRaw ?? []) as IngredientRow[];
   }
 
-  // 3) On-hand
   const onhandMap = new Map<string, number>();
   try {
-    const { data: ohNew, error: ohNewErr } = await supabase
+    const { data: ohNew } = await supabase
       .from("v_inventory_on_hand")
       .select("item_id,qty_on_hand_base")
       .eq("tenant_id", tenantId);
-    if (ohNewErr) throw ohNewErr;
     (ohNew ?? []).forEach((r: any) => {
       onhandMap.set(r.item_id as string, Number(r.qty_on_hand_base ?? 0));
     });
   } catch {
-    const { data: ohOld, error: ohOldErr } = await supabase
+    const { data: ohOld } = await supabase
       .from("v_item_on_hand")
       .select("item_id,on_hand_base")
       .eq("tenant_id", tenantId);
-    if (ohOldErr) throw ohOldErr;
     (ohOld ?? []).forEach((r: any) => {
       onhandMap.set(r.item_id as string, Number(r.on_hand_base ?? 0));
     });
   }
 
-  // Group ingredients by recipe
   const ingByRecipe = new Map<string, IngredientRow[]>();
   for (const row of ingredients) {
     if (!ingByRecipe.has(row.recipe_id)) ingByRecipe.set(row.recipe_id, []);
     ingByRecipe.get(row.recipe_id)!.push(row);
   }
 
-  // Compute makeable (per serving)
   const rows = recipes.map((rec) => {
     const parts = ingByRecipe.get(rec.id) ?? [];
     let makeable: number | null = null;
@@ -140,16 +131,15 @@ export default async function RecipesPage() {
             {rows.map(r => (
               <tr key={r.id} className="border-t">
                 <td className="p-2">
-                  {/* ✅ Name links to READ page */}
-                  <Link href={`/recipes/${r.id}`} className="underline">
+                  {/* ✅ plain anchor to guarantee navigation */}
+                  <a href={`/recipes/${r.id}`} className="underline">
                     {r.name}
-                  </Link>
+                  </a>
                 </td>
                 <td className="p-2 text-right tabular-nums">{r.makeable}</td>
                 <td className="p-2">{r.created_at ? new Date(r.created_at).toLocaleDateString() : "-"}</td>
                 <td className="p-2">{r.edited_at ? new Date(r.edited_at).toLocaleDateString() : "-"}</td>
                 <td className="p-2">
-                  {/* Duplicate as POST → server duplicates → redirects to new edit page */}
                   <form action={`/recipes/${r.id}/duplicate`} method="post" className="inline">
                     <button className="underline" type="submit">Duplicate</button>
                   </form>
