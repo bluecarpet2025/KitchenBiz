@@ -1,3 +1,4 @@
+// src/app/recipes/[id]/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import {
@@ -6,6 +7,7 @@ import {
   priceFromCost,
   fmtUSD,
 } from "@/lib/costing";
+import DeleteRecipeButton from "@/components/DeleteRecipeButton";
 
 export const dynamic = "force-dynamic";
 
@@ -44,13 +46,12 @@ function applyEnding(n: number, ending: RoundEnding) {
 }
 
 export default async function RecipePage({
-  // ✅ Next 15 requires Promise params for PageProps
+  // Next 15 expects Promise-based params in PageProps
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-
   const supabase = await createServerClient();
 
   // Auth → tenant
@@ -61,7 +62,9 @@ export default async function RecipePage({
       <main className="max-w-5xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Recipe</h1>
         <p className="mt-4">Sign in required.</p>
-        <Link href="/login?redirect=/recipes" className="underline">Go to login</Link>
+        <Link href="/login?redirect=/recipes" className="underline">
+          Go to login
+        </Link>
       </main>
     );
   }
@@ -76,7 +79,9 @@ export default async function RecipePage({
       <main className="max-w-5xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Recipe</h1>
         <p className="mt-4">Profile missing tenant.</p>
-        <Link href="/recipes" className="underline">Back to recipes</Link>
+        <Link href="/recipes" className="underline">
+          Back to recipes
+        </Link>
       </main>
     );
   }
@@ -84,7 +89,9 @@ export default async function RecipePage({
   // Recipe
   const { data: recipe } = await supabase
     .from("recipes")
-    .select("id,name,batch_yield_qty,batch_yield_unit,yield_pct,menu_description,tenant_id")
+    .select(
+      "id,name,batch_yield_qty,batch_yield_unit,yield_pct,menu_description,tenant_id"
+    )
     .eq("id", id)
     .eq("tenant_id", tenantId)
     .maybeSingle();
@@ -93,7 +100,9 @@ export default async function RecipePage({
       <main className="max-w-5xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Recipe</h1>
         <p className="mt-4">Recipe not found.</p>
-        <Link href="/recipes" className="underline">Back to recipes</Link>
+        <Link href="/recipes" className="underline">
+          Back to recipes
+        </Link>
       </main>
     );
   }
@@ -126,7 +135,8 @@ export default async function RecipePage({
   // Costs
   const rawCostPerPortion = costPerPortion(recipe, ingredients, itemCostById);
 
-  const defaultMargin = 0.30;               // 30%
+  // Default pricing preview (matches Menu defaults)
+  const defaultMargin = 0.3;
   const defaultEnding: RoundEnding = ".99";
   const suggested = applyEnding(
     priceFromCost(rawCostPerPortion, defaultMargin),
@@ -135,11 +145,14 @@ export default async function RecipePage({
 
   return (
     <main className="max-w-5xl mx-auto p-6 space-y-6">
-      {/* Header */}
+      {/* Header & actions */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">{recipe.name ?? "Untitled"}</h1>
         <div className="flex items-center gap-2">
-          <Link href="/recipes" className="text-sm underline opacity-80 hover:opacity-100">
+          <Link
+            href="/recipes"
+            className="text-sm underline opacity-80 hover:opacity-100"
+          >
             Back to recipes
           </Link>
           <Link
@@ -148,12 +161,8 @@ export default async function RecipePage({
           >
             Edit Recipe
           </Link>
-          <Link
-            href={`/recipes/${recipe.id}/edit?delete=1`}
-            className="px-3 py-1.5 border rounded-md text-sm hover:bg-red-950 text-red-300"
-          >
-            Delete
-          </Link>
+          {/* Actual delete with confirm + POST */}
+          <DeleteRecipeButton recipeId={recipe.id} />
         </div>
       </div>
 
@@ -172,7 +181,8 @@ export default async function RecipePage({
             </div>
           </dl>
           <p className="text-xs mt-3 opacity-70">
-            Pricing logic matches <em>Menu</em>. You can fine-tune margin/rounding on the Menu page when you add this recipe.
+            Pricing logic matches <em>Menu</em>. You can fine-tune
+            margin/rounding on the Menu page when you add this recipe.
           </p>
         </div>
 
@@ -190,7 +200,9 @@ export default async function RecipePage({
         <dl className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
           <div className="flex justify-between sm:block">
             <dt className="opacity-70">Batch yield qty</dt>
-            <dd className="tabular-nums">{Number(recipe.batch_yield_qty ?? 0) || "—"}</dd>
+            <dd className="tabular-nums">
+              {Number(recipe.batch_yield_qty ?? 0) || "—"}
+            </dd>
           </div>
           <div className="flex justify-between sm:block">
             <dt className="opacity-70">Batch yield unit</dt>
@@ -199,7 +211,9 @@ export default async function RecipePage({
           <div className="flex justify-between sm:block">
             <dt className="opacity-70">Yield % after loss</dt>
             <dd className="tabular-nums">
-              {recipe.yield_pct != null ? Math.round(Number(recipe.yield_pct) * 100) + "%" : "—"}
+              {recipe.yield_pct != null
+                ? Math.round(Number(recipe.yield_pct) * 100) + "%"
+                : "—"}
             </dd>
           </div>
         </dl>
@@ -223,29 +237,41 @@ export default async function RecipePage({
               const it = line.item_id ? itemById[line.item_id] : undefined;
               const qty = Number(line.qty ?? 0);
               const baseUnit = line.unit || it?.base_unit || "—";
-              const unitCost = line.item_id ? (itemCostById[line.item_id] ?? 0) : 0;
+              const unitCost = line.item_id ? itemCostById[line.item_id] ?? 0 : 0;
               const lineCost = qty * unitCost;
               return (
                 <tr key={line.id} className="border-t">
                   <td className="p-2">{it?.name ?? "—"}</td>
-                  <td className="p-2 text-right tabular-nums">{qty.toFixed(4)}</td>
+                  <td className="p-2 text-right tabular-nums">
+                    {qty.toFixed(4)}
+                  </td>
                   <td className="p-2">{baseUnit}</td>
-                  <td className="p-2 text-right tabular-nums">{unitCost ? fmtUSD(unitCost) : "—"}</td>
-                  <td className="p-2 text-right tabular-nums">{fmtUSD(lineCost)}</td>
+                  <td className="p-2 text-right tabular-nums">
+                    {unitCost ? fmtUSD(unitCost) : "—"}
+                  </td>
+                  <td className="p-2 text-right tabular-nums">
+                    {fmtUSD(lineCost)}
+                  </td>
                 </tr>
               );
             })}
             {ingredients.length === 0 && (
               <tr>
-                <td colSpan={5} className="p-3 text-neutral-400">No ingredients yet.</td>
+                <td colSpan={5} className="p-3 text-neutral-400">
+                  No ingredients yet.
+                </td>
               </tr>
             )}
           </tbody>
           {ingredients.length > 0 && (
             <tfoot>
               <tr className="border-t bg-neutral-900/20">
-                <td className="p-2 font-medium text-right" colSpan={4}>Raw cost per portion</td>
-                <td className="p-2 text-right tabular-nums font-medium">{fmtUSD(rawCostPerPortion)}</td>
+                <td className="p-2 font-medium text-right" colSpan={4}>
+                  Raw cost per portion
+                </td>
+                <td className="p-2 text-right tabular-nums font-medium">
+                  {fmtUSD(rawCostPerPortion)}
+                </td>
               </tr>
             </tfoot>
           )}
