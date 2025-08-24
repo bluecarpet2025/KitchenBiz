@@ -8,12 +8,13 @@ type RecipeRow = {
   id: string;
   name: string | null;
   created_at: string | null;
+  updated_at: string | null;
 };
 
 type IngredientRow = {
   recipe_id: string;
   item_id: string;
-  qty: number | null; // in item base units (per serving)
+  qty: number | null; // per serving
 };
 
 async function getTenant(supabase: Awaited<ReturnType<typeof createServerClient>>) {
@@ -41,10 +42,10 @@ export default async function RecipesPage() {
     );
   }
 
-  // 1) Recipes
+  // 1) Recipes (now selecting updated_at)
   const { data: recipesRaw, error: rErr } = await supabase
     .from("recipes")
-    .select("id,name,created_at")
+    .select("id,name,created_at,updated_at")
     .eq("tenant_id", tenantId)
     .order("name");
   if (rErr) throw rErr;
@@ -62,7 +63,7 @@ export default async function RecipesPage() {
     ingredients = (ingRaw ?? []) as IngredientRow[];
   }
 
-  // 3) On-hand (prefer v_inventory_on_hand)
+  // 3) On-hand
   const onhandMap = new Map<string, number>();
   try {
     const { data: ohNew, error: ohNewErr } = await supabase
@@ -91,7 +92,7 @@ export default async function RecipesPage() {
     ingByRecipe.get(row.recipe_id)!.push(row);
   }
 
-  // Compute "makeable" per recipe (per-serving ingredients)
+  // Compute makeable (per serving)
   const rows = recipes.map((rec) => {
     const parts = ingByRecipe.get(rec.id) ?? [];
     let makeable: number | null = null;
@@ -107,7 +108,7 @@ export default async function RecipesPage() {
       id: rec.id,
       name: rec.name ?? "Untitled",
       created_at: rec.created_at,
-      edited_at: rec.created_at, // NOTE: placeholder until we add an updated_at trigger
+      edited_at: rec.updated_at ?? rec.created_at, // show true edited if available
       makeable,
     };
   });
@@ -147,8 +148,10 @@ export default async function RecipesPage() {
                 <td className="p-2">{r.created_at ? new Date(r.created_at).toLocaleDateString() : "-"}</td>
                 <td className="p-2">{r.edited_at ? new Date(r.edited_at).toLocaleDateString() : "-"}</td>
                 <td className="p-2">
-                  <Link href={`/recipes/${r.id}?dup=1`} className="underline mr-3">Duplicate</Link>
-                  <Link href={`/recipes/${r.id}/edit?delete=1`} className="underline text-red-400">Delete</Link>
+                  {/* Duplicate as POST → server duplicates → redirects to new edit page */}
+                  <form action={`/recipes/${r.id}/duplicate`} method="post" className="inline">
+                    <button className="underline" type="submit">Duplicate</button>
+                  </form>
                 </td>
               </tr>
             ))}
