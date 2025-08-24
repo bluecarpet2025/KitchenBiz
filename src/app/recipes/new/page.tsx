@@ -1,3 +1,4 @@
+// src/app/recipes/new/page.tsx
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';

@@ -8,15 +8,12 @@ type RecipeRow = {
   id: string;
   name: string | null;
   created_at: string | null;
-  batch_yield_qty: number | null;
-  batch_yield_unit: string | null;
-  yield_pct: number | null;
 };
 
 type IngredientRow = {
   recipe_id: string;
   item_id: string;
-  qty: number | null; // in item base units
+  qty: number | null; // in item base units (per serving)
 };
 
 async function getTenant(supabase: Awaited<ReturnType<typeof createServerClient>>) {
@@ -47,13 +44,13 @@ export default async function RecipesPage() {
   // 1) Recipes
   const { data: recipesRaw, error: rErr } = await supabase
     .from("recipes")
-    .select("id,name,created_at,batch_yield_qty,batch_yield_unit,yield_pct")
+    .select("id,name,created_at")
     .eq("tenant_id", tenantId)
     .order("name");
   if (rErr) throw rErr;
   const recipes = (recipesRaw ?? []) as RecipeRow[];
 
-  // 2) Ingredients for those recipes
+  // 2) Ingredients for makeable calc
   const recipeIds = recipes.map(r => r.id);
   let ingredients: IngredientRow[] = [];
   if (recipeIds.length) {
@@ -65,33 +62,23 @@ export default async function RecipesPage() {
     ingredients = (ingRaw ?? []) as IngredientRow[];
   }
 
-  // 3) On-hand (try new view first, fall back to legacy view if needed)
+  // 3) On-hand (prefer v_inventory_on_hand)
   const onhandMap = new Map<string, number>();
-
-  // Try v_inventory_on_hand (qty_on_hand_base)
-  let ohTriedNew = false;
   try {
-    ohTriedNew = true;
     const { data: ohNew, error: ohNewErr } = await supabase
       .from("v_inventory_on_hand")
       .select("item_id,qty_on_hand_base")
       .eq("tenant_id", tenantId);
-
     if (ohNewErr) throw ohNewErr;
     (ohNew ?? []).forEach((r: any) => {
       onhandMap.set(r.item_id as string, Number(r.qty_on_hand_base ?? 0));
     });
-  } catch (_e) {
-    // Fallback: v_item_on_hand (on_hand_base)
+  } catch {
     const { data: ohOld, error: ohOldErr } = await supabase
       .from("v_item_on_hand")
       .select("item_id,on_hand_base")
       .eq("tenant_id", tenantId);
-
-    if (ohOldErr) {
-      // If both failed, rethrow the original/new error to surface it
-      throw ohOldErr;
-    }
+    if (ohOldErr) throw ohOldErr;
     (ohOld ?? []).forEach((r: any) => {
       onhandMap.set(r.item_id as string, Number(r.on_hand_base ?? 0));
     });
@@ -104,33 +91,23 @@ export default async function RecipesPage() {
     ingByRecipe.get(row.recipe_id)!.push(row);
   }
 
-  // Compute makeable per recipe
+  // Compute "makeable" per recipe (per-serving ingredients)
   const rows = recipes.map((rec) => {
     const parts = ingByRecipe.get(rec.id) ?? [];
-    const yieldPct = Number(rec.yield_pct ?? 1);
-    const batchQty = Number(rec.batch_yield_qty ?? 1);
-
     let makeable: number | null = null;
-
     for (const p of parts) {
-      const perServing =
-        batchQty > 0
-          ? Number(p.qty ?? 0) * (yieldPct || 1) / batchQty
-          : Number(p.qty ?? 0);
-
-      if (!perServing || perServing <= 0) continue; // skip non-consuming rows
-
+      const perServing = Number(p.qty ?? 0);
+      if (!perServing || perServing <= 0) continue;
       const onHand = onhandMap.get(p.item_id) ?? 0;
       const possible = Math.floor(onHand / perServing);
       makeable = makeable === null ? possible : Math.min(makeable, possible);
     }
-
     if (makeable === null) makeable = 0;
-
     return {
       id: rec.id,
       name: rec.name ?? "Untitled",
       created_at: rec.created_at,
+      edited_at: rec.created_at, // NOTE: placeholder until we add an updated_at trigger
       makeable,
     };
   });
@@ -154,6 +131,7 @@ export default async function RecipesPage() {
               <th className="text-left p-2">Recipe</th>
               <th className="text-right p-2">Makeable</th>
               <th className="text-left p-2">Created</th>
+              <th className="text-left p-2">Edited</th>
               <th className="text-left p-2">Actions</th>
             </tr>
           </thead>
@@ -166,18 +144,17 @@ export default async function RecipesPage() {
                   </Link>
                 </td>
                 <td className="p-2 text-right tabular-nums">{r.makeable}</td>
-                <td className="p-2">
-                  {r.created_at ? new Date(r.created_at).toLocaleDateString() : "-"}
-                </td>
+                <td className="p-2">{r.created_at ? new Date(r.created_at).toLocaleDateString() : "-"}</td>
+                <td className="p-2">{r.edited_at ? new Date(r.edited_at).toLocaleDateString() : "-"}</td>
                 <td className="p-2">
                   <Link href={`/recipes/${r.id}?dup=1`} className="underline mr-3">Duplicate</Link>
-                  <Link href={`/recipes/${r.id}`} className="underline">Open</Link>
+                  <Link href={`/recipes/${r.id}/edit?delete=1`} className="underline text-red-400">Delete</Link>
                 </td>
               </tr>
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={4} className="p-3 text-neutral-400">
+                <td colSpan={5} className="p-3 text-neutral-400">
                   No recipes yet.
                 </td>
               </tr>
