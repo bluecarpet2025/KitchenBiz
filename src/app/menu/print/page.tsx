@@ -9,11 +9,10 @@ import {
   type RecipeLike,
   type IngredientLine,
 } from "@/lib/costing";
-import PrintCopyActions from "@/components/PrintCopyActions"; // client-only buttons
+import PrintCopyActions from "@/components/PrintCopyActions";
 
 export const dynamic = "force-dynamic";
 
-/* ---------- small helpers ---------- */
 function dt(d?: string | null) {
   if (!d) return "";
   try {
@@ -24,37 +23,36 @@ function dt(d?: string | null) {
 }
 
 type RecipeRow = RecipeLike & {
+  id: string;
   name: string | null;
   menu_description: string | null;
+  description?: string | null;
 };
 
-/**
- * NOTE (Next 15): `searchParams` comes in as a Promise.
- * To avoid the PageProps constraint error, accept `any`
- * and await it explicitly.
- */
-export default async function Page({ searchParams }: any) {
-  // Resolve search params safely
-  const sp: Record<string, string | string[]> = (await searchParams) ?? {};
-  const menuIdRaw = Array.isArray(sp.menu_id) ? sp.menu_id[0] : sp.menu_id;
-  const marginRaw = Array.isArray(sp.margin) ? sp.margin[0] : sp.margin;
-
-  // Defaults: menuId -> "", margin -> 0.30 (30%)
-  const menuId = String(menuIdRaw ?? "");
-  const margin = Math.min(0.95, Math.max(0, marginRaw ? Number(marginRaw) : 0.3));
+export default async function Page({
+  searchParams,
+}: {
+  // Next 15: searchParams is a Promise
+  searchParams?: Promise<Record<string, string | string[]>>;
+}) {
+  const sp = (await searchParams) ?? {};
+  const menuId = Array.isArray(sp.menu_id) ? sp.menu_id[0] : sp.menu_id;
+  const marginParam = Array.isArray(sp.margin) ? sp.margin[0] : sp.margin;
+  const margin = Math.min(0.9, Math.max(0, marginParam ? Number(marginParam) : 0.3));
 
   const supabase = await createServerClient();
 
-  // auth → tenant
+  // Auth → tenant
   const { data: u } = await supabase.auth.getUser();
   const userId = u.user?.id ?? null;
-
   if (!userId) {
     return (
       <main className="max-w-4xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Menu</h1>
         <p className="mt-4">You need to sign in to view this menu.</p>
-        <Link className="underline" href="/login?redirect=/menu">Go to login</Link>
+        <Link className="underline" href="/login?redirect=/menu">
+          Go to login
+        </Link>
       </main>
     );
   }
@@ -64,7 +62,6 @@ export default async function Page({ searchParams }: any) {
     .select("tenant_id")
     .eq("id", userId)
     .maybeSingle();
-
   const tenantId = prof?.tenant_id ?? null;
 
   if (!tenantId || !menuId) {
@@ -72,60 +69,65 @@ export default async function Page({ searchParams }: any) {
       <main className="max-w-4xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Menu</h1>
         <p className="mt-4">Missing menu or tenant.</p>
-        <Link className="underline" href="/menu">Back to Menu</Link>
+        <Link className="underline" href="/menu">
+          Back to Menu
+        </Link>
       </main>
     );
   }
 
-  // menu
+  // Menu
   const { data: menu } = await supabase
     .from("menus")
     .select("id,name,created_at,tenant_id")
     .eq("id", menuId)
     .eq("tenant_id", tenantId)
     .maybeSingle();
-
   if (!menu) {
     return (
       <main className="max-w-4xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Menu</h1>
         <p className="mt-4">Menu not found.</p>
-        <Link className="underline" href="/menu">Back to Menu</Link>
+        <Link className="underline" href="/menu">
+          Back to Menu
+        </Link>
       </main>
     );
   }
 
-  // lines (we filter by recipes that are in this menu)
+  // Lines
   const { data: lines } = await supabase
     .from("menu_recipes")
     .select("recipe_id,servings")
     .eq("menu_id", menu.id);
+  const rids = (lines ?? []).map((l) => String(l.recipe_id));
 
-  const recipeIds = (lines ?? []).map((l) => l.recipe_id as string);
-
-  // recipes (include menu_description for print)
+  // Recipes (include description fields)
   let recipes: RecipeRow[] = [];
-  if (recipeIds.length) {
+  if (rids.length) {
     const { data: recs } = await supabase
       .from("recipes")
-      .select("id,name,batch_yield_qty,batch_yield_unit,yield_pct,menu_description")
-      .in("id", recipeIds);
-
-    recipes = (recs ?? []) as RecipeRow[];
+      .select(
+        "id,name,batch_yield_qty,batch_yield_unit,yield_pct,menu_description,description"
+      )
+      .in("id", rids);
+    recipes = ((recs ?? []) as any[]).map((r) => ({
+      ...r,
+      id: String(r.id),
+    })) as RecipeRow[];
   }
 
-  // ingredients for those recipes
+  // Ingredients
   let ingredients: IngredientLine[] = [];
-  if (recipeIds.length) {
+  if (rids.length) {
     const { data: ing } = await supabase
       .from("recipe_ingredients")
       .select("recipe_id,item_id,qty")
-      .in("recipe_id", recipeIds);
-
+      .in("recipe_id", rids);
     ingredients = (ing ?? []) as IngredientLine[];
   }
 
-  // item costs map
+  // Item costs
   const { data: itemsRaw } = await supabase
     .from("inventory_items")
     .select("id,last_price,pack_to_base_factor")
@@ -133,35 +135,37 @@ export default async function Page({ searchParams }: any) {
 
   const itemCostById: Record<string, number> = {};
   (itemsRaw ?? []).forEach((it: any) => {
-    const id = String(it?.id ?? "");
-    const last = Number(it?.last_price ?? 0);
-    const factor = Number(it?.pack_to_base_factor ?? 0);
-    itemCostById[id] = costPerBaseUnit(last, factor);
+    itemCostById[String(it.id)] = costPerBaseUnit(
+      Number(it.last_price ?? 0),
+      Number(it.pack_to_base_factor ?? 0)
+    );
   });
 
-  // group ingredients per recipe
+  // Group ingredients per recipe (skip malformed keys)
   const ingByRecipe = new Map<string, IngredientLine[]>();
   (ingredients ?? []).forEach((ing) => {
-    const key = String(ing.recipe_id ?? "");
+    const key = String((ing as any).recipe_id ?? "");
+    if (!key) return;
     if (!ingByRecipe.has(key)) ingByRecipe.set(key, []);
     ingByRecipe.get(key)!.push(ing);
   });
 
-  // rows for print (name, description, price)
+  // Build printable rows
   const rows = recipes
     .map((rec) => {
       const parts = ingByRecipe.get(String(rec.id)) ?? [];
       const costEach = costPerPortion(rec, parts, itemCostById);
       const price = priceFromCost(costEach, margin);
 
-      // description: prefer menu_description; else a polite generic
-      const descr =
-        (rec.menu_description ?? "").trim() ||
+      // Prefer explicit menu_description, then description, then placeholder.
+      const descrRaw =
+        String(rec.menu_description ?? rec.description ?? "")
+          .trim() ||
         `Classic ${String(rec.name ?? "item").toLowerCase()}.`;
 
       return {
         name: String(rec.name ?? "Untitled"),
-        descr,
+        descr: descrRaw,
         price,
       };
     })
@@ -169,7 +173,6 @@ export default async function Page({ searchParams }: any) {
 
   return (
     <main className="mx-auto p-8 max-w-4xl">
-      {/* Header (actions are a client component) */}
       <div className="flex items-start justify-between gap-3 print:hidden">
         <div>
           <h1 className="text-2xl font-semibold">{menu.name || "Menu"}</h1>
@@ -194,7 +197,7 @@ export default async function Page({ searchParams }: any) {
               {rows.map((r, i) => (
                 <tr key={i} className="border-t align-top">
                   <td className="p-2">{r.name}</td>
-                  <td className="p-2 whitespace-pre-wrap">{r.descr || "—"}</td>
+                  <td className="p-2 whitespace-pre-wrap">{r.descr}</td>
                   <td className="p-2 text-right tabular-nums">{fmtUSD(r.price)}</td>
                 </tr>
               ))}
@@ -203,7 +206,6 @@ export default async function Page({ searchParams }: any) {
         )}
       </section>
 
-      {/* Print styles */}
       <style>{`
         @media print {
           .print\\:hidden { display: none !important; }
