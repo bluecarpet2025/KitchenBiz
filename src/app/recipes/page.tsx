@@ -42,7 +42,7 @@ export default async function RecipesPage() {
     );
   }
 
-  // 1) Recipes (now selecting updated_at)
+  // 1) Recipes (with updated_at)
   const { data: recipesRaw, error: rErr } = await supabase
     .from("recipes")
     .select("id,name,created_at,updated_at")
@@ -108,7 +108,7 @@ export default async function RecipesPage() {
       id: rec.id,
       name: rec.name ?? "Untitled",
       created_at: rec.created_at,
-      edited_at: rec.updated_at ?? rec.created_at, // show true edited if available
+      edited_at: rec.updated_at ?? rec.created_at,
       makeable,
     };
   });
@@ -140,6 +140,7 @@ export default async function RecipesPage() {
             {rows.map(r => (
               <tr key={r.id} className="border-t">
                 <td className="p-2">
+                  {/* ✅ Name links to READ page */}
                   <Link href={`/recipes/${r.id}`} className="underline">
                     {r.name}
                   </Link>

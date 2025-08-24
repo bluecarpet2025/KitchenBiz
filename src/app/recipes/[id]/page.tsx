@@ -1,5 +1,7 @@
+// src/app/recipes/[id]/edit/page.tsx
 'use client';
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 
@@ -9,7 +11,7 @@ type Row = { id?: string; item_id: string; qty: number };
 export default function EditRecipePage() {
   const params = useParams<{ id: string }>();
   const searchParams = useSearchParams();
-  const copiedFrom = searchParams.get('copiedFrom'); // <-- banner source
+  const copiedFrom = searchParams.get('copiedFrom');
   const router = useRouter();
   const recipeId = params.id;
 
@@ -20,7 +22,6 @@ export default function EditRecipePage() {
   const [inv, setInv] = useState<InvItem[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  // Load recipe + ingredients + inventory
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -56,12 +57,12 @@ export default function EditRecipePage() {
     setSaving(true);
     setError(null);
     try {
-      // 1) update the recipe name
       const { error: upErr } = await supabase.from('recipes').update({ name }).eq('id', recipeId);
       if (upErr) throw upErr;
-      // 2) replace ingredients
+
       const { error: delErr } = await supabase.from('recipe_ingredients').delete().eq('recipe_id', recipeId);
       if (delErr) throw delErr;
+
       const clean = rows
         .filter((r) => r.item_id && r.qty > 0)
         .map((r) => ({ recipe_id: recipeId, item_id: r.item_id, qty: r.qty }));
@@ -84,14 +85,23 @@ export default function EditRecipePage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Edit Recipe</h1>
         <div className="space-x-2">
-          <button onClick={() => router.push(`/recipes/${recipeId}`)} className="border rounded px-3 py-1 hover:bg-neutral-900">Cancel</button>
-          <button onClick={save} disabled={saving} className="bg-white text-black rounded px-3 py-1 disabled:opacity-50">
+          {/* ✅ Use Link so it ALWAYS navigates back */}
+          <Link
+            href={`/recipes/${recipeId}`}
+            className="border rounded px-3 py-1 hover:bg-neutral-900"
+          >
+            Cancel
+          </Link>
+          <button
+            onClick={save}
+            disabled={saving}
+            className="bg-white text-black rounded px-3 py-1 disabled:opacity-50"
+          >
             {saving ? 'Saving…' : 'Save'}
           </button>
         </div>
       </div>
 
-      {/* Copied-from banner */}
       {copiedFrom && (
         <div className="border border-emerald-700 bg-emerald-900/20 text-emerald-200 rounded px-3 py-2 text-sm">
           Copied from <b>{copiedFrom}</b>
