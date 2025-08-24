@@ -18,7 +18,7 @@ type RecipeRow = {
   batch_yield_unit: string | null;
   yield_pct: number | null;
   menu_description: string | null;
-  description: string | null;        // ✅ now selected & shown
+  description: string | null;        // we read this and show it in the side panel
   tenant_id: string;
 };
 
@@ -86,7 +86,7 @@ export default async function RecipePage({
     );
   }
 
-  // Recipe (now includes description)
+  // Recipe (includes description)
   const { data: recipe } = await supabase
     .from("recipes")
     .select(
@@ -165,7 +165,7 @@ export default async function RecipePage({
         </div>
       </div>
 
-      {/* Top: Costing + Descriptions */}
+      {/* Top: Costing + Recipe description (right side) */}
       <div className="grid md:grid-cols-2 gap-6">
         <div className="border rounded p-4">
           <div className="font-semibold mb-2">Costing</div>
@@ -185,20 +185,13 @@ export default async function RecipePage({
           </p>
         </div>
 
+        {/* 👇 Renamed & now shows recipe.description */}
         <div className="border rounded p-4">
-          <div className="font-semibold mb-2">Menu description</div>
+          <div className="font-semibold mb-2">Recipe description</div>
           <p className="text-sm whitespace-pre-line opacity-90">
-            {(recipe.menu_description ?? "").trim() || "—"}
+            {(recipe.description ?? "").trim() || "—"}
           </p>
         </div>
-      </div>
-
-      {/* Recipe description (long notes / prep) */}
-      <div className="border rounded p-4">
-        <div className="font-semibold mb-2">Recipe description</div>
-        <p className="text-sm whitespace-pre-line opacity-90">
-          {(recipe.description ?? "").trim() || "—"}
-        </p>
       </div>
 
       {/* Yield / Portions */}
