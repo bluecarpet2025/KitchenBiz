@@ -18,6 +18,7 @@ type RecipeRow = {
   batch_yield_unit: string | null;
   yield_pct: number | null;
   menu_description: string | null;
+  description: string | null;        // ✅ now selected & shown
   tenant_id: string;
 };
 
@@ -46,7 +47,6 @@ function applyEnding(n: number, ending: RoundEnding) {
 }
 
 export default async function RecipePage({
-  // Next 15 expects Promise-based params in PageProps
   params,
 }: {
   params: Promise<{ id: string }>;
@@ -86,11 +86,11 @@ export default async function RecipePage({
     );
   }
 
-  // Recipe
+  // Recipe (now includes description)
   const { data: recipe } = await supabase
     .from("recipes")
     .select(
-      "id,name,batch_yield_qty,batch_yield_unit,yield_pct,menu_description,tenant_id"
+      "id,name,batch_yield_qty,batch_yield_unit,yield_pct,menu_description,description,tenant_id"
     )
     .eq("id", id)
     .eq("tenant_id", tenantId)
@@ -161,12 +161,11 @@ export default async function RecipePage({
           >
             Edit Recipe
           </Link>
-          {/* Actual delete with confirm + POST */}
           <DeleteRecipeButton recipeId={recipe.id} />
         </div>
       </div>
 
-      {/* Top: Costing + Menu description */}
+      {/* Top: Costing + Descriptions */}
       <div className="grid md:grid-cols-2 gap-6">
         <div className="border rounded p-4">
           <div className="font-semibold mb-2">Costing</div>
@@ -192,6 +191,14 @@ export default async function RecipePage({
             {(recipe.menu_description ?? "").trim() || "—"}
           </p>
         </div>
+      </div>
+
+      {/* Recipe description (long notes / prep) */}
+      <div className="border rounded p-4">
+        <div className="font-semibold mb-2">Recipe description</div>
+        <p className="text-sm whitespace-pre-line opacity-90">
+          {(recipe.description ?? "").trim() || "—"}
+        </p>
       </div>
 
       {/* Yield / Portions */}
