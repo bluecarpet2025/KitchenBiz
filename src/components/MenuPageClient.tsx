@@ -107,15 +107,14 @@ export default function MenuPageClient() {
         .from("menu_recipes")
         .select("recipe_id, servings, price")
         .eq("menu_id", selectedMenuId);
-
+      // inside the effect that loads menu_recipes for selectedMenuId
       const nextSel: Sel = {};
       const nextOv: Overrides = {};
       (rows ?? []).forEach((r: any) => {
-        // “presence in menu” only; qty is no longer shown/used on the page
         nextSel[r.recipe_id] = 1;
-        if (r.price != null && !Number.isNaN(Number(r.price))) {
-          nextOv[r.recipe_id] = Number(r.price);
-        }
+        // ✅ treat 0 as "no override"
+        const p = Number(r.price);
+        if (!Number.isNaN(p) && p > 0) nextOv[r.recipe_id] = p;
       });
       setSel(nextSel);
       setOverrides(nextOv);
@@ -378,8 +377,12 @@ export default function MenuPageClient() {
 
                 const parts = ingByRecipe.get(row.id) ?? [];
                 const costEach = costPerPortion(recipe, parts, itemCostById);
+                // inside selectedList.map(...)
                 const suggestedBase = applyEnding(priceFromCost(costEach, margin), ending);
-                const unitPrice = overrides[row.id] != null ? overrides[row.id] : suggestedBase;
+
+                // ✅ use override only if it's a positive number
+                const ov = Number(overrides[row.id]);
+                const unitPrice = ov > 0 ? ov : suggestedBase;
 
                 return (
                   <div key={row.id} className="grid grid-cols-[1fr_180px] gap-3 items-center">
