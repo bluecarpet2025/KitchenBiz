@@ -8,13 +8,18 @@ type RecipeRow = {
   id: string;
   name: string | null;
   created_at: string | null;
-  updated_at: string | null;
+  batch_yield_qty: number | null;
+  batch_yield_unit: string | null;
+  yield_pct: number | null;
 };
 
 type IngredientRow = {
+  id: string;
   recipe_id: string;
-  item_id: string;
-  qty: number | null; // per serving
+  item_id: string | null;
+  sub_recipe_id: string | null;
+  qty: number | null;   // quantity per ONE portion of the parent recipe
+  unit: string | null;
 };
 
 async function getTenant(supabase: Awaited<ReturnType<typeof createServerClient>>) {
@@ -28,10 +33,84 @@ async function getTenant(supabase: Awaited<ReturnType<typeof createServerClient>
   return { user, tenantId: profile?.tenant_id ?? null };
 }
 
+/** Build: recipeId -> array of its ingredients */
+function indexIngredients(lines: IngredientRow[]) {
+  const map = new Map<string, IngredientRow[]>();
+  for (const l of lines) {
+    if (!l.recipe_id) continue;
+    if (!map.has(l.recipe_id)) map.set(l.recipe_id, []);
+    map.get(l.recipe_id)!.push(l);
+  }
+  return map;
+}
+
+/**
+ * Recursively expand each recipe into base-item requirements per portion.
+ * Returns a map: recipeId -> { itemId: qtyPerPortion }
+ * - Handles sub-recipes by DFS.
+ * - Applies yield_pct at the END: multiply all required inputs by 1/(yield_pct || 1).
+ * - Guards against cycles.
+ */
+function buildRequirementsIndex(
+  recipes: RecipeRow[],
+  linesByRecipe: Map<string, IngredientRow[]>
+): Record<string, Record<string, number>> {
+  const recipeById = new Map(recipes.map(r => [r.id, r]));
+  const memo = new Map<string, Record<string, number>>();
+  const visiting = new Set<string>();
+  const MAX_DEPTH = 32;
+
+  function addInto(dst: Record<string, number>, src: Record<string, number>, multiplier = 1) {
+    for (const [k, v] of Object.entries(src)) {
+      dst[k] = (dst[k] ?? 0) + v * multiplier;
+    }
+  }
+
+  function dfs(recipeId: string, depth = 0): Record<string, number> {
+    if (memo.has(recipeId)) return memo.get(recipeId)!;
+    if (visiting.has(recipeId) || depth > MAX_DEPTH) {
+      // cycle / too deep → treat as zero to avoid infinite loops
+      const zero: Record<string, number> = {};
+      memo.set(recipeId, zero);
+      return zero;
+    }
+    visiting.add(recipeId);
+
+    const out: Record<string, number> = {};
+    const parts = linesByRecipe.get(recipeId) ?? [];
+    for (const line of parts) {
+      const qty = Number(line.qty ?? 0);
+      if (!qty || qty <= 0) continue;
+
+      if (line.item_id) {
+        const itemId = String(line.item_id);
+        out[itemId] = (out[itemId] ?? 0) + qty; // per serving
+      } else if (line.sub_recipe_id) {
+        const subId = String(line.sub_recipe_id);
+        const subReq = dfs(subId, depth + 1);
+        addInto(out, subReq, qty); // qty = servings of sub-recipe per serving of parent
+      }
+    }
+
+    // Apply yield loss: if yield_pct < 1, we need more inputs to deliver one serving
+    const yieldPct = Number(recipeById.get(recipeId)?.yield_pct ?? 1) || 1;
+    const scale = yieldPct > 0 ? 1 / yieldPct : 1;
+    if (scale !== 1) {
+      for (const k of Object.keys(out)) out[k] *= scale;
+    }
+
+    memo.set(recipeId, out);
+    visiting.delete(recipeId);
+    return out;
+  }
+
+  for (const r of recipes) dfs(r.id, 0);
+  return Object.fromEntries(memo.entries());
+}
+
 export default async function RecipesPage() {
   const supabase = await createServerClient();
   const { user, tenantId } = await getTenant(supabase);
-
   if (!user || !tenantId) {
     return (
       <main className="max-w-5xl mx-auto p-6">
@@ -42,64 +121,79 @@ export default async function RecipesPage() {
     );
   }
 
-  const { data: recipesRaw } = await supabase
+  // 1) Recipes
+  const { data: recipesRaw, error: rErr } = await supabase
     .from("recipes")
-    .select("id,name,created_at,updated_at")
+    .select("id,name,created_at,batch_yield_qty,batch_yield_unit,yield_pct")
     .eq("tenant_id", tenantId)
     .order("name");
+  if (rErr) throw rErr;
   const recipes = (recipesRaw ?? []) as RecipeRow[];
 
   const recipeIds = recipes.map(r => r.id);
+
+  // 2) Ingredients for those recipes (include sub_recipe_id)
   let ingredients: IngredientRow[] = [];
   if (recipeIds.length) {
-    const { data: ingRaw } = await supabase
+    const { data: ingRaw, error: iErr } = await supabase
       .from("recipe_ingredients")
-      .select("recipe_id,item_id,qty")
+      .select("id,recipe_id,item_id,sub_recipe_id,qty,unit")
       .in("recipe_id", recipeIds);
+    if (iErr) throw iErr;
     ingredients = (ingRaw ?? []) as IngredientRow[];
   }
 
+  // 3) On-hand (try new view first, fall back to legacy view if needed)
   const onhandMap = new Map<string, number>();
   try {
-    const { data: ohNew } = await supabase
+    const { data: ohNew, error: ohNewErr } = await supabase
       .from("v_inventory_on_hand")
       .select("item_id,qty_on_hand_base")
       .eq("tenant_id", tenantId);
+    if (ohNewErr) throw ohNewErr;
     (ohNew ?? []).forEach((r: any) => {
       onhandMap.set(r.item_id as string, Number(r.qty_on_hand_base ?? 0));
     });
-  } catch {
-    const { data: ohOld } = await supabase
+  } catch (_e) {
+    const { data: ohOld, error: ohOldErr } = await supabase
       .from("v_item_on_hand")
       .select("item_id,on_hand_base")
       .eq("tenant_id", tenantId);
+    if (ohOldErr) throw ohOldErr;
     (ohOld ?? []).forEach((r: any) => {
       onhandMap.set(r.item_id as string, Number(r.on_hand_base ?? 0));
     });
   }
 
-  const ingByRecipe = new Map<string, IngredientRow[]>();
-  for (const row of ingredients) {
-    if (!ingByRecipe.has(row.recipe_id)) ingByRecipe.set(row.recipe_id, []);
-    ingByRecipe.get(row.recipe_id)!.push(row);
-  }
+  // 4) Build per-serving base-item requirements (supports sub-recipes)
+  const linesByRecipe = indexIngredients(ingredients);
+  const reqIndex = buildRequirementsIndex(recipes, linesByRecipe);
 
+  // 5) Compute Makeable = min( onHand[item] / requiredPerServing[item] )
   const rows = recipes.map((rec) => {
-    const parts = ingByRecipe.get(rec.id) ?? [];
-    let makeable: number | null = null;
-    for (const p of parts) {
-      const perServing = Number(p.qty ?? 0);
-      if (!perServing || perServing <= 0) continue;
-      const onHand = onhandMap.get(p.item_id) ?? 0;
-      const possible = Math.floor(onHand / perServing);
-      makeable = makeable === null ? possible : Math.min(makeable, possible);
+    const req = reqIndex[rec.id] ?? {};
+    const itemIds = Object.keys(req);
+    if (itemIds.length === 0) {
+      return {
+        id: rec.id,
+        name: rec.name ?? "Untitled",
+        created_at: rec.created_at,
+        makeable: 0,
+      };
     }
-    if (makeable === null) makeable = 0;
+    let minPossible = Infinity;
+    for (const itId of itemIds) {
+      const needed = Number(req[itId] ?? 0);
+      if (needed <= 0) continue;
+      const onHand = onhandMap.get(itId) ?? 0;
+      const possible = Math.floor(onHand / needed);
+      if (possible < minPossible) minPossible = possible;
+    }
+    const makeable = Number.isFinite(minPossible) ? minPossible : 0;
     return {
       id: rec.id,
       name: rec.name ?? "Untitled",
       created_at: rec.created_at,
-      edited_at: rec.updated_at ?? rec.created_at,
       makeable,
     };
   });
@@ -123,7 +217,6 @@ export default async function RecipesPage() {
               <th className="text-left p-2">Recipe</th>
               <th className="text-right p-2">Makeable</th>
               <th className="text-left p-2">Created</th>
-              <th className="text-left p-2">Edited</th>
               <th className="text-left p-2">Actions</th>
             </tr>
           </thead>
@@ -131,24 +224,22 @@ export default async function RecipesPage() {
             {rows.map(r => (
               <tr key={r.id} className="border-t">
                 <td className="p-2">
-                  {/* ✅ plain anchor to guarantee navigation */}
-                  <a href={`/recipes/${r.id}`} className="underline">
+                  <Link href={`/recipes/${r.id}`} className="underline">
                     {r.name}
-                  </a>
+                  </Link>
                 </td>
                 <td className="p-2 text-right tabular-nums">{r.makeable}</td>
-                <td className="p-2">{r.created_at ? new Date(r.created_at).toLocaleDateString() : "-"}</td>
-                <td className="p-2">{r.edited_at ? new Date(r.edited_at).toLocaleDateString() : "-"}</td>
                 <td className="p-2">
-                  <form action={`/recipes/${r.id}/duplicate`} method="post" className="inline">
-                    <button className="underline" type="submit">Duplicate</button>
-                  </form>
+                  {r.created_at ? new Date(r.created_at).toLocaleDateString() : "-"}
+                </td>
+                <td className="p-2">
+                  <Link href={`/recipes/${r.id}?dup=1`} className="underline">Duplicate</Link>
                 </td>
               </tr>
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={5} className="p-3 text-neutral-400">
+                <td colSpan={4} className="p-3 text-neutral-400">
                   No recipes yet.
                 </td>
               </tr>
@@ -158,7 +249,7 @@ export default async function RecipesPage() {
       </div>
 
       <p className="text-xs mt-3 opacity-70">
-        <strong>Makeable</strong> uses your current inventory (base units) and recipe yields to estimate how many portions you can prep now.
+        <strong>Makeable</strong> expands sub-recipes into base items and uses your current on-hand (base units) to estimate how many portions you can prep now.
       </p>
     </main>
   );

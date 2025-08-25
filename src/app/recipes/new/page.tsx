@@ -10,14 +10,14 @@ type Item = {
   pack_to_base_factor: number;
   last_price: number | null;
 };
-
 type Line = { itemId: string; qty: number };
 
 export default function NewRecipe() {
-  const [step, setStep] = useState(1); // 1: name, 2: ingredients, 3: yield/portions, 4: review
+  const [step, setStep] = useState(1); // 1: name/description, 2: ingredients, 3: yield/portions, 4: review
   const [tenantId, setTenantId] = useState<string|null>(null);
   const [items, setItems] = useState<Item[]>([]);
   const [name, setName] = useState('');
+  const [description, setDescription] = useState('');            // NEW
   const [lines, setLines] = useState<Line[]>([{ itemId: '', qty: 0 }]);
   const [yieldPct, setYieldPct] = useState<number>(1); // 1 = 100%
   const [portions, setPortions] = useState<number>(1);
@@ -34,7 +34,6 @@ export default function NewRecipe() {
       const { data: prof, error: pErr } = await supabase.from('profiles').select('tenant_id').eq('id', uid).maybeSingle();
       if (pErr || !prof?.tenant_id) { setErr(pErr?.message || 'No tenant. Visit /app to initialize.'); return; }
       setTenantId(prof.tenant_id);
-
       const { data, error } = await supabase
         .from('inventory_items')
         .select('id,name,base_unit,pack_to_base_factor,last_price')
@@ -65,7 +64,6 @@ export default function NewRecipe() {
   const addLine = () => setLines(prev => [...prev, { itemId:'', qty:0 }]);
 
   function next() {
-    // simple guards
     if (step === 1 && !name.trim()) { setErr('Give your recipe a name'); return; }
     if (step === 2 && !lines.some(l => l.itemId && l.qty>0)) { setErr('Add at least one ingredient'); return; }
     setErr(null); setStep(s => Math.min(4, s+1));
@@ -76,13 +74,13 @@ export default function NewRecipe() {
     e.preventDefault();
     setErr(null); setOk(null);
     if (!tenantId) { setErr('No tenant'); return; }
-
     const cleaned = lines.filter(l => l.itemId && l.qty>0);
     const { data: rec, error: rErr } = await supabase
       .from('recipes')
       .insert({
         tenant_id: tenantId,
         name: name.trim(),
+        description: description.trim() || null,             // NEW
         batch_yield_qty: portions,
         batch_yield_unit: 'each',
         yield_pct: yieldPct,
@@ -90,16 +88,14 @@ export default function NewRecipe() {
       .select('id')
       .single();
     if (rErr) { setErr(rErr.message); return; }
-
     const payload = cleaned.map(l => {
       const it = items.find(i => i.id === l.itemId)!;
       return { recipe_id: rec.id, item_id: l.itemId, qty: Number(l.qty), unit: it.base_unit, sub_recipe_id: null };
     });
     const { error: iErr } = await supabase.from('recipe_ingredients').insert(payload);
     if (iErr) { setErr(iErr.message); return; }
-
     setOk('Recipe saved!');
-    setStep(1); setName(''); setLines([{ itemId:'', qty:0 }]);
+    setStep(1); setName(''); setDescription(''); setLines([{ itemId:'', qty:0 }]);
   }
 
   return (
@@ -113,7 +109,7 @@ export default function NewRecipe() {
       <div className="flex gap-2 text-sm">
         {[1,2,3,4].map(n => (
           <div key={n} className={`px-2 py-1 rounded ${n===step ? 'bg-neutral-800' : 'bg-neutral-900/60'}`}>
-            {n === 1 && '1. Name'}
+            {n === 1 && '1. Name & Description'}
             {n === 2 && '2. Ingredients'}
             {n === 3 && '3. Yield & Portions'}
             {n === 4 && '4. Review & Save'}
@@ -127,16 +123,29 @@ export default function NewRecipe() {
       <form onSubmit={save} className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* Main content */}
         <div className="md:col-span-2 space-y-4">
-
           {step === 1 && (
-            <div className="border rounded p-4 space-y-2">
-              <p className="text-sm text-neutral-300">Give your recipe a clear name. Example: “Chicken Alfredo Sauce (2x)”.</p>
-              <input
-                className="border p-2 w-full"
-                placeholder="Recipe name"
-                value={name}
-                onChange={e=>setName(e.target.value)}
-              />
+            <div className="border rounded p-4 space-y-3">
+              <div>
+                <label className="block text-sm mb-1">Recipe name</label>
+                <input
+                  className="border p-2 w-full"
+                  placeholder="Recipe name"
+                  value={name}
+                  onChange={e=>setName(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="block text-sm mb-1">Recipe description (optional)</label>
+                <textarea
+                  className="border p-2 w-full min-h-28"
+                  placeholder="Short description for staff/menu…"
+                  value={description}
+                  onChange={e=>setDescription(e.target.value)}
+                />
+              </div>
+              <p className="text-xs text-neutral-400">
+                This description appears on the recipe page and can be reused for menus if you like.
+              </p>
             </div>
           )}
 
@@ -183,6 +192,7 @@ export default function NewRecipe() {
               <p className="text-sm">Review summary, then Save.</p>
               <ul className="text-sm list-disc pl-5">
                 <li><b>Name:</b> {name || '—'}</li>
+                <li><b>Description:</b> {description ? description.slice(0,120) : '—'}</li>
                 <li><b>Ingredients:</b> {lines.filter(l=>l.itemId && l.qty>0).length}</li>
                 <li><b>Yield %:</b> {yieldPct}</li>
                 <li><b>Portions:</b> {portions}</li>
@@ -208,7 +218,7 @@ export default function NewRecipe() {
           <div>Per portion: <b>${costs.perPortion.toFixed(2)}</b></div>
           <hr className="my-2 border-neutral-800"/>
           <div className="font-semibold">Tips</div>
-          {step === 1 && <p>Name it how your staff will recognize it quickly.</p>}
+          {step === 1 && <p>Name it how your staff will recognize it quickly. Add a short description for staff/menu.</p>}
           {step === 2 && <p>Use base units (g/ml/each). We’ll handle conversions later.</p>}
           {step === 3 && <p>Yield <i>0.9</i> means 90% after trim/cook loss.</p>}
           {step === 4 && <p>Click Save. You’ll find this under Recipes → List.</p>}
