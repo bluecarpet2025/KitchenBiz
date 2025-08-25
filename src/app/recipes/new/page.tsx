@@ -17,14 +17,13 @@ export default function NewRecipe() {
   const [tenantId, setTenantId] = useState<string|null>(null);
   const [items, setItems] = useState<Item[]>([]);
   const [name, setName] = useState('');
-  const [description, setDescription] = useState('');            // NEW
+  const [description, setDescription] = useState('');
   const [lines, setLines] = useState<Line[]>([{ itemId: '', qty: 0 }]);
   const [yieldPct, setYieldPct] = useState<number>(1); // 1 = 100%
   const [portions, setPortions] = useState<number>(1);
   const [err, setErr] = useState<string|null>(null);
   const [ok, setOk] = useState<string|null>(null);
 
-  // load tenant + items
   useEffect(() => {
     (async () => {
       setErr(null);
@@ -48,7 +47,7 @@ export default function NewRecipe() {
       .filter(l => l.itemId && l.qty > 0)
       .map(l => {
         const it = items.find(i => i.id === l.itemId)!;
-        const costPerBase = it.last_price ? (Number(it.last_price) / Number(it.pack_to_base_factor)) : 0;
+        const costPerBase = it?.last_price ? (Number(it.last_price) / Number(it.pack_to_base_factor)) : 0;
         const lineCost = costPerBase * Number(l.qty);
         return { it, qty: Number(l.qty), costPerBase, lineCost };
       });
@@ -80,7 +79,7 @@ export default function NewRecipe() {
       .insert({
         tenant_id: tenantId,
         name: name.trim(),
-        description: description.trim() || null,             // NEW
+        description: description.trim() || null,
         batch_yield_qty: portions,
         batch_yield_unit: 'each',
         yield_pct: yieldPct,
@@ -105,7 +104,6 @@ export default function NewRecipe() {
         <a className="underline" href="/recipes">← Back to list</a>
       </div>
 
-      {/* Stepper */}
       <div className="flex gap-2 text-sm">
         {[1,2,3,4].map(n => (
           <div key={n} className={`px-2 py-1 rounded ${n===step ? 'bg-neutral-800' : 'bg-neutral-900/60'}`}>
@@ -121,7 +119,6 @@ export default function NewRecipe() {
       {ok && <p className="text-green-500">{ok}</p>}
 
       <form onSubmit={save} className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Main content */}
         <div className="md:col-span-2 space-y-4">
           {step === 1 && (
             <div className="border rounded p-4 space-y-3">
@@ -201,7 +198,15 @@ export default function NewRecipe() {
           )}
 
           <div className="flex gap-2">
-            <button type="button" className="border rounded px-4 py-2" onClick={back} disabled={step===1}>Back</button>
+            {step > 1 && (
+              <button
+                type="button"
+                className="border rounded px-4 py-2"
+                onClick={back}
+              >
+                Back
+              </button>
+            )}
             {step < 4 ? (
               <button type="button" className="bg-black text-white rounded px-4 py-2" onClick={next}>Next</button>
             ) : (
@@ -210,7 +215,6 @@ export default function NewRecipe() {
           </div>
         </div>
 
-        {/* Live summary panel */}
         <aside className="border rounded p-4 space-y-2 text-sm">
           <div className="font-semibold">Live Cost</div>
           <div>Batch: <b>${costs.batch.toFixed(2)}</b></div>

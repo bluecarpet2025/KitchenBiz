@@ -33,7 +33,6 @@ async function getTenant(supabase: Awaited<ReturnType<typeof createServerClient>
   return { user, tenantId: profile?.tenant_id ?? null };
 }
 
-/** Build: recipeId -> array of its ingredients */
 function indexIngredients(lines: IngredientRow[]) {
   const map = new Map<string, IngredientRow[]>();
   for (const l of lines) {
@@ -44,13 +43,6 @@ function indexIngredients(lines: IngredientRow[]) {
   return map;
 }
 
-/**
- * Recursively expand each recipe into base-item requirements per portion.
- * Returns a map: recipeId -> { itemId: qtyPerPortion }
- * - Handles sub-recipes by DFS.
- * - Applies yield_pct at the END: multiply all required inputs by 1/(yield_pct || 1).
- * - Guards against cycles.
- */
 function buildRequirementsIndex(
   recipes: RecipeRow[],
   linesByRecipe: Map<string, IngredientRow[]>
@@ -69,7 +61,6 @@ function buildRequirementsIndex(
   function dfs(recipeId: string, depth = 0): Record<string, number> {
     if (memo.has(recipeId)) return memo.get(recipeId)!;
     if (visiting.has(recipeId) || depth > MAX_DEPTH) {
-      // cycle / too deep → treat as zero to avoid infinite loops
       const zero: Record<string, number> = {};
       memo.set(recipeId, zero);
       return zero;
@@ -84,7 +75,7 @@ function buildRequirementsIndex(
 
       if (line.item_id) {
         const itemId = String(line.item_id);
-        out[itemId] = (out[itemId] ?? 0) + qty; // per serving
+        out[itemId] = (out[itemId] ?? 0) + qty;
       } else if (line.sub_recipe_id) {
         const subId = String(line.sub_recipe_id);
         const subReq = dfs(subId, depth + 1);
@@ -92,7 +83,6 @@ function buildRequirementsIndex(
       }
     }
 
-    // Apply yield loss: if yield_pct < 1, we need more inputs to deliver one serving
     const yieldPct = Number(recipeById.get(recipeId)?.yield_pct ?? 1) || 1;
     const scale = yieldPct > 0 ? 1 / yieldPct : 1;
     if (scale !== 1) {
@@ -121,7 +111,6 @@ export default async function RecipesPage() {
     );
   }
 
-  // 1) Recipes
   const { data: recipesRaw, error: rErr } = await supabase
     .from("recipes")
     .select("id,name,created_at,batch_yield_qty,batch_yield_unit,yield_pct")
@@ -129,10 +118,8 @@ export default async function RecipesPage() {
     .order("name");
   if (rErr) throw rErr;
   const recipes = (recipesRaw ?? []) as RecipeRow[];
-
   const recipeIds = recipes.map(r => r.id);
 
-  // 2) Ingredients for those recipes (include sub_recipe_id)
   let ingredients: IngredientRow[] = [];
   if (recipeIds.length) {
     const { data: ingRaw, error: iErr } = await supabase
@@ -143,8 +130,8 @@ export default async function RecipesPage() {
     ingredients = (ingRaw ?? []) as IngredientRow[];
   }
 
-  // 3) On-hand (try new view first, fall back to legacy view if needed)
   const onhandMap = new Map<string, number>();
+  let onHandRows = 0;
   try {
     const { data: ohNew, error: ohNewErr } = await supabase
       .from("v_inventory_on_hand")
@@ -154,6 +141,7 @@ export default async function RecipesPage() {
     (ohNew ?? []).forEach((r: any) => {
       onhandMap.set(r.item_id as string, Number(r.qty_on_hand_base ?? 0));
     });
+    onHandRows = (ohNew ?? []).length;
   } catch (_e) {
     const { data: ohOld, error: ohOldErr } = await supabase
       .from("v_item_on_hand")
@@ -163,13 +151,13 @@ export default async function RecipesPage() {
     (ohOld ?? []).forEach((r: any) => {
       onhandMap.set(r.item_id as string, Number(r.on_hand_base ?? 0));
     });
+    onHandRows = (ohOld ?? []).length;
   }
+  const onHandEmpty = onHandRows === 0;
 
-  // 4) Build per-serving base-item requirements (supports sub-recipes)
   const linesByRecipe = indexIngredients(ingredients);
   const reqIndex = buildRequirementsIndex(recipes, linesByRecipe);
 
-  // 5) Compute Makeable = min( onHand[item] / requiredPerServing[item] )
   const rows = recipes.map((rec) => {
     const req = reqIndex[rec.id] ?? {};
     const itemIds = Object.keys(req);
@@ -251,6 +239,13 @@ export default async function RecipesPage() {
       <p className="text-xs mt-3 opacity-70">
         <strong>Makeable</strong> expands sub-recipes into base items and uses your current on-hand (base units) to estimate how many portions you can prep now.
       </p>
+      {onHandEmpty && (
+        <p className="text-xs mt-1 text-amber-300">
+          No on-hand data found for your items. Add stock in{" "}
+          <Link href="/inventory/counts/new" className="underline">Inventory → Counts</Link> or{" "}
+          <Link href="/inventory/purchase" className="underline">Inventory → Purchase</Link>.
+        </p>
+      )}
     </main>
   );
 }
