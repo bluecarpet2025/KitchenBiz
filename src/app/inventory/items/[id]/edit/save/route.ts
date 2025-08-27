@@ -1,4 +1,4 @@
-// src/app/inventory/items/[id]/edit/route.ts
+// src/app/inventory/items/[id]/edit/save/route.ts
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
 
@@ -22,14 +22,12 @@ export async function POST(
 
   const supabase = await createServerClient();
 
-  // auth
   const { data: u } = await supabase.auth.getUser();
   const user = u.user ?? null;
   if (!user) {
     return NextResponse.json({ ok: false, error: "not_authenticated" }, { status: 401 });
   }
 
-  // tenant
   const { data: prof } = await supabase
     .from("profiles")
     .select("tenant_id")
@@ -42,7 +40,6 @@ export async function POST(
   }
 
   const form = await req.formData();
-
   const updates = {
     name: toStr(form.get("name")),
     base_unit: toStr(form.get("base_unit")),
@@ -63,6 +60,5 @@ export async function POST(
     return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
   }
 
-  // back to Manage items
   return NextResponse.redirect(new URL("/inventory/manage", req.url), 303);
 }

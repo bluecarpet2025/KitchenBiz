@@ -25,7 +25,6 @@ export default async function EditItemPage({
 
   const supabase = await createServerClient();
 
-  // auth
   const { data: u } = await supabase.auth.getUser();
   const user = u.user ?? null;
   if (!user) {
@@ -40,7 +39,6 @@ export default async function EditItemPage({
     );
   }
 
-  // tenant
   const { data: prof } = await supabase
     .from("profiles")
     .select("tenant_id")
@@ -60,7 +58,6 @@ export default async function EditItemPage({
     );
   }
 
-  // load the item (scoped to tenant)
   const { data: item, error } = await supabase
     .from("inventory_items")
     .select(
@@ -96,8 +93,9 @@ export default async function EditItemPage({
         </Link>
       </div>
 
+      {/* IMPORTANT: post to /edit/save to avoid page/route collision */}
       <form
-        action={`/inventory/items/${it.id}/edit`}
+        action={`/inventory/items/${it.id}/edit/save`}
         method="post"
         className="space-y-4"
       >
