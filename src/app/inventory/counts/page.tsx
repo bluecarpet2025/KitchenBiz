@@ -9,47 +9,75 @@ type Row = {
   id: string;
   note: string | null;
   created_at: string;
-  total_counted_value: number | null;
-  total_abs_delta: number | null;
-  total_abs_delta_value: number | null;
+  total_abs_delta: number | null;       // total change (units)
+  total_abs_value_usd: number | null;   // total change ($)
 };
 
 async function getTenant() {
   const supabase = await createServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return { supabase, user: null, tenantId: null };
+  const { data: u } = await supabase.auth.getUser();
+  const uid = u.user?.id ?? null;
+  if (!uid) return { supabase, tenantId: null };
+
   const { data: prof } = await supabase
-    .from("profiles").select("tenant_id").eq("id", user.id).maybeSingle();
-  return { supabase, user, tenantId: prof?.tenant_id ?? null };
+    .from("profiles")
+    .select("tenant_id")
+    .eq("id", uid)
+    .maybeSingle();
+
+  return { supabase, tenantId: prof?.tenant_id ?? null };
 }
 
 export default async function CountsListPage() {
-  const { supabase, user, tenantId } = await getTenant();
-  if (!user || !tenantId) {
+  const { supabase, tenantId } = await getTenant();
+
+  if (!tenantId) {
     return (
       <main className="max-w-5xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Inventory Counts</h1>
-        <p className="mt-4">Sign in required.</p>
+        <p className="mt-4">Sign in required or profile missing tenant.</p>
         <Link className="underline" href="/login?redirect=/inventory/counts">Go to login</Link>
       </main>
     );
   }
 
-  // Pull from view (see SQL below for the updated definition)
-  const { data, error } = await supabase
+  // Try the view first
+  const { data: viewRows, error: viewErr } = await supabase
     .from("v_recent_counts")
-    .select("id,note,created_at,total_counted_value,total_abs_delta,total_abs_delta_value")
+    .select("id, note, created_at, total_abs_delta, total_abs_value_usd")
     .eq("tenant_id", tenantId)
     .order("created_at", { ascending: false });
 
-  if (error) throw error;
-  const rows = (data ?? []) as Row[];
+  let rows: Row[] = [];
+
+  if (!viewErr && viewRows) {
+    rows = viewRows as Row[];
+  } else {
+    // Fallback: show basic count rows so the page never crashes
+    const { data: counts, error: cErr } = await supabase
+      .from("inventory_counts")
+      .select("id, note, created_at")
+      .eq("tenant_id", tenantId)
+      .order("created_at", { ascending: false });
+
+    if (!cErr && counts) {
+      rows = (counts as any[]).map((r) => ({
+        id: r.id,
+        note: r.note ?? null,
+        created_at: r.created_at,
+        total_abs_delta: null,
+        total_abs_value_usd: null,
+      }));
+    }
+  }
 
   return (
     <main className="max-w-5xl mx-auto p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Inventory Counts</h1>
-        <Link href="/inventory/counts/new" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">New Count</Link>
+        <Link href="/inventory/counts/new" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
+          New Count
+        </Link>
       </div>
 
       <table className="w-full text-sm table-auto">
@@ -57,28 +85,30 @@ export default async function CountsListPage() {
           <tr className="text-left text-neutral-300">
             <th className="p-2">When</th>
             <th className="p-2">Note</th>
-            <th className="p-2 text-right">Total counted value</th>
             <th className="p-2 text-right">Total change (units)</th>
             <th className="p-2 text-right">Total change ($)</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map(r => (
-            <tr key={r.id} className="border-t">
+          {rows.map((r) => (
+            <tr key={r.id} className="border-t hover:bg-neutral-900/30">
               <td className="p-2">
                 <Link className="underline" href={`/inventory/counts/${r.id}`}>
                   {new Date(r.created_at).toLocaleString()}
                 </Link>
               </td>
               <td className="p-2">{r.note ?? ""}</td>
-              <td className="p-2 text-right tabular-nums">{fmtUSD(Number(r.total_counted_value ?? 0))}</td>
-              <td className="p-2 text-right tabular-nums">{Number(r.total_abs_delta ?? 0).toFixed(3)}</td>
-              <td className="p-2 text-right tabular-nums">{fmtUSD(Number(r.total_abs_delta_value ?? 0))}</td>
+              <td className="p-2 text-right tabular-nums">
+                {r.total_abs_delta == null ? "—" : Number(r.total_abs_delta).toFixed(3)}
+              </td>
+              <td className="p-2 text-right tabular-nums">
+                {r.total_abs_value_usd == null ? "—" : fmtUSD(Number(r.total_abs_value_usd))}
+              </td>
             </tr>
           ))}
           {rows.length === 0 && (
             <tr>
-              <td className="p-2" colSpan={5}>No counts yet.</td>
+              <td className="p-2" colSpan={4}>No counts yet.</td>
             </tr>
           )}
         </tbody>
