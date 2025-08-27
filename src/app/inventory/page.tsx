@@ -1,7 +1,7 @@
 // src/app/inventory/page.tsx
 import { createServerClient } from "@/lib/supabase/server";
 import AddReceiptButton from "@/components/AddReceiptButton";
-import DeleteInventoryItemButton from "@/components/DeleteInventoryItemButton";
+import DeleteInventoryItemButton from "@/components/DeleteInventoryItemButton"; 
 import { fmtUSD } from "@/lib/costing";
 
 export const dynamic = "force-dynamic";
