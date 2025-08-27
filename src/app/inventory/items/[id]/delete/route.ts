@@ -2,41 +2,43 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
 
-export async function POST(_req: Request, { params }: { params: { id: string } }) {
-  try {
-    const supabase = await createServerClient();
+export async function POST(
+  _req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
 
-    // who is this?
-    const { data: auth } = await supabase.auth.getUser();
-    const user = auth.user ?? null;
-    if (!user) {
-      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-    }
+  const supabase = await createServerClient();
 
-    // which tenant?
-    const { data: prof, error: pErr } = await supabase
-      .from("profiles")
-      .select("tenant_id")
-      .eq("id", user.id)
-      .maybeSingle();
-
-    if (pErr || !prof?.tenant_id) {
-      return NextResponse.json({ ok: false, error: "No tenant" }, { status: 400 });
-    }
-
-    // soft-delete (hide from lists)
-    const { error } = await supabase
-      .from("inventory_items")
-      .update({ deleted_at: new Date().toISOString() })
-      .eq("id", params.id)
-      .eq("tenant_id", prof.tenant_id);
-
-    if (error) {
-      return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
-    }
-
-    return NextResponse.json({ ok: true });
-  } catch (err: any) {
-    return NextResponse.json({ ok: false, error: err?.message ?? "Unknown error" }, { status: 500 });
+  // auth
+  const { data: u } = await supabase.auth.getUser();
+  const user = u.user ?? null;
+  if (!user) {
+    return NextResponse.json({ ok: false, error: "not_authenticated" }, { status: 401 });
   }
+
+  // tenant
+  const { data: prof } = await supabase
+    .from("profiles")
+    .select("tenant_id")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  const tenantId = prof?.tenant_id ?? null;
+  if (!tenantId) {
+    return NextResponse.json({ ok: false, error: "no_tenant" }, { status: 400 });
+  }
+
+  // soft-delete (hide from lists)
+  const { error } = await supabase
+    .from("inventory_items")
+    .update({ deleted_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("tenant_id", tenantId);
+
+  if (error) {
+    return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
+  }
+
+  return NextResponse.json({ ok: true });
 }
