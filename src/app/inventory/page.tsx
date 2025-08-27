@@ -151,7 +151,7 @@ export default async function InventoryLanding() {
             New count
           </Link>
           <Link href="/inventory/counts" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
-            Counts
+            Counts history
           </Link>
           <Link href="/inventory/manage" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
             Manage items
