@@ -2,57 +2,86 @@
 
 import * as React from "react";
 
-type Row = {
+type Props = {
+  /** Where to send the user after a successful upload */
+  redirectTo?: string;
+};
+
+type CsvRow = {
   item_name: string;
   qty: number;
   unit: string;
   total_cost_usd: number;
-  expires_on: string | null; // ISO (YYYY-MM-DD) or null
+  expires_on: string | null; // YYYY-MM-DD or null
   note: string | null;
 };
 
-export default function ReceiptCsvTools({ redirectTo = "/inventory" }: { redirectTo?: string }) {
+export default function ReceiptCsvTools({ redirectTo = "/inventory" }: Props) {
   const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const fileRef = React.useRef<HTMLInputElement>(null);
 
   function downloadTemplate() {
-    const csv =
-`item_name,qty,unit,total_cost_usd,expires_on,note
-Mozzarella,5000,kg,37.50,2025-09-30,weekly order
-Tomato sauce,10000,ml,25.00,,(optional)
-`;
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const header = "item_name,qty,unit,total_cost_usd,expires_on,note\n";
+    // one short sample row users can delete
+    const sample =
+      "Mozzarella,5000,g,35.00,2025-09-30,second batch\n";
+    const blob = new Blob([header + sample], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "purchase_template.csv";
+    a.download = "receipts_template.csv";
     a.click();
     URL.revokeObjectURL(url);
   }
 
-  function parseCsv(text: string): Row[] {
-    const lines = text.split(/\r?\n/).filter(Boolean);
-    if (lines.length < 2) return [];
+  function parseCsv(text: string): CsvRow[] {
+    const lines = text
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
 
-    const header = lines[0].split(",").map(s => s.trim().toLowerCase());
-    const idx = (k: string) => header.indexOf(k);
+    if (lines.length === 0) return [];
 
-    const need = ["item_name","qty","unit","total_cost_usd","expires_on","note"];
-    for (const k of need) if (idx(k) < 0) throw new Error(`Missing column: ${k}`);
+    const header = lines[0].split(",").map((s) => s.trim().toLowerCase());
+    const idx = (k: string) => {
+      const i = header.indexOf(k);
+      if (i === -1) throw new Error(`Missing column: ${k}`);
+      return i;
+    };
 
-    const rows: Row[] = [];
-    for (let i = 1; i < lines.length; i++) {
-      const parts = lines[i].split(",").map(s => s.trim());
-      if (!parts[idx("item_name")]?.trim()) continue;
+    const iName = idx("item_name");
+    const iQty = idx("qty");
+    const iUnit = idx("unit");
+    const iCost = idx("total_cost_usd");
+    const iExp = idx("expires_on");
+    const iNote = idx("note");
 
-      const item_name = parts[idx("item_name")].trim();
-      const qty = Number(parts[idx("qty")] ?? 0);
-      const unit = parts[idx("unit")] ?? "";
-      const total_cost_usd = Number(parts[idx("total_cost_usd")] ?? 0);
-      const expires_on_raw = parts[idx("expires_on")]?.trim();
-      const expires_on = expires_on_raw ? new Date(expires_on_raw).toISOString().slice(0,10) : null;
-      const note = (parts[idx("note")] ?? "").trim() || null;
+    const rows: CsvRow[] = [];
+    for (let lineNum = 1; lineNum < lines.length; lineNum++) {
+      const raw = lines[lineNum];
+      if (!raw) continue;
+      const parts = raw.split(",").map((s) => s.trim());
 
-      rows.push({ item_name, qty, unit, total_cost_usd, expires_on, note });
+      // allow short rows at end (e.g., trailing newline)
+      if (parts.length === 1 && parts[0] === "") continue;
+
+      const r: CsvRow = {
+        item_name: (parts[iName] ?? "").trim(),
+        qty: Number(parts[iQty] ?? "0"),
+        unit: (parts[iUnit] ?? "").trim(),
+        total_cost_usd: Number(parts[iCost] ?? "0"),
+        expires_on: (parts[iExp] ?? "").trim() || null,
+        note: (parts[iNote] ?? "").trim() || null,
+      };
+
+      if (!r.item_name) throw new Error(`Row ${lineNum}: item_name is required`);
+      if (!isFinite(r.qty) || r.qty <= 0) throw new Error(`Row ${lineNum}: qty must be > 0`);
+      if (!r.unit) throw new Error(`Row ${lineNum}: unit is required`);
+      if (!isFinite(r.total_cost_usd) || r.total_cost_usd < 0)
+        throw new Error(`Row ${lineNum}: total_cost_usd must be >= 0`);
+
+      rows.push(r);
     }
     return rows;
   }
@@ -60,42 +89,95 @@ Tomato sauce,10000,ml,25.00,,(optional)
   async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
+    setMsg(null);
+
     try {
       setBusy(true);
       const text = await f.text();
       const rows = parseCsv(text);
-      if (!rows.length) { alert("No rows found."); setBusy(false); return; }
+      if (rows.length === 0) {
+        setMsg({ kind: "err", text: "No rows found in file." });
+        return;
+      }
 
+      // POST JSON to the import route
       const res = await fetch("/inventory/receipts/import", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ rows }),
       });
 
-      if (!res.ok) {
-        const msg = await res.text();
-        alert(`Upload failed: ${msg}`);
-      } else {
-        window.location.href = redirectTo;
+      // Try to read JSON response if present
+      let info: any = null;
+      try {
+        info = await res.json();
+      } catch {
+        /* no-op */
       }
+
+      if (!res.ok) {
+        const errText =
+          (info && (info.error || info.message)) ||
+          `Upload failed (${res.status})`;
+        setMsg({ kind: "err", text: errText });
+        return;
+      }
+
+      const inserted =
+        (info && (info.inserted || info.count || info.rows)) || rows.length;
+
+      setMsg({
+        kind: "ok",
+        text: `Upload complete. Imported ${inserted} row${inserted === 1 ? "" : "s"}.`,
+      });
+
+      // soft refresh of page metrics after a short delay
+      setTimeout(() => {
+        window.location.assign(redirectTo);
+      }, 800);
     } catch (err: any) {
-      alert(err?.message ?? "Upload failed");
+      setMsg({ kind: "err", text: err?.message || "Upload failed." });
     } finally {
       setBusy(false);
-      e.currentTarget.value = "";
+      if (fileRef.current) fileRef.current.value = "";
     }
   }
 
   return (
-    <div className="flex items-center gap-2">
-      <button type="button" onClick={downloadTemplate}
-        className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
+    <div className="flex items-center gap-3">
+      <button
+        type="button"
+        className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+        onClick={downloadTemplate}
+      >
         Download template
       </button>
-      <label className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900 cursor-pointer">
+
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".csv,text/csv"
+        onChange={onUpload}
+        className="hidden"
+      />
+      <button
+        type="button"
+        disabled={busy}
+        className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900 disabled:opacity-50"
+        onClick={() => fileRef.current?.click()}
+      >
         {busy ? "Uploading…" : "Upload CSV"}
-        <input disabled={busy} onChange={onUpload} type="file" accept=".csv" hidden />
-      </label>
+      </button>
+
+      {msg && (
+        <span
+          className={`ml-2 text-sm ${
+            msg.kind === "ok" ? "text-emerald-400" : "text-red-400"
+          }`}
+        >
+          {msg.text}
+        </span>
+      )}
     </div>
   );
 }
