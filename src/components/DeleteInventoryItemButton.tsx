@@ -1,24 +1,23 @@
+// src/components/DeleteInventoryItemButton.tsx
 "use client";
-import { useRouter } from "next/navigation";
+import * as React from "react";
 
 export default function DeleteInventoryItemButton({ id }: { id: string }) {
-  const r = useRouter();
-
-  async function onDel() {
-    if (!confirm("Delete this item? This hides it from lists.")) return;
-
-    const res = await fetch(`/inventory/items/${id}/delete`, { method: "POST" });
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}));
-      alert(j?.error || "Delete failed");
-      return;
-    }
-    r.refresh();
-  }
-
+  const [busy, setBusy] = React.useState(false);
   return (
-    <button className="text-red-400 hover:underline text-xs" onClick={onDel}>
-      Delete
+    <button
+      className="text-red-400 hover:underline"
+      onClick={async () => {
+        if (!confirm("Delete this item? This hides it from lists.")) return;
+        setBusy(true);
+        const res = await fetch(`/inventory/items/${id}/delete`, { method: "POST" });
+        setBusy(false);
+        if (res.ok) location.reload();
+        else alert("Delete failed");
+      }}
+      disabled={busy}
+    >
+      {busy ? "Deleting…" : "Delete"}
     </button>
   );
 }

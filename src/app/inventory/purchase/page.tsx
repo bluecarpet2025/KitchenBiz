@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import NewPurchaseForm from "@/components/NewPurchaseForm";
+import ReceiptCsvTools from "@/components/ReceiptCsvTools";
 
 export const dynamic = "force-dynamic";
 
@@ -35,9 +36,10 @@ export default async function PurchasePage() {
     <main className="max-w-4xl mx-auto p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">New Purchase</h1>
-        <Link href="/inventory" className="text-sm underline">Back to Inventory</Link>
+        <ReceiptCsvTools redirectTo="/inventory" />
       </div>
       <NewPurchaseForm items={items ?? []} />
     </main>
+    
   );
 }
