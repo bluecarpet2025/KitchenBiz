@@ -1,49 +1,76 @@
+// src/app/page.tsx
 import Link from "next/link";
-import SignupForm from "@/components/SignupForm";
+import { createServerClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
-export default function HomePage() {
+function CTA({
+  href,
+  title,
+  blurb,
+}: {
+  href: string;
+  title: string;
+  blurb: string;
+}) {
   return (
-    <main className="max-w-5xl mx-auto p-6 space-y-10">
-      {/* Hero */}
-      <section className="space-y-3">
-        <h1 className="text-3xl md:text-4xl font-semibold">Kitchen Biz</h1>
-        <p className="text-neutral-300">
-          Lightweight tools for small food businesses: inventory, recipes, and menu costing—simple and fast.
-        </p>
+    <Link
+      href={href}
+      className="rounded-lg border p-4 hover:bg-neutral-900 transition-colors block"
+    >
+      <div className="text-lg font-semibold">{title} →</div>
+      <div className="text-sm opacity-80 mt-1">{blurb}</div>
+    </Link>
+  );
+}
+
+export default async function HomePage() {
+  const supabase = await createServerClient();
+  const { data: { user } } = await supabase.auth.getUser();
+
+  return (
+    <main className="max-w-5xl mx-auto p-6 space-y-8">
+      <header className="flex items-center justify-between">
+        <h1 className="text-3xl font-bold">Kitchen Biz</h1>
+        <nav className="flex items-center gap-4 text-sm">
+          <Link className="underline" href="/help">Help / FAQ</Link>
+          {!user && <Link className="underline" href="/login">Login</Link>}
+        </nav>
+      </header>
+
+      <p className="text-neutral-300">
+        Simple back-of-house for small restaurants: inventory, recipes, and menu costing.
+      </p>
+
+      <section className="grid md:grid-cols-3 gap-6">
+        <CTA
+          href="/inventory"
+          title="Inventory"
+          blurb="Track items, purchases, and daily counts. Inline pricing with $/base auto-calc."
+        />
+        <CTA
+          href="/recipes"
+          title="Recipes"
+          blurb="Per-serving costs and “Makeable” based on stock on hand."
+        />
+        <CTA
+          href="/menu"
+          title="Menu"
+          blurb="Build menus, save/load, share read-only links, print."
+        />
       </section>
 
-      {/* Big buttons */}
-      <section className="grid md:grid-cols-3 gap-3">
-        <CTA href="/inventory" title="Inventory" blurb="Track on-hand, purchases, counts & expirations." />
-        <CTA href="/recipes" title="Recipes" blurb="Cost ingredients & sub-recipes; scale batches." />
-        <CTA href="/menu" title="Menu" blurb="Price items with margin targets & cost visibility." />
-      </section>
-
-      {/* Email opt-in */}
-      <section className="space-y-2">
-        <h2 className="text-xl font-semibold">Get early access & share feedback</h2>
-        <p className="text-neutral-300 text-sm">
-          Want to help shape Kitchen Biz? Join our small beta list. We’ll reach out with testing invites and short feedback forms.
-        </p>
-        <SignupForm source="landing" />
-      </section>
-
-      {/* Roadmap */}
-      <section className="space-y-2">
-        <h2 className="text-xl font-semibold">Roadmap</h2>
-        <ul className="list-disc pl-5 space-y-1 text-neutral-300 text-sm">
-          <li><strong>Now:</strong> Inventory & Recipes MVP (counts, receipts, cost & value)</li>
-          <li>Menu item costing & margin targets</li>
-          <li>CSV import/export across modules</li>
-          <li>Multi-location support & roles</li>
-          <li>Help panels on each page (contextual, bite-sized)</li>
+      <section>
+        <h2 className="text-xl font-semibold mb-2">Roadmap</h2>
+        <ul className="list-disc pl-5 space-y-1 text-sm text-neutral-300">
+          <li>Prep printable sheet</li>
+          <li>Import templates & Google Sheets sync</li>
+          <li>Staff roles & vendors</li>
+          <li>Polish & empty states</li>
         </ul>
       </section>
 
-      {/* Footer */}
-      <footer className="pt-6 mt-6 border-t text-sm text-neutral-300">
+      <footer className="pt-6 mt-6 border-t text-sm text-neutral-400">
         <div className="flex flex-col md:flex-row gap-2 md:items-center md:justify-between">
           <div>© {new Date().getFullYear()} Kitchen Biz</div>
           <nav className="flex gap-4">
@@ -54,17 +81,5 @@ export default function HomePage() {
         </div>
       </footer>
     </main>
-  );
-}
-
-function CTA({ href, title, blurb }: { href: string; title: string; blurb: string }) {
-  return (
-    <Link
-      href={href}
-      className="rounded-lg border p-4 hover:bg-neutral-900 transition-colors"
-    >
-      <div className="text-lg font-semibold">{title}</div>
-      <div className="text-sm opacity-80 mt-1">{blurb}</div>
-    </Link>
   );
 }
