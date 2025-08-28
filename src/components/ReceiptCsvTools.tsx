@@ -1,35 +1,31 @@
 "use client";
 
 import * as React from "react";
+import Notice from "@/components/Notice";
 
 type Props = {
   /** Where to send users after a successful upload (optional) */
   redirectTo?: string;
 };
 
+type UploadMsg = { text: string; kind: "ok" | "err" } | null;
+
 export default function ReceiptCsvTools({ redirectTo = "/inventory" }: Props) {
   const [busy, setBusy] = React.useState(false);
-  const [msg, setMsg] = React.useState<null | { text: string; kind: "ok" | "err" }>(null);
-  const hideTimer = React.useRef<number | null>(null);
-
-  React.useEffect(() => {
-    return () => {
-      if (hideTimer.current) window.clearTimeout(hideTimer.current);
-    };
-  }, []);
+  const [msg, setMsg] = React.useState<UploadMsg>(null);
 
   function downloadTemplate() {
     const header = [
       "item_name",
-      "qty",
-      "unit",
-      "total_cost_usd",
-      "expires_on",
-      "note",
+      "qty",               // base units; allow commas; we'll normalize
+      "unit",              // base unit symbol, e.g., g / ml / each
+      "total_cost_usd",    // numeric with or without commas
+      "expires_on",        // YYYY-MM-DD (optional)
+      "note",              // optional
     ];
     const sample = [
       "Mozzarella",
-      "5000",
+      "5,000",
       "g",
       "35.00",
       "2025-09-30",
@@ -45,31 +41,53 @@ export default function ReceiptCsvTools({ redirectTo = "/inventory" }: Props) {
     URL.revokeObjectURL(url);
   }
 
+  const toNumber = (v: unknown) => {
+    const s = String(v ?? "").trim().replace(/,/g, "");
+    if (!s) return NaN;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : NaN;
+  };
+
   function parseCsv(text: string) {
     const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
-    if (lines.length <= 1) return [];
+    if (lines.length <= 1) return { rows: [] as any[], errors: [] as string[] };
+
     const header = lines[0].split(",").map((s) => s.trim().toLowerCase());
     const idx = (k: string) => header.indexOf(k);
+    const need = ["item_name", "qty", "unit", "total_cost_usd"];
+    const errors: string[] = [];
 
-    const need = ["item_name", "qty", "unit", "total_cost_usd", "expires_on", "note"];
     for (const col of need) {
-      if (idx(col) === -1) throw new Error(`Missing column: ${col}`);
+      if (idx(col) === -1) errors.push(`Missing column: ${col}`);
     }
+    if (errors.length) return { rows: [], errors };
 
     const rows: any[] = [];
     for (let i = 1; i < lines.length; i++) {
-      const parts = lines[i].split(",");
-      if (!parts.join("").trim()) continue;
-      rows.push({
-        item_name: parts[idx("item_name")]?.trim() ?? "",
-        qty_base: Number(parts[idx("qty")] ?? 0),
-        unit: (parts[idx("unit")] ?? "").trim(),
-        total_cost_usd: Number(parts[idx("total_cost_usd")] ?? 0),
-        expires_on: (parts[idx("expires_on")] ?? "").trim(), // YYYY-MM-DD
-        note: (parts[idx("note")] ?? "").trim(),
-      });
+      const line = lines[i];
+      if (!line.trim()) continue;
+
+      const parts = line.split(",");
+      const rowNum = i + 1;
+
+      const item_name = (parts[idx("item_name")] ?? "").trim();
+      const unit = (parts[idx("unit")] ?? "").trim();
+      const qty_base = toNumber(parts[idx("qty")]);
+      const total_cost_usd = toNumber(parts[idx("total_cost_usd")]);
+      const expires_on = (parts[idx("expires_on")] ?? "").trim();
+      const note = (parts[idx("note")] ?? "").trim();
+
+      if (!item_name) errors.push(`Row ${rowNum}: item_name is required`);
+      if (!unit) errors.push(`Row ${rowNum}: unit is required`);
+      if (!Number.isFinite(qty_base) || qty_base <= 0)
+        errors.push(`Row ${rowNum}: qty must be a positive number`);
+      if (!Number.isFinite(total_cost_usd) || total_cost_usd < 0)
+        errors.push(`Row ${rowNum}: total_cost_usd must be ≥ 0`);
+
+      rows.push({ item_name, unit, qty_base, total_cost_usd, expires_on, note });
     }
-    return rows;
+
+    return { rows, errors };
   }
 
   async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -81,10 +99,20 @@ export default function ReceiptCsvTools({ redirectTo = "/inventory" }: Props) {
       setMsg(null);
 
       const text = await f.text();
-      const rows = parseCsv(text);
+      const { rows, errors } = parseCsv(text);
+
+      if (errors.length) {
+        setMsg({
+          kind: "err",
+          text:
+            "CSV has issues:\n" +
+            errors.slice(0, 5).join("; ") +
+            (errors.length > 5 ? ` …(+${errors.length - 5} more)` : ""),
+        });
+        return;
+      }
       if (rows.length === 0) {
-        setMsg({ text: "No rows found in file.", kind: "err" });
-        scheduleHide();
+        setMsg({ kind: "err", text: "No rows found in file." });
         return;
       }
 
@@ -96,72 +124,60 @@ export default function ReceiptCsvTools({ redirectTo = "/inventory" }: Props) {
 
       if (!res.ok) {
         const t = await safeText(res);
-        setMsg({ text: `Upload failed (${res.status}): ${t}`, kind: "err" });
-        scheduleHide();
+        setMsg({ kind: "err", text: `Upload failed (${res.status}): ${t}` });
         return;
       }
 
-      // Response may include { inserted: N }
       let inserted: number | undefined = undefined;
       try {
         const j = await res.json();
         if (typeof j?.inserted === "number") inserted = j.inserted;
       } catch {
-        /* ignore */
+        /* ignore non-JSON response */
       }
 
       setMsg({
-        text: inserted != null ? `Uploaded ${inserted} receipts.` : "Upload successful.",
         kind: "ok",
+        text: inserted != null ? `Uploaded ${inserted} receipts.` : "Upload successful.",
       });
-      scheduleHide();
 
-      // Optional redirect after a short pause so users can still see the toast
+      // optional redirect so user still sees the banner; they can dismiss sooner
       setTimeout(() => {
         if (redirectTo) window.location.assign(redirectTo);
       }, 1200);
     } catch (err: any) {
-      setMsg({ text: err?.message ?? "Upload failed.", kind: "err" });
-      scheduleHide();
+      setMsg({ kind: "err", text: err?.message ?? "Upload failed." });
     } finally {
       setBusy(false);
-      // reset input so same file can be re-selected
-      e.currentTarget.value = "";
+      e.currentTarget.value = ""; // allow re-selecting same file
     }
   }
 
-  function scheduleHide() {
-    if (hideTimer.current) window.clearTimeout(hideTimer.current);
-    // ⬇️ keep the message visible for 8 seconds
-    hideTimer.current = window.setTimeout(() => setMsg(null), 8000);
-  }
-
   return (
-    <div className="flex items-center gap-3">
-      <button
-        type="button"
-        onClick={downloadTemplate}
-        className="px-4 py-2 rounded-md border text-sm hover:bg-neutral-900"
-      >
-        Download template
-      </button>
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={downloadTemplate}
+          className="px-4 py-2 rounded-md border text-sm hover:bg-neutral-900"
+        >
+          Download template
+        </button>
 
-      <label className="px-4 py-2 rounded-md border text-sm hover:bg-neutral-900 cursor-pointer">
-        <input type="file" className="hidden" accept=".csv,text/csv" onChange={onUpload} disabled={busy} />
-        {busy ? "Uploading…" : "Upload CSV"}
-      </label>
+        <label className="px-4 py-2 rounded-md border text-sm hover:bg-neutral-900 cursor-pointer">
+          <input type="file" className="hidden" accept=".csv,text/csv" onChange={onUpload} disabled={busy} />
+          {busy ? "Uploading…" : "Upload CSV"}
+        </label>
+      </div>
 
       {msg && (
-        <span
-          className={
-            "text-sm " +
-            (msg.kind === "ok" ? "text-emerald-400" : "text-red-400")
-          }
-          role="status"
-          aria-live="polite"
+        <Notice
+          kind={msg.kind}
+          onClose={() => setMsg(null)}
+          // keep it around; user dismisses explicitly
         >
-          {msg.text}
-        </span>
+          <pre className="whitespace-pre-wrap">{msg.text}</pre>
+        </Notice>
       )}
     </div>
   );
