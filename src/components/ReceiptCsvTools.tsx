@@ -1,192 +1,235 @@
 "use client";
 
 import * as React from "react";
-import Notice from "@/components/Notice";
 
-type Props = {
-  /** Where to send users after a successful upload (optional) */
-  redirectTo?: string;
+type Props = { redirectTo?: string };
+
+type Row = {
+  item_name: string;
+  sku?: string | null;
+  qty: number;
+  unit: string;
+  total_cost_usd: number;
+  expires_on?: string | null;
+  note?: string | null;
 };
 
-type UploadMsg = { text: string; kind: "ok" | "err" } | null;
+const TEMPLATE_HEADERS = [
+  "item_name",
+  "sku (optional)",
+  "qty",
+  "unit",
+  "total_cost_usd",
+  "expires_on (YYYY-MM-DD or Excel serial)",
+  "note (optional)",
+];
+
+function excelSerialToISO(v: number): string {
+  // Excel serial dates are days since 1899-12-30
+  const base = new Date(Date.UTC(1899, 11, 30));
+  const d = new Date(base.getTime() + v * 86400000);
+  // yyyy-mm-dd
+  return d.toISOString().slice(0, 10);
+}
+
+function toNumberLoose(x: unknown): number {
+  // Trim, strip commas and spaces; turn into number
+  const s = String(x ?? "").trim().replace(/,/g, "");
+  if (!s) return NaN;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function parseCsv(text: string): Row[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length < 2) return [];
+
+  const header = lines[0]
+    .split(",")
+    .map((s) => s.trim().toLowerCase());
+
+  const idx = {
+    item_name: header.indexOf("item_name"),
+    sku: header.findIndex((h) => h.startsWith("sku")),
+    qty: header.indexOf("qty"),
+    unit: header.indexOf("unit"),
+    total_cost_usd: header.indexOf("total_cost_usd"),
+    expires_on: header.findIndex((h) => h.startsWith("expires_on")),
+    note: header.findIndex((h) => h.startsWith("note")),
+  };
+
+  for (const [k, v] of Object.entries(idx)) {
+    if (["item_name", "qty", "unit", "total_cost_usd"].includes(k) && v < 0) {
+      throw new Error(`Missing required column: ${k}`);
+    }
+  }
+
+  const out: Row[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const parts = lines[i].split(",").map((s) => s.trim());
+
+    const name = parts[idx.item_name]?.trim();
+    if (!name) continue;
+
+    const qty = toNumberLoose(parts[idx.qty]);
+    const cost = toNumberLoose(parts[idx.total_cost_usd]);
+
+    let expires_on: string | null = null;
+    if (idx.expires_on >= 0) {
+      const raw = parts[idx.expires_on]?.trim();
+      if (raw) {
+        const excel = toNumberLoose(raw);
+        expires_on =
+          Number.isFinite(excel) && excel > 1000
+            ? excelSerialToISO(excel)
+            : new Date(raw).toISOString().slice(0, 10);
+      }
+    }
+
+    const unit = (parts[idx.unit] ?? "").trim().toLowerCase();
+    const sku =
+      idx.sku >= 0 && parts[idx.sku] ? String(parts[idx.sku]).trim() : null;
+    const note = idx.note >= 0 ? parts[idx.note]?.trim() || null : null;
+
+    out.push({
+      item_name: name,
+      sku,
+      qty,
+      unit,
+      total_cost_usd: cost,
+      expires_on,
+      note,
+    });
+  }
+  return out;
+}
 
 export default function ReceiptCsvTools({ redirectTo = "/inventory" }: Props) {
   const [busy, setBusy] = React.useState(false);
-  const [msg, setMsg] = React.useState<UploadMsg>(null);
+  const [banner, setBanner] = React.useState<{
+    kind: "ok" | "err";
+    msg: string;
+  } | null>(null);
 
-  function downloadTemplate() {
-    const header = [
-      "item_name",
-      "qty",               // base units; allow commas; we'll normalize
-      "unit",              // base unit symbol, e.g., g / ml / each
-      "total_cost_usd",    // numeric with or without commas
-      "expires_on",        // YYYY-MM-DD (optional)
-      "note",              // optional
-    ];
-    const sample = [
-      "Mozzarella",
-      "5,000",
-      "g",
-      "35.00",
-      "2025-09-30",
-      "invoice #123",
-    ];
-    const csv = [header.join(","), sample.join(",")].join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  React.useEffect(() => {
+    if (!banner) return;
+    const t = setTimeout(() => setBanner(null), 8000); // keep for 8s
+    return () => clearTimeout(t);
+  }, [banner]);
+
+  async function downloadTemplate() {
+    const rows = [
+      TEMPLATE_HEADERS.join(","),
+      [
+        "Blue cheese dressing",
+        "",
+        "6000",
+        "ml",
+        "60.00",
+        "2025-08-31",
+        "batch A",
+      ].join(","),
+    ].join("\n");
+
+    const blob = new Blob([rows], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "purchase-receipts-template.csv";
+    a.download = "purchase_template.csv";
     a.click();
     URL.revokeObjectURL(url);
-  }
-
-  const toNumber = (v: unknown) => {
-    const s = String(v ?? "").trim().replace(/,/g, "");
-    if (!s) return NaN;
-    const n = Number(s);
-    return Number.isFinite(n) ? n : NaN;
-  };
-
-  function parseCsv(text: string) {
-    const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
-    if (lines.length <= 1) return { rows: [] as any[], errors: [] as string[] };
-
-    const header = lines[0].split(",").map((s) => s.trim().toLowerCase());
-    const idx = (k: string) => header.indexOf(k);
-    const need = ["item_name", "qty", "unit", "total_cost_usd"];
-    const errors: string[] = [];
-
-    for (const col of need) {
-      if (idx(col) === -1) errors.push(`Missing column: ${col}`);
-    }
-    if (errors.length) return { rows: [], errors };
-
-    const rows: any[] = [];
-    for (let i = 1; i < lines.length; i++) {
-      const line = lines[i];
-      if (!line.trim()) continue;
-
-      const parts = line.split(",");
-      const rowNum = i + 1;
-
-      const item_name = (parts[idx("item_name")] ?? "").trim();
-      const unit = (parts[idx("unit")] ?? "").trim();
-      const qty_base = toNumber(parts[idx("qty")]);
-      const total_cost_usd = toNumber(parts[idx("total_cost_usd")]);
-      const expires_on = (parts[idx("expires_on")] ?? "").trim();
-      const note = (parts[idx("note")] ?? "").trim();
-
-      if (!item_name) errors.push(`Row ${rowNum}: item_name is required`);
-      if (!unit) errors.push(`Row ${rowNum}: unit is required`);
-      if (!Number.isFinite(qty_base) || qty_base <= 0)
-        errors.push(`Row ${rowNum}: qty must be a positive number`);
-      if (!Number.isFinite(total_cost_usd) || total_cost_usd < 0)
-        errors.push(`Row ${rowNum}: total_cost_usd must be ≥ 0`);
-
-      rows.push({ item_name, unit, qty_base, total_cost_usd, expires_on, note });
-    }
-
-    return { rows, errors };
   }
 
   async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
-
     try {
       setBusy(true);
-      setMsg(null);
-
       const text = await f.text();
-      const { rows, errors } = parseCsv(text);
-
-      if (errors.length) {
-        setMsg({
-          kind: "err",
-          text:
-            "CSV has issues:\n" +
-            errors.slice(0, 5).join("; ") +
-            (errors.length > 5 ? ` …(+${errors.length - 5} more)` : ""),
-        });
-        return;
-      }
+      const rows = parseCsv(text);
       if (rows.length === 0) {
-        setMsg({ kind: "err", text: "No rows found in file." });
+        setBanner({ kind: "err", msg: "No rows found in CSV." });
         return;
       }
 
       const res = await fetch("/inventory/receipts/import", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ rows }),
       });
 
+      const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const t = await safeText(res);
-        setMsg({ kind: "err", text: `Upload failed (${res.status}): ${t}` });
+        setBanner({
+          kind: "err",
+          msg:
+            payload?.error ??
+            `Upload failed (${res.status}). Please fix CSV and retry.`,
+        });
         return;
       }
 
-      let inserted: number | undefined = undefined;
-      try {
-        const j = await res.json();
-        if (typeof j?.inserted === "number") inserted = j.inserted;
-      } catch {
-        /* ignore non-JSON response */
-      }
-
-      setMsg({
+      const warn = payload?.warnings?.length
+        ? ` (${payload.warnings.length} warnings)`
+        : "";
+      setBanner({
         kind: "ok",
-        text: inserted != null ? `Uploaded ${inserted} receipts.` : "Upload successful.",
+        msg: `Uploaded ${payload?.inserted ?? rows.length} rows${warn}.`,
       });
 
-      // optional redirect so user still sees the banner; they can dismiss sooner
+      // optional: refresh the page numbers behind the modal
       setTimeout(() => {
-        if (redirectTo) window.location.assign(redirectTo);
-      }, 1200);
+        window.location.assign(redirectTo);
+      }, 500);
     } catch (err: any) {
-      setMsg({ kind: "err", text: err?.message ?? "Upload failed." });
+      setBanner({ kind: "err", msg: err?.message ?? "Upload failed." });
     } finally {
       setBusy(false);
-      e.currentTarget.value = ""; // allow re-selecting same file
+      e.target.value = "";
     }
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={downloadTemplate}
-          className="px-4 py-2 rounded-md border text-sm hover:bg-neutral-900"
-        >
-          Download template
-        </button>
+    <div className="flex gap-3 items-center">
+      <button
+        type="button"
+        className="px-4 py-2 rounded border hover:bg-neutral-900"
+        onClick={downloadTemplate}
+        disabled={busy}
+      >
+        Download template
+      </button>
 
-        <label className="px-4 py-2 rounded-md border text-sm hover:bg-neutral-900 cursor-pointer">
-          <input type="file" className="hidden" accept=".csv,text/csv" onChange={onUpload} disabled={busy} />
-          {busy ? "Uploading…" : "Upload CSV"}
-        </label>
-      </div>
+      <label className="px-4 py-2 rounded border hover:bg-neutral-900 cursor-pointer">
+        <input
+          type="file"
+          accept=".csv,text/csv"
+          className="hidden"
+          onChange={onUpload}
+          disabled={busy}
+        />
+        Upload CSV
+      </label>
 
-      {msg && (
-        <Notice
-          kind={msg.kind}
-          onClose={() => setMsg(null)}
-          // keep it around; user dismisses explicitly
+      {banner && (
+        <div
+          className={`ml-2 px-3 py-2 rounded text-sm ${
+            banner.kind === "ok" ? "bg-green-900/40" : "bg-red-900/40"
+          }`}
         >
-          <pre className="whitespace-pre-wrap">{msg.text}</pre>
-        </Notice>
+          <span>{banner.msg}</span>
+          <button
+            className="ml-2 opacity-70 hover:opacity-100"
+            onClick={() => setBanner(null)}
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
       )}
     </div>
   );
-}
-
-async function safeText(res: Response) {
-  try {
-    return await res.text();
-  } catch {
-    return "";
-  }
 }
