@@ -197,7 +197,8 @@ export default function NewReceiptForm({ items }: { items: ItemOpt[] }) {
 
       {/* CSV helper (download template + upload) */}
       <div className="pt-4">
-        <ReceiptCsvTools redirectTo="/inventory" />
+        <ReceiptCsvTools autoHideMs={15000} />
+
       </div>
 
       {error && <div className="text-red-400 text-sm">{error}</div>}
