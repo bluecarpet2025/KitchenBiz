@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "allowJs": false,
@@ -10,23 +14,39 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-
     // --- paths/alias for "@/..." -> "src/..."
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": [
+        "src/*"
+      ]
     },
-
     // TS strictness: keep useful checks but quiet noisy implicit-any in event handlers
     "strict": true,
     "noImplicitAny": false,
-
     // Next.js recommended
     "resolveJsonModule": true,
     "isolatedModules": true,
     "incremental": true,
-    "types": ["node", "react", "react-dom"]
+    "types": [
+      "node",
+      "react",
+      "react-dom"
+    ],
+    "noEmit": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ]
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],
-  "exclude": ["node_modules"]
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "next-env.d.ts",
+    ".next/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
 }
