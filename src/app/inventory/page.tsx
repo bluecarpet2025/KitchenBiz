@@ -6,16 +6,21 @@ import { fmtQty } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-type Row = {
+type Item = {
   id: string;
   name: string;
   base_unit: string | null;
   purchase_unit: string | null;
   pack_to_base_factor: number | null;
-  on_hand_base: number | null;       // quantity to format
-  avg_unit_cost: number | null;      // $/base
-  on_hand_value_usd: number | null;  // value on hand
-  expires_soon: string | null;       // ISO date string (nearest)
+};
+
+type Onhand = { item_id: string; qty_on_hand_base: number | null };
+
+type ReceiptRow = {
+  item_id: string;
+  total_cost_usd: number | null;
+  qty_base: number | null;
+  expires_on: string | null;
 };
 
 export default async function InventoryLanding() {
@@ -34,7 +39,10 @@ export default async function InventoryLanding() {
   }
 
   const { data: prof } = await supabase
-    .from("profiles").select("tenant_id").eq("id", user.id).maybeSingle();
+    .from("profiles")
+    .select("tenant_id")
+    .eq("id", user.id)
+    .maybeSingle();
 
   const tenantId = prof?.tenant_id ?? null;
   if (!tenantId) {
@@ -46,24 +54,80 @@ export default async function InventoryLanding() {
     );
   }
 
-  // Pull the rows used by the dashboard table (whatever view/table you already use)
-  // This matches the columns we show. If your source is different, keep the SELECT
-  // you already have — just ensure these field names line up with Row.
-  const { data: rowsRaw } = await supabase
-    .from("v_inventory_dashboard") // <- use your existing source
-    .select(
-      "id,name,base_unit,purchase_unit,pack_to_base_factor,on_hand_base,avg_unit_cost,on_hand_value_usd,expires_soon"
-    )
+  // 1) Items
+  const { data: itemsRaw, error: itemsErr } = await supabase
+    .from("inventory_items")
+    .select("id,name,base_unit,purchase_unit,pack_to_base_factor")
     .eq("tenant_id", tenantId)
     .order("name");
+  if (itemsErr) throw itemsErr;
+  const items = (itemsRaw ?? []) as Item[];
 
-  const rows = (rowsRaw ?? []) as Row[];
+  // 2) On-hand (from existing view)
+  const { data: onhandsRaw } = await supabase
+    .from("v_inventory_on_hand")
+    .select("item_id, qty_on_hand_base")
+    .eq("tenant_id", tenantId);
+  const onhands = (onhandsRaw ?? []) as Onhand[];
+  const onhandMap = new Map(onhands.map(o => [o.item_id, Number(o.qty_on_hand_base || 0)]));
 
-  // Header KPIs
+  // 3) Receipts (compute avg $/base + nearest expiry in code; no `.group()` calls)
+  const { data: rcptsRaw } = await supabase
+    .from("inventory_receipts")
+    .select("item_id,total_cost_usd,qty_base,expires_on")
+    .eq("tenant_id", tenantId);
+  const rcpts = (rcptsRaw ?? []) as ReceiptRow[];
+
+  // Reduce to per-item totals and earliest expiry
+  const totals = new Map<string, { cost: number; qty: number }>();
+  const expMap = new Map<string, string | null>();
+
+  for (const r of rcpts) {
+    const id = r.item_id;
+    const cost = Number(r.total_cost_usd || 0);
+    const qty = Number(r.qty_base || 0);
+
+    const prev = totals.get(id) ?? { cost: 0, qty: 0 };
+    prev.cost += cost;
+    prev.qty += qty;
+    totals.set(id, prev);
+
+    if (r.expires_on) {
+      const prevDate = expMap.get(id);
+      if (!prevDate || new Date(r.expires_on) < new Date(prevDate)) {
+        expMap.set(id, r.expires_on);
+      }
+    } else if (!expMap.has(id)) {
+      expMap.set(id, null);
+    }
+  }
+
+  const avgMap = new Map<string, number>();
+  totals.forEach((v, id) => {
+    const avg = v.qty > 0 ? v.cost / v.qty : 0;
+    avgMap.set(id, avg);
+  });
+
+  // Build rows
+  const rows = items.map(i => {
+    const on = onhandMap.get(i.id) ?? 0;
+    const avg = avgMap.get(i.id) ?? 0;
+    const value = on * avg;
+    const expiresSoon = expMap.get(i.id) ?? null;
+    return {
+      ...i,
+      on_hand_base: on,
+      avg_unit_cost: avg,
+      on_hand_value_usd: value,
+      expires_soon: expiresSoon,
+    };
+  });
+
+  // KPIs
   const itemsCount = rows.length;
   const totalValue = rows.reduce((s, r) => s + Number(r.on_hand_value_usd || 0), 0);
   const nearestExpiry = rows
-    .map(r => r.expires_soon ? new Date(r.expires_soon) : null)
+    .map(r => (r.expires_soon ? new Date(r.expires_soon) : null))
     .filter((d): d is Date => !!d)
     .sort((a, b) => a.getTime() - b.getTime())[0];
 
@@ -80,7 +144,6 @@ export default async function InventoryLanding() {
         </div>
       </div>
 
-      {/* KPIs */}
       <div className="grid md:grid-cols-3 gap-4">
         <div className="border rounded p-3">
           <div className="text-xs uppercase opacity-70">Items</div>
@@ -92,9 +155,7 @@ export default async function InventoryLanding() {
         </div>
         <div className="border rounded p-3">
           <div className="text-xs uppercase opacity-70">Nearest expiry</div>
-          <div className="text-xl font-semibold">
-            {nearestExpiry ? nearestExpiry.toLocaleDateString() : "—"}
-          </div>
+          <div className="text-xl font-semibold">{nearestExpiry ? nearestExpiry.toLocaleDateString() : "—"}</div>
         </div>
       </div>
 
@@ -129,15 +190,9 @@ export default async function InventoryLanding() {
                     ? Number(r.pack_to_base_factor).toLocaleString()
                     : "—"}
                 </td>
-                <td className="p-2 text-right tabular-nums">
-                  {fmtQty(r.on_hand_base)}
-                </td>
-                <td className="p-2 text-right tabular-nums">
-                  {fmtUSD(Number(r.avg_unit_cost || 0))}
-                </td>
-                <td className="p-2 text-right tabular-nums">
-                  {fmtUSD(Number(r.on_hand_value_usd || 0))}
-                </td>
+                <td className="p-2 text-right tabular-nums">{fmtQty(r.on_hand_base)}</td>
+                <td className="p-2 text-right tabular-nums">{fmtUSD(Number(r.avg_unit_cost || 0))}</td>
+                <td className="p-2 text-right tabular-nums">{fmtUSD(Number(r.on_hand_value_usd || 0))}</td>
                 <td className="p-2 text-right">
                   {r.expires_soon ? new Date(r.expires_soon).toLocaleDateString() : "—"}
                 </td>
