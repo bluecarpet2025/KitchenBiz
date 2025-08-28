@@ -2,8 +2,6 @@
 
 import * as React from "react";
 
-type Props = { redirectTo?: string };
-
 type Row = {
   item_name: string;
   sku?: string | null;
@@ -12,6 +10,11 @@ type Row = {
   total_cost_usd: number;
   expires_on?: string | null;
   note?: string | null;
+};
+
+type Props = {
+  /** How long to auto-hide the banner (ms). Set 0 to never auto-hide. */
+  autoHideMs?: number;
 };
 
 const TEMPLATE_HEADERS = [
@@ -25,15 +28,12 @@ const TEMPLATE_HEADERS = [
 ];
 
 function excelSerialToISO(v: number): string {
-  // Excel serial dates are days since 1899-12-30
-  const base = new Date(Date.UTC(1899, 11, 30));
+  const base = new Date(Date.UTC(1899, 11, 30)); // Excel epoch
   const d = new Date(base.getTime() + v * 86400000);
-  // yyyy-mm-dd
   return d.toISOString().slice(0, 10);
 }
 
 function toNumberLoose(x: unknown): number {
-  // Trim, strip commas and spaces; turn into number
   const s = String(x ?? "").trim().replace(/,/g, "");
   if (!s) return NaN;
   const n = Number(s);
@@ -61,16 +61,14 @@ function parseCsv(text: string): Row[] {
     note: header.findIndex((h) => h.startsWith("note")),
   };
 
-  for (const [k, v] of Object.entries(idx)) {
-    if (["item_name", "qty", "unit", "total_cost_usd"].includes(k) && v < 0) {
-      throw new Error(`Missing required column: ${k}`);
-    }
+  for (const k of ["item_name", "qty", "unit", "total_cost_usd"] as const) {
+    // @ts-ignore
+    if (idx[k] < 0) throw new Error(`Missing required column: ${k}`);
   }
 
   const out: Row[] = [];
   for (let i = 1; i < lines.length; i++) {
     const parts = lines[i].split(",").map((s) => s.trim());
-
     const name = parts[idx.item_name]?.trim();
     if (!name) continue;
 
@@ -107,18 +105,18 @@ function parseCsv(text: string): Row[] {
   return out;
 }
 
-export default function ReceiptCsvTools({ redirectTo = "/inventory" }: Props) {
+export default function ReceiptCsvTools({ autoHideMs = 15000 }: Props) {
   const [busy, setBusy] = React.useState(false);
-  const [banner, setBanner] = React.useState<{
-    kind: "ok" | "err";
-    msg: string;
-  } | null>(null);
+  const [banner, setBanner] = React.useState<
+    | null
+    | { kind: "ok" | "err"; msg: string; details?: string | null | undefined }
+  >(null);
 
   React.useEffect(() => {
-    if (!banner) return;
-    const t = setTimeout(() => setBanner(null), 8000); // keep for 8s
+    if (!banner || autoHideMs <= 0) return;
+    const t = setTimeout(() => setBanner(null), autoHideMs);
     return () => clearTimeout(t);
-  }, [banner]);
+  }, [banner, autoHideMs]);
 
   async function downloadTemplate() {
     const rows = [
@@ -167,23 +165,21 @@ export default function ReceiptCsvTools({ redirectTo = "/inventory" }: Props) {
           kind: "err",
           msg:
             payload?.error ??
-            `Upload failed (${res.status}). Please fix CSV and retry.`,
+            `Upload failed (${res.status}). Please fix the CSV and try again.`,
         });
         return;
       }
 
       const warn = payload?.warnings?.length
-        ? ` (${payload.warnings.length} warnings)`
+        ? ` (${payload.warnings.length} warning${payload.warnings.length > 1 ? "s" : ""})`
         : "";
       setBanner({
         kind: "ok",
-        msg: `Uploaded ${payload?.inserted ?? rows.length} rows${warn}.`,
+        msg: `Uploaded ${payload?.inserted ?? rows.length} row(s)${warn}.`,
       });
 
-      // optional: refresh the page numbers behind the modal
-      setTimeout(() => {
-        window.location.assign(redirectTo);
-      }, 500);
+      // IMPORTANT: Stay on this page. No redirect.
+      // If you want to refresh any data on this page, you can add a lightweight client refresh here.
     } catch (err: any) {
       setBanner({ kind: "err", msg: err?.message ?? "Upload failed." });
     } finally {
@@ -216,13 +212,17 @@ export default function ReceiptCsvTools({ redirectTo = "/inventory" }: Props) {
 
       {banner && (
         <div
-          className={`ml-2 px-3 py-2 rounded text-sm ${
+          role="status"
+          className={`ml-2 px-3 py-2 rounded text-sm flex items-center ${
             banner.kind === "ok" ? "bg-green-900/40" : "bg-red-900/40"
           }`}
         >
           <span>{banner.msg}</span>
+          {banner.details && (
+            <span className="ml-2 opacity-80">{banner.details}</span>
+          )}
           <button
-            className="ml-2 opacity-70 hover:opacity-100"
+            className="ml-3 opacity-70 hover:opacity-100"
             onClick={() => setBanner(null)}
             aria-label="Dismiss"
           >
