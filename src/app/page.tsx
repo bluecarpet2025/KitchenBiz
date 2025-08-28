@@ -1,45 +1,70 @@
-export default function Home() {
+import Link from "next/link";
+import SignupForm from "@/components/SignupForm";
+
+export const dynamic = "force-dynamic";
+
+export default function HomePage() {
   return (
-    <main className="max-w-5xl mx-auto p-6 space-y-6">
-      <h1 className="text-3xl font-semibold">Kitchen Biz</h1>
-      <p className="text-sm text-neutral-300">
-        Simple back-of-house for small restaurants: inventory, recipes, and menu costing.
-      </p>
+    <main className="max-w-5xl mx-auto p-6 space-y-10">
+      {/* Hero */}
+      <section className="space-y-3">
+        <h1 className="text-3xl md:text-4xl font-semibold">Kitchen Biz</h1>
+        <p className="text-neutral-300">
+          Lightweight tools for small food businesses: inventory, recipes, and menu costing—simple and fast.
+        </p>
+      </section>
 
-      <div className="grid sm:grid-cols-3 gap-3">
-        <a href="/inventory" className="border rounded-lg p-4 hover:bg-neutral-900 block">
-          <h2 className="font-medium">Inventory →</h2>
-          <p className="text-xs text-neutral-400 mt-1">
-            Track items, purchases, and daily counts. Inline pricing with $/base auto-calc.
-          </p>
-        </a>
-        <a href="/recipes" className="border rounded-lg p-4 hover:bg-neutral-900 block">
-          <h2 className="font-medium">Recipes →</h2>
-          <p className="text-xs text-neutral-400 mt-1">
-            Per-serving costs and “Makeable” based on stock on hand.
-          </p>
-        </a>
-        <a href="/menu" className="border rounded-lg p-4 hover:bg-neutral-900 block">
-          <h2 className="font-medium">Menu →</h2>
-          <p className="text-xs text-neutral-400 mt-1">
-            Build menus, save/load, share read-only links, print.
-          </p>
-        </a>
-      </div>
+      {/* Big buttons */}
+      <section className="grid md:grid-cols-3 gap-3">
+        <CTA href="/inventory" title="Inventory" blurb="Track on-hand, purchases, counts & expirations." />
+        <CTA href="/recipes" title="Recipes" blurb="Cost ingredients & sub-recipes; scale batches." />
+        <CTA href="/menu" title="Menu" blurb="Price items with margin targets & cost visibility." />
+      </section>
 
+      {/* Email opt-in */}
       <section className="space-y-2">
-        <h3 className="text-lg font-medium">Roadmap</h3>
-        <ul className="list-disc ml-6 text-sm text-neutral-300 space-y-1">
-          <li>Prep printable sheet</li>
-          <li>Import templates & Google Sheets sync</li>
-          <li>Staff roles & vendors</li>
-          <li>Polish & empty states</li>
+        <h2 className="text-xl font-semibold">Get early access & share feedback</h2>
+        <p className="text-neutral-300 text-sm">
+          Want to help shape Kitchen Biz? Join our small beta list. We’ll reach out with testing invites and short feedback forms.
+        </p>
+        <SignupForm source="landing" />
+      </section>
+
+      {/* Roadmap */}
+      <section className="space-y-2">
+        <h2 className="text-xl font-semibold">Roadmap</h2>
+        <ul className="list-disc pl-5 space-y-1 text-neutral-300 text-sm">
+          <li><strong>Now:</strong> Inventory & Recipes MVP (counts, receipts, cost & value)</li>
+          <li>Menu item costing & margin targets</li>
+          <li>CSV import/export across modules</li>
+          <li>Multi-location support & roles</li>
+          <li>Help panels on each page (contextual, bite-sized)</li>
         </ul>
       </section>
 
-      <p className="text-sm text-neutral-400">
-        Need a hand? Read the <a href="/help" className="underline">help/FAQ</a>.
-      </p>
+      {/* Footer */}
+      <footer className="pt-6 mt-6 border-t text-sm text-neutral-300">
+        <div className="flex flex-col md:flex-row gap-2 md:items-center md:justify-between">
+          <div>© {new Date().getFullYear()} Kitchen Biz</div>
+          <nav className="flex gap-4">
+            <Link className="underline" href="/privacy">Privacy policy</Link>
+            <Link className="underline" href="/terms">Terms of service</Link>
+            <a className="underline" href="mailto:bluecarpetllc@gmail.com">Contact us</a>
+          </nav>
+        </div>
+      </footer>
     </main>
+  );
+}
+
+function CTA({ href, title, blurb }: { href: string; title: string; blurb: string }) {
+  return (
+    <Link
+      href={href}
+      className="rounded-lg border p-4 hover:bg-neutral-900 transition-colors"
+    >
+      <div className="text-lg font-semibold">{title}</div>
+      <div className="text-sm opacity-80 mt-1">{blurb}</div>
+    </Link>
   );
 }
