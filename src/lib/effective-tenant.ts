@@ -1,34 +1,32 @@
-// src/lib/effective-tenant.ts
+import { DEMO_TENANT_ID } from "@/lib/constants";
 import { createServerClient } from "@/lib/supabase/server";
 
-export async function getEffectiveTenant() {
+type Result = {
+  tenantId: string | null;
+  displayName: string | null;
+};
+
+export async function getEffectiveTenant(): Promise<Result> {
   const supabase = await createServerClient();
-  const { data: auth } = await supabase.auth.getUser();
-  const user = auth?.user ?? null;
 
-  if (!user) {
-    return { user: null, tenantId: null, isDemo: false, profile: null };
-  }
+  // who is logged in?
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { tenantId: null, displayName: null };
 
+  // read the profile row for this user
   const { data: profile } = await supabase
     .from("profiles")
-    .select("tenant_id, display_name, use_demo")
+    .select("tenant_id, use_demo, display_name")
     .eq("id", user.id)
     .maybeSingle();
 
-  if (profile?.use_demo) {
-    const { data: demoT } = await supabase
-      .from("tenants")
-      .select("id")
-      .eq("name", "Pizza Demo (Tester)")
-      .maybeSingle();
-    return { user, tenantId: demoT?.id ?? null, isDemo: true, profile };
-  }
+  if (!profile) return { tenantId: null, displayName: null };
+
+  // If user opted in: always point reads to the demo tenant
+  const tenantId = profile.use_demo ? DEMO_TENANT_ID : profile.tenant_id;
 
   return {
-    user,
-    tenantId: profile?.tenant_id ?? null,
-    isDemo: false,
-    profile,
+    tenantId,
+    displayName: profile.display_name ?? null,
   };
 }

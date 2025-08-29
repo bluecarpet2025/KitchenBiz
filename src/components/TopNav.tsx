@@ -1,50 +1,48 @@
-// src/components/TopNav.tsx
 import Link from "next/link";
+import { getEffectiveTenant } from "@/lib/effective-tenant";
 import { createServerClient } from "@/lib/supabase/server";
+import dynamic from "next/dynamic";
+
+// SignOutButton is a client component
+const SignOutButton = dynamic(() => import("./SignOutButton"), { ssr: false });
 
 export default async function TopNav() {
   const supabase = await createServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
 
-  let label: string | null = null;
-  if (user) {
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("display_name")
-      .eq("id", user.id)
-      .single();
-    label = profile?.display_name?.trim() || user.email || null;
-  }
+  const [{ data: { user } }, effective] = await Promise.all([
+    supabase.auth.getUser(),
+    getEffectiveTenant(),
+  ]);
+
+  const displayName =
+    effective.displayName ??
+    user?.email ??
+    null;
 
   return (
-    <header className="flex items-center justify-between px-4 py-3">
-      <nav className="flex items-center gap-5">
+    <header className="border-b border-neutral-900">
+      <nav className="mx-auto max-w-5xl px-4 py-3 flex items-center gap-3">
         <Link href="/" className="font-semibold">Kitchen Biz</Link>
-        <Link href="/inventory">Inventory</Link>
-        <Link href="/recipes">Recipes</Link>
-        <Link href="/menu">Menu</Link>
-      </nav>
 
-      <div className="flex items-center gap-4">
+        <div className="flex-1" />
+
+        {/* ON THE RIGHT: Help/FAQ (smaller), then user name, then Sign out */}
+        <Link href="/help" className="text-sm text-blue-300 hover:text-blue-200 mr-4">
+          Help / FAQ
+        </Link>
+
+        {displayName && (
+          <span className="text-sm text-neutral-300 mr-3">{displayName}</span>
+        )}
 
         {user ? (
-          <div className="flex items-center gap-3">
-            <span className="text-sm opacity-80">{label}</span>
-            <Link href="/profile" className="text-sm underline">Profile</Link>
-            <Link href="/login?signout=1" className="text-sm underline">Sign out</Link>
-          </div>
+          <SignOutButton />
         ) : (
-          <Link href="/login" className="text-sm underline">
+          <Link href="/login" className="text-sm underline underline-offset-4">
             Log in / Sign up
           </Link>
         )}
-
-        <Link href="/help" className="text-sm text-neutral-300 hover:text-white">
-          Help / FAQ
-        </Link>
-      </div>
+      </nav>
     </header>
   );
 }
