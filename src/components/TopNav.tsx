@@ -28,9 +28,6 @@ export default async function TopNav() {
       </nav>
 
       <div className="flex items-center gap-4">
-        <Link href="/help" className="text-sm text-neutral-300 hover:text-white">
-          Help / FAQ
-        </Link>
 
         {user ? (
           <div className="flex items-center gap-3">
@@ -43,6 +40,10 @@ export default async function TopNav() {
             Log in / Sign up
           </Link>
         )}
+
+        <Link href="/help" className="text-sm text-neutral-300 hover:text-white">
+          Help / FAQ
+        </Link>
       </div>
     </header>
   );
