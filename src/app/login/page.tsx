@@ -1,113 +1,55 @@
-// src/app/login/page.tsx
 "use client";
 
 import { useState } from "react";
-import { createClient } from "@supabase/supabase-js";
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+import Link from "next/link";
+import { createClient } from "@/lib/supabase/browser";
+import SignupForm from "@/components/SignupForm";
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("");
-  const [step, setStep] = useState<"enter" | "verify">("enter");
-  const [code, setCode] = useState("");
-  const [msg, setMsg] = useState<string | null>(null);
-  const redirectTo = typeof window !== "undefined" ? window.location.origin : "";
+  const [busy, setBusy] = useState(false);
 
-  async function sendLinkOrCode() {
-    setMsg(null);
-    // This sends a Magic Link if OTP isn’t enabled; if OTP is enabled in Supabase,
-    // the email will contain a one-time code and/or link depending on your settings.
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: `${redirectTo}/` },
-    });
-    if (error) setMsg(error.message);
-    else {
-      setMsg("Check your email for the link or code.");
-      setStep("verify");
+  async function signInWithGoogle() {
+    setBusy(true);
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          // optional, but nice to have:
+          queryParams: { prompt: "select_account" },
+          redirectTo:
+            typeof window !== "undefined"
+              ? `${window.location.origin}/auth/callback`
+              : undefined,
+        },
+      });
+      if (error) alert(error.message);
+    } finally {
+      setBusy(false);
     }
   }
 
-  async function verifyCode() {
-    setMsg(null);
-    const { error } = await supabase.auth.verifyOtp({
-      email,
-      token: code.trim(),
-      type: "email", // verify email OTP
-    });
-    if (error) setMsg(error.message);
-    else setMsg("Signed in! You can close this tab.");
-  }
-
-  async function signInWithGoogle() {
-    setMsg(null);
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo: `${redirectTo}/` },
-    });
-    if (error) setMsg(error.message);
-  }
-
   return (
-    <main className="max-w-md mx-auto p-6 space-y-6">
-      <h1 className="text-2xl font-semibold">Sign in</h1>
+    <main className="max-w-md mx-auto p-6">
+      <h1 className="text-2xl font-semibold mb-2">Log in / Sign up</h1>
+      <p className="text-neutral-300 mb-6">
+        Use your email (magic link) or continue with Google.
+      </p>
 
-      <div className="space-y-3">
-        <label className="block text-sm">Email</label>
-        <input
-          className="w-full rounded-md bg-neutral-900 border border-neutral-700 px-3 py-2"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="you@example.com"
-        />
+      <button
+        onClick={signInWithGoogle}
+        disabled={busy}
+        className="w-full rounded border px-4 py-2 mb-6 hover:bg-neutral-900 disabled:opacity-60"
+      >
+        {busy ? "Redirecting…" : "Continue with Google"}
+      </button>
 
-        {step === "enter" ? (
-          <button
-            onClick={sendLinkOrCode}
-            className="rounded-md px-4 py-2 bg-neutral-200 text-black"
-          >
-            Send magic link / code
-          </button>
-        ) : (
-          <div className="space-y-3">
-            <label className="block text-sm">6-digit code (if your email shows one)</label>
-            <input
-              className="w-full rounded-md bg-neutral-900 border border-neutral-700 px-3 py-2"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="123456"
-            />
-            <div className="flex gap-2">
-              <button
-                onClick={verifyCode}
-                className="rounded-md px-4 py-2 bg-neutral-200 text-black"
-              >
-                Verify code
-              </button>
-              <button
-                onClick={() => setStep("enter")}
-                className="rounded-md px-3 py-2 border border-neutral-600"
-              >
-                Start over
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
+      {/* Existing email magic-link form */}
+      <SignupForm />
 
-      <div className="border-t border-neutral-800 pt-6">
-        <button
-          onClick={signInWithGoogle}
-          className="rounded-md px-4 py-2 bg-neutral-200 text-black"
-        >
-          Continue with Google
-        </button>
-      </div>
-
-      {msg && <div className="text-sm text-neutral-400">{msg}</div>}
+      <p className="mt-6 text-sm text-neutral-400">
+        <Link href="/">← Back to home</Link>
+      </p>
     </main>
   );
 }
