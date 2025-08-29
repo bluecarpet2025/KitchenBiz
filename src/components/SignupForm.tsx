@@ -1,4 +1,3 @@
-// src/components/SignupForm.tsx
 "use client";
 
 import { useState } from "react";
@@ -17,7 +16,7 @@ export default function SignupForm() {
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: `${location.origin}/`,
+        emailRedirectTo: `${location.origin}/auth/callback`,
       },
     });
     if (error) setMsg(error.message);

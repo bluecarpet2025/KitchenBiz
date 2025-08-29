@@ -1,4 +1,3 @@
-// src/components/GoogleSignIn.tsx
 "use client";
 
 import createClient from "@/lib/supabase/client";
@@ -9,7 +8,6 @@ export default function GoogleSignIn() {
     await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        // keep callback inside your domain; Google “Authorized JS origins” must include it
         redirectTo: `${location.origin}/auth/callback`,
       },
     });
