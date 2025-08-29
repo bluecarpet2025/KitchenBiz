@@ -1,3 +1,4 @@
+// src/components/GoogleSignIn.tsx
 "use client";
 
 import createClient from "@/lib/supabase/client";
@@ -5,24 +6,19 @@ import createClient from "@/lib/supabase/client";
 export default function GoogleSignIn() {
   const signIn = async () => {
     const supabase = createClient();
-    // Send users back to your app to complete the session exchange
-    const redirectTo =
-      typeof window !== "undefined"
-        ? `${window.location.origin}/auth/callback`
-        : undefined;
-
-    const { error } = await supabase.auth.signInWithOAuth({
+    await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo },
+      options: {
+        // keep callback inside your domain; Google “Authorized JS origins” must include it
+        redirectTo: `${location.origin}/auth/callback`,
+      },
     });
-
-    if (error) alert(error.message);
   };
 
   return (
     <button
       onClick={signIn}
-      className="w-full rounded-md border px-4 py-2 hover:bg-neutral-900"
+      className="w-full rounded border px-4 py-3 hover:bg-neutral-900"
     >
       Continue with Google
     </button>
