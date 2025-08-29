@@ -1,7 +1,6 @@
 "use client";
-
 import { useState } from "react";
-import { createBrowserClient } from "@/lib/supabase/client";
+import createClient from "@/lib/supabase/client";
 
 export default function ProfileForm({
   initialName,
@@ -15,55 +14,52 @@ export default function ProfileForm({
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
-  async function save() {
+  const save = async () => {
     setBusy(true);
-    setMsg(null);
-    const supabase = createBrowserClient();
-
+    const supabase = createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      setBusy(false);
-      setMsg("Not signed in.");
-      return;
-    }
-
+    if (!user) { setMsg("Not signed in."); setBusy(false); return; }
     const { error } = await supabase
       .from("profiles")
-      .upsert({ id: user.id, display_name: name.trim(), use_demo: useDemo }, { onConflict: "id" });
-
-    if (error) setMsg(error.message);
-    else setMsg("Saved.");
+      .upsert(
+        { id: user.id, display_name: name.trim(), use_demo: useDemo },
+        { onConflict: "id" }
+      );
     setBusy(false);
-  }
+    setMsg(error ? error.message : "Saved ✓");
+    setTimeout(() => setMsg(null), 4000);
+  };
 
   return (
-    <div className="max-w-xl">
-      {msg && (
-        <div className="mb-3 text-sm rounded-md px-3 py-2 bg-neutral-800 text-neutral-200 flex justify-between">
-          <span>{msg}</span>
-          <button onClick={() => setMsg(null)} className="opacity-70 hover:opacity-100">×</button>
-        </div>
-      )}
+    <form onSubmit={(e)=>{e.preventDefault(); save();}} className="max-w-xl mt-6">
+      {msg && <div className="mb-3 text-sm rounded-md px-3 py-2 bg-neutral-800">{msg}</div>}
+
       <label className="block text-sm mb-1">Display name</label>
       <input
+        className="w-full bg-neutral-900 border border-neutral-700 rounded-md px-3 py-2 mb-4"
         value={name}
-        onChange={(e) => setName(e.target.value)}
+        onChange={(e)=>setName(e.target.value)}
         placeholder="e.g., Mario Rossi"
-        className="w-full rounded-md bg-neutral-900 border border-neutral-700 px-3 py-2"
       />
 
-      <label className="flex items-center gap-2 mt-4">
-        <input type="checkbox" checked={useDemo} onChange={(e) => setUseDemo(e.target.checked)} />
-        Use demo data (read-only)
+      <label className="inline-flex items-center gap-2 mb-4 select-none cursor-pointer">
+        <input
+          type="checkbox"
+          checked={useDemo}
+          onChange={(e)=>setUseDemo(e.target.checked)}
+        />
+        <span>Use demo data (read-only)</span>
       </label>
 
-      <button
-        onClick={save}
-        disabled={busy}
-        className="mt-4 rounded-md bg-neutral-100 text-black px-4 py-2 disabled:opacity-50"
-      >
-        {busy ? "Saving…" : "Save"}
-      </button>
-    </div>
+      <div>
+        <button
+          type="submit"
+          disabled={busy}
+          className="rounded-md px-4 py-2 bg-neutral-900 hover:bg-neutral-800 disabled:opacity-50"
+        >
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </form>
   );
 }
