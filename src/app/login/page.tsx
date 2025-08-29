@@ -5,9 +5,13 @@ import SignupForm from "@/components/SignupForm";
 
 export const dynamic = "force-dynamic";
 
-type Search = { error?: string | string[] };
+type SearchParams = Record<string, string | string[] | undefined>;
 
-export default function LoginPage({ searchParams }: { searchParams?: Search }) {
+export default function LoginPage({
+  searchParams,
+}: {
+  searchParams?: SearchParams;
+}) {
   const raw = Array.isArray(searchParams?.error)
     ? searchParams?.error[0]
     : searchParams?.error;
@@ -36,7 +40,8 @@ export default function LoginPage({ searchParams }: { searchParams?: Search }) {
         <GoogleSignIn />
       </div>
 
-      <div className="mt-6 flex gap-3 max-w-xl">
+      {/* Magic link email form */}
+      <div className="mt-6 max-w-xl">
         <SignupForm />
       </div>
     </main>
