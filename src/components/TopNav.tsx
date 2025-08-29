@@ -1,35 +1,44 @@
-'use client';
+import Link from "next/link";
+import { createServerClient } from "@/lib/supabase/server";
 
-import Link from 'next/link';
-import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
+export default async function TopNav() {
+  const supabase = await createServerClient();
+  const { data: { user } } = await supabase.auth.getUser();
 
-export default function TopNav() {
-  const [email, setEmail] = useState<string | null>(null);
+  let label = "Log in";
+  let profileHref = "/login";
 
-  useEffect(() => {
-    // initial fetch
-    supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? null));
-    // keep it in sync
-    const { data: sub } = supabase.auth.onAuthStateChange((_evt, session) => {
-      setEmail(session?.user?.email ?? null);
-    });
-    return () => sub.subscription.unsubscribe();
-  }, []);
+  if (user) {
+    const { data: prof } = await supabase
+      .from("profiles")
+      .select("display_name, use_demo")
+      .eq("id", user.id)
+      .single();
+
+    label = prof?.display_name || user.email || "Account";
+    profileHref = "/profile";
+  }
 
   return (
-    <header className="border-b border-neutral-800 bg-black/60 backdrop-blur">
-      <nav className="mx-auto max-w-6xl flex items-center justify-between px-4 py-3">
-        <Link href="/" className="font-semibold tracking-tight">Kitchen Biz</Link>
-
+    <header className="border-b border-neutral-800">
+      <div className="max-w-6xl mx-auto flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-6">
-          <Link href="/inventory" className="hover:underline">Inventory</Link>
-          <Link href="/recipes" className="hover:underline">Recipes</Link>
-          <Link href="/menu" className="hover:underline">Menu</Link>
+          <Link href="/" className="font-semibold">Kitchen Biz</Link>
+          <nav className="hidden sm:flex items-center gap-4 text-sm">
+            <Link href="/inventory" className="opacity-90 hover:opacity-100">Inventory</Link>
+            <Link href="/recipes"   className="opacity-90 hover:opacity-100">Recipes</Link>
+            <Link href="/menu"      className="opacity-90 hover:opacity-100">Menu</Link>
+          </nav>
         </div>
 
-        <div className="text-sm opacity-80">{email ?? ''}</div>
-      </nav>
+        <div className="text-right">
+          <div className="text-sm">{label}</div>
+          <div className="text-xs mt-1 flex gap-3 justify-end">
+            <Link href="/help" className="underline opacity-80 hover:opacity-100">Help / FAQ</Link>
+            <Link href={profileHref} className="underline opacity-80 hover:opacity-100">Profile</Link>
+          </div>
+        </div>
+      </div>
     </header>
   );
 }

@@ -1,26 +1,24 @@
 "use client";
 
-import { createClient } from "@/lib/supabase/client";
+import { createBrowserClient } from "@/lib/supabase/client";
 
-export default function GoogleSignIn() {
+export default function GoogleSignIn({
+  className = "w-full rounded border px-4 py-2 hover:bg-neutral-900",
+}: {
+  className?: string;
+}) {
   const signIn = async () => {
-    const supabase = createClient();
-
-    // Start the Google OAuth flow
-    await supabase.auth.signInWithOAuth({
+    const supabase = createBrowserClient();
+    const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      // You can omit redirectTo; Supabase will use the current URL.
-      // If you add an auth callback route later, uncomment the next line:
-      // options: { redirectTo: `${location.origin}/auth/callback` },
+      // If you’ve set “Site URL” in Supabase you can omit redirectTo.
+      // options: { redirectTo: `${window.location.origin}` },
     });
+    if (error) alert(error.message);
   };
 
   return (
-    <button
-      onClick={signIn}
-      className="w-full rounded border px-4 py-2 mb-6 hover:bg-neutral-900"
-      aria-label="Continue with Google"
-    >
+    <button onClick={signIn} className={className}>
       Continue with Google
     </button>
   );
