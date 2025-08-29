@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/browser";
+import { createClient } from "@/lib/supabase/client";
 import SignupForm from "@/components/SignupForm";
 
 export default function LoginPage() {
@@ -15,7 +15,6 @@ export default function LoginPage() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          // optional, but nice to have:
           queryParams: { prompt: "select_account" },
           redirectTo:
             typeof window !== "undefined"
@@ -44,7 +43,6 @@ export default function LoginPage() {
         {busy ? "Redirecting…" : "Continue with Google"}
       </button>
 
-      {/* Existing email magic-link form */}
       <SignupForm />
 
       <p className="mt-6 text-sm text-neutral-400">
