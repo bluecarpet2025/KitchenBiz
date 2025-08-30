@@ -1,41 +1,44 @@
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
-import dynamic from "next/dynamic";
-
-// sign out is a client component
-const SignOutButton = dynamic(() => import("./SignOutButton"), { ssr: false });
+import SignOutButton from "./SignOutButton";
 
 export default async function TopNav() {
   const supabase = await createServerClient();
-  const [{ data: { user } }, { data: profile }] = await Promise.all([
-    supabase.auth.getUser(),
-    supabase.from("profiles").select("display_name").maybeSingle(),
-  ]);
+  const { data: { user } } = await supabase.auth.getUser();
 
-  const displayName = profile?.display_name ?? user?.email ?? null;
+  let displayName: string | null = null;
+  if (user) {
+    const { data: prof } = await supabase
+      .from("profiles")
+      .select("display_name")
+      .eq("id", user.id)
+      .maybeSingle();
+    displayName = (prof?.display_name?.trim()?.length ? prof.display_name : null)
+      ?? (user.email ? user.email.split("@")[0] : null);
+  }
 
   return (
     <header className="border-b border-neutral-900">
       <nav className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
-        {/* Left: brand + sections */}
         <Link href="/" className="font-semibold">Kitchen Biz</Link>
-        <div className="flex-1" />
-        {/* Right side: user, Sign out / Log in, then Help/FAQ in the far corner */}
-        <div className="flex items-center gap-4">
-          {displayName && (
-            <span className="text-sm text-neutral-300">{displayName}</span>
-          )}
+        <Link href="/inventory" className="hover:underline">Inventory</Link>
+        <Link href="/recipes" className="hover:underline">Recipes</Link>
+        <Link href="/menu" className="hover:underline">Menu</Link>
+
+        {/* Right side: user label, then Help all the way in the corner */}
+        <div className="ml-auto flex items-center gap-4">
           {user ? (
-            <SignOutButton />
+            <>
+              <Link href="/profile" className="text-sm">{displayName}</Link>
+              <SignOutButton />
+            </>
           ) : (
             <Link href="/login" className="text-sm underline underline-offset-4">
               Log in / Sign up
             </Link>
           )}
-          <Link
-            href="/help"
-            className="text-sm opacity-80 hover:opacity-100 ml-2"
-          >
+
+          <Link href="/help" className="text-xs text-blue-300 hover:text-blue-200">
             Help / FAQ
           </Link>
         </div>
