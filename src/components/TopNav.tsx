@@ -1,10 +1,14 @@
+// src/components/TopNav.tsx
+export const dynamic = "force-dynamic";
+
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
-import SignOutButton from "./SignOutButton";
 
 export default async function TopNav() {
   const supabase = await createServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   let displayName: string | null = null;
   if (user) {
@@ -13,34 +17,30 @@ export default async function TopNav() {
       .select("display_name")
       .eq("id", user.id)
       .maybeSingle();
-    displayName = (prof?.display_name?.trim()?.length ? prof.display_name : null)
-      ?? (user.email ? user.email.split("@")[0] : null);
+    displayName = prof?.display_name ?? user.email ?? null;
   }
 
   return (
-    <header className="border-b border-neutral-900">
-      <nav className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
-        <Link href="/" className="font-semibold">Kitchen Biz</Link>
-        <Link href="/inventory" className="hover:underline">Inventory</Link>
-        <Link href="/recipes" className="hover:underline">Recipes</Link>
-        <Link href="/menu" className="hover:underline">Menu</Link>
+    <header className="border-b border-neutral-900/60">
+      <nav className="max-w-6xl mx-auto flex items-center justify-between gap-4 px-4 py-3">
+        {/* Left: brand + sections */}
+        <div className="flex items-center gap-6">
+          <Link href="/" className="font-semibold">Kitchen Biz</Link>
+          <Link href="/inventory" className="hover:underline">Inventory</Link>
+          <Link href="/recipes" className="hover:underline">Recipes</Link>
+          <Link href="/menu" className="hover:underline">Menu</Link>
+        </div>
 
-        {/* Right side: user label, then Help all the way in the corner */}
-        <div className="ml-auto flex items-center gap-4">
-          {user ? (
-            <>
-              <Link href="/profile" className="text-sm">{displayName}</Link>
-              <SignOutButton />
-            </>
+        {/* Right: user first, then Help / FAQ (swapped order) */}
+        <div className="flex items-center gap-4">
+          {displayName ? (
+            <span className="text-sm text-neutral-200">{displayName}</span>
           ) : (
-            <Link href="/login" className="text-sm underline underline-offset-4">
+            <Link href="/login" className="text-sm underline">
               Log in / Sign up
             </Link>
           )}
-
-          <Link href="/help" className="text-xs text-blue-300 hover:text-blue-200">
-            Help / FAQ
-          </Link>
+          <Link href="/help" className="text-sm hover:underline">Help / FAQ</Link>
         </div>
       </nav>
     </header>
