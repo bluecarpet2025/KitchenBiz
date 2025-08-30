@@ -1,20 +1,26 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { createBrowserClient } from "@/lib/supabase/client";
+import { useTransition } from "react";
+import createBrowserClient from "@/lib/supabase/client";
 
 export default function SignOutButton() {
-  const router = useRouter();
+  const [pending, start] = useTransition();
 
-  const signOut = async () => {
+  async function doSignOut() {
     const supabase = createBrowserClient();
     await supabase.auth.signOut();
-    router.refresh();
-  };
+    // Hard reload so the server-side session/header updates immediately
+    window.location.href = "/";
+  }
 
   return (
-    <button onClick={signOut} className="text-sm underline underline-offset-4">
-      Sign out
+    <button
+      onClick={() => start(doSignOut)}
+      className="text-sm rounded border px-3 py-1 hover:bg-neutral-900 disabled:opacity-50"
+      disabled={pending}
+      aria-label="Sign out"
+    >
+      {pending ? "Signing out…" : "Sign out"}
     </button>
   );
 }
