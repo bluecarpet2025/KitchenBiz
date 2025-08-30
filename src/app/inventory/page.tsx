@@ -37,7 +37,7 @@ export default async function InventoryLanding() {
     );
   }
 
-  // 🔵 only change: use effective tenant (demo or own)
+  // ✅ Use demo tenant when opted-in, otherwise the user’s own tenant
   const tenantId = await getEffectiveTenant(supabase);
   if (!tenantId) {
     return (
@@ -57,7 +57,7 @@ export default async function InventoryLanding() {
   if (itemsErr) throw itemsErr;
   const items = (itemsRaw ?? []) as Item[];
 
-  // 2) On-hand (from existing view)
+  // 2) On-hand (from view)
   const { data: onhandsRaw } = await supabase
     .from("v_inventory_on_hand")
     .select("item_id, qty_on_hand_base")
@@ -65,7 +65,7 @@ export default async function InventoryLanding() {
   const onhands = (onhandsRaw ?? []) as Onhand[];
   const onhandMap = new Map(onhands.map(o => [o.item_id, Number(o.qty_on_hand_base || 0)]));
 
-  // 3) Receipts (compute avg $/base + nearest expiry in code)
+  // 3) Receipts (for avg $/base & earliest expiry)
   const { data: rcptsRaw } = await supabase
     .from("inventory_receipts")
     .select("item_id,total_cost_usd,qty_base,expires_on")
@@ -74,15 +74,14 @@ export default async function InventoryLanding() {
 
   const totals = new Map<string, { cost: number; qty: number }>();
   const expMap = new Map<string, string | null>();
-
   for (const r of rcpts) {
     const id = r.item_id;
     const cost = Number(r.total_cost_usd || 0);
     const qty = Number(r.qty_base || 0);
     const prev = totals.get(id) ?? { cost: 0, qty: 0 };
-    prev.cost += cost; prev.qty += qty;
+    prev.cost += cost;
+    prev.qty += qty;
     totals.set(id, prev);
-
     if (r.expires_on) {
       const prevDate = expMap.get(id);
       if (!prevDate || new Date(r.expires_on) < new Date(prevDate)) {

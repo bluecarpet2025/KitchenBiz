@@ -18,7 +18,7 @@ type IngredientRow = {
   recipe_id: string;
   item_id: string | null;
   sub_recipe_id: string | null;
-  qty: number | null;
+  qty: number | null;   // quantity per ONE portion of the parent recipe
   unit: string | null;
 };
 
@@ -42,9 +42,7 @@ function buildRequirementsIndex(
   const MAX_DEPTH = 32;
 
   function addInto(dst: Record<string, number>, src: Record<string, number>, multiplier = 1) {
-    for (const [k, v] of Object.entries(src)) {
-      dst[k] = (dst[k] ?? 0) + v * multiplier;
-    }
+    for (const [k, v] of Object.entries(src)) dst[k] = (dst[k] ?? 0) + v * multiplier;
   }
 
   function dfs(recipeId: string, depth = 0): Record<string, number> {
@@ -97,7 +95,7 @@ export default async function RecipesPage() {
     );
   }
 
-  // 🔵 only change: use effective tenant
+  // ✅ Use demo tenant when opted-in
   const tenantId = await getEffectiveTenant(supabase);
   if (!tenantId) {
     return (
@@ -127,7 +125,6 @@ export default async function RecipesPage() {
     ingredients = (ingRaw ?? []) as IngredientRow[];
   }
 
-  // On hand (new view)
   const onhandMap = new Map<string, number>();
   let onHandRows = 0;
   try {
@@ -140,16 +137,19 @@ export default async function RecipesPage() {
       onhandMap.set(r.item_id as string, Number(r.qty_on_hand_base ?? 0));
     });
     onHandRows = (ohNew ?? []).length;
-  } catch {
-    const { data: ohOld } = await supabase
+  } catch (_e) {
+    const { data: ohOld, error: ohOldErr } = await supabase
       .from("v_item_on_hand")
       .select("item_id,on_hand_base")
       .eq("tenant_id", tenantId);
+    if (ohOldErr) throw ohOldErr;
     (ohOld ?? []).forEach((r: any) => {
       onhandMap.set(r.item_id as string, Number(r.on_hand_base ?? 0));
     });
     onHandRows = (ohOld ?? []).length;
   }
+
+  const onHandEmpty = onHandRows === 0;
 
   const linesByRecipe = indexIngredients(ingredients);
   const reqIndex = buildRequirementsIndex(recipes, linesByRecipe);
@@ -181,8 +181,6 @@ export default async function RecipesPage() {
       makeable,
     };
   });
-
-  const onHandEmpty = onHandRows === 0;
 
   return (
     <main className="max-w-5xl mx-auto p-6">
@@ -225,7 +223,9 @@ export default async function RecipesPage() {
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={4} className="p-3 text-neutral-400">No recipes yet.</td>
+                <td colSpan={4} className="p-3 text-neutral-400">
+                  No recipes yet.
+                </td>
               </tr>
             )}
           </tbody>
