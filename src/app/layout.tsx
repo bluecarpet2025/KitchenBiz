@@ -2,6 +2,8 @@
 import "./globals.css";
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
+import TopNav from "@/components/TopNav";
+
 
 export const metadata = {
   title: "Kitchen Biz",

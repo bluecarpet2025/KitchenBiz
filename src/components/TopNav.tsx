@@ -31,7 +31,7 @@ export default async function TopNav() {
           <Link href="/menu" className="hover:underline">Menu</Link>
         </div>
 
-        {/* Right: user first, then Help / FAQ (swapped order) */}
+        {/* Right: user first, then Help / FAQ */}
         <div className="flex items-center gap-4">
           {displayName ? (
             <span className="text-sm text-neutral-200">{displayName}</span>
