@@ -1,6 +1,8 @@
+// src/app/recipes/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { getEffectiveTenant } from "@/lib/effective-tenant";
+
 export const dynamic = "force-dynamic";
 
 type RecipeRow = {
@@ -19,17 +21,6 @@ type IngredientRow = {
   qty: number | null;
   unit: string | null;
 };
-
-async function getTenant(supabase: Awaited<ReturnType<typeof createServerClient>>) {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return { user: null, tenantId: null };
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("tenant_id")
-    .eq("id", user.id)
-    .single();
-  return { user, tenantId: profile?.tenant_id ?? null };
-}
 
 function indexIngredients(lines: IngredientRow[]) {
   const map = new Map<string, IngredientRow[]>();
@@ -70,7 +61,6 @@ function buildRequirementsIndex(
     for (const line of parts) {
       const qty = Number(line.qty ?? 0);
       if (!qty || qty <= 0) continue;
-
       if (line.item_id) {
         const itemId = String(line.item_id);
         out[itemId] = (out[itemId] ?? 0) + qty;
@@ -83,9 +73,7 @@ function buildRequirementsIndex(
 
     const yieldPct = Number(recipeById.get(recipeId)?.yield_pct ?? 1) || 1;
     const scale = yieldPct > 0 ? 1 / yieldPct : 1;
-    if (scale !== 1) {
-      for (const k of Object.keys(out)) out[k] *= scale;
-    }
+    if (scale !== 1) for (const k of Object.keys(out)) out[k] *= scale;
 
     memo.set(recipeId, out);
     visiting.delete(recipeId);
@@ -98,14 +86,24 @@ function buildRequirementsIndex(
 
 export default async function RecipesPage() {
   const supabase = await createServerClient();
-  const { user, tenantId } = await getTenant(supabase);
-
-  if (!user || !tenantId) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
     return (
       <main className="max-w-5xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Recipes</h1>
         <p className="mt-4">Sign in required.</p>
         <Link href="/login?redirect=/recipes" className="underline">Go to login</Link>
+      </main>
+    );
+  }
+
+  // 🔵 only change: use effective tenant
+  const tenantId = await getEffectiveTenant(supabase);
+  if (!tenantId) {
+    return (
+      <main className="max-w-5xl mx-auto p-6">
+        <h1 className="text-2xl font-semibold">Recipes</h1>
+        <p className="mt-4">Profile missing tenant.</p>
       </main>
     );
   }
@@ -117,8 +115,8 @@ export default async function RecipesPage() {
     .order("name");
   if (rErr) throw rErr;
   const recipes = (recipesRaw ?? []) as RecipeRow[];
-  const recipeIds = recipes.map(r => r.id);
 
+  const recipeIds = recipes.map(r => r.id);
   let ingredients: IngredientRow[] = [];
   if (recipeIds.length) {
     const { data: ingRaw, error: iErr } = await supabase
@@ -129,6 +127,7 @@ export default async function RecipesPage() {
     ingredients = (ingRaw ?? []) as IngredientRow[];
   }
 
+  // On hand (new view)
   const onhandMap = new Map<string, number>();
   let onHandRows = 0;
   try {
@@ -141,19 +140,17 @@ export default async function RecipesPage() {
       onhandMap.set(r.item_id as string, Number(r.qty_on_hand_base ?? 0));
     });
     onHandRows = (ohNew ?? []).length;
-  } catch (_e) {
-    const { data: ohOld, error: ohOldErr } = await supabase
+  } catch {
+    const { data: ohOld } = await supabase
       .from("v_item_on_hand")
       .select("item_id,on_hand_base")
       .eq("tenant_id", tenantId);
-    if (ohOldErr) throw ohOldErr;
     (ohOld ?? []).forEach((r: any) => {
       onhandMap.set(r.item_id as string, Number(r.on_hand_base ?? 0));
     });
     onHandRows = (ohOld ?? []).length;
   }
 
-  const onHandEmpty = onHandRows === 0;
   const linesByRecipe = indexIngredients(ingredients);
   const reqIndex = buildRequirementsIndex(recipes, linesByRecipe);
 
@@ -161,7 +158,12 @@ export default async function RecipesPage() {
     const req = reqIndex[rec.id] ?? {};
     const itemIds = Object.keys(req);
     if (itemIds.length === 0) {
-      return { id: rec.id, name: rec.name ?? "Untitled", created_at: rec.created_at, makeable: 0 };
+      return {
+        id: rec.id,
+        name: rec.name ?? "Untitled",
+        created_at: rec.created_at,
+        makeable: 0,
+      };
     }
     let minPossible = Infinity;
     for (const itId of itemIds) {
@@ -172,14 +174,24 @@ export default async function RecipesPage() {
       if (possible < minPossible) minPossible = possible;
     }
     const makeable = Number.isFinite(minPossible) ? minPossible : 0;
-    return { id: rec.id, name: rec.name ?? "Untitled", created_at: rec.created_at, makeable };
+    return {
+      id: rec.id,
+      name: rec.name ?? "Untitled",
+      created_at: rec.created_at,
+      makeable,
+    };
   });
+
+  const onHandEmpty = onHandRows === 0;
 
   return (
     <main className="max-w-5xl mx-auto p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Recipes</h1>
-        <Link href="/recipes/new" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
+        <Link
+          href="/recipes/new"
+          className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+        >
           New Recipe
         </Link>
       </div>
@@ -198,10 +210,14 @@ export default async function RecipesPage() {
             {rows.map(r => (
               <tr key={r.id} className="border-t">
                 <td className="p-2">
-                  <Link href={`/recipes/${r.id}`} className="underline">{r.name}</Link>
+                  <Link href={`/recipes/${r.id}`} className="underline">
+                    {r.name}
+                  </Link>
                 </td>
                 <td className="p-2 text-right tabular-nums">{r.makeable}</td>
-                <td className="p-2">{r.created_at ? new Date(r.created_at).toLocaleDateString() : "-"}</td>
+                <td className="p-2">
+                  {r.created_at ? new Date(r.created_at).toLocaleDateString() : "-"}
+                </td>
                 <td className="p-2">
                   <Link href={`/recipes/${r.id}?dup=1`} className="underline">Duplicate</Link>
                 </td>

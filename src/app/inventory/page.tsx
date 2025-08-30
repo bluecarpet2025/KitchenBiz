@@ -1,3 +1,4 @@
+// src/app/inventory/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { fmtUSD } from "@/lib/costing";
@@ -5,6 +6,7 @@ import { fmtQty } from "@/lib/format";
 import { getEffectiveTenant } from "@/lib/effective-tenant";
 
 export const dynamic = "force-dynamic";
+
 type Item = {
   id: string;
   name: string;
@@ -19,10 +21,12 @@ type ReceiptRow = {
   qty_base: number | null;
   expires_on: string | null;
 };
+
 export default async function InventoryLanding() {
   const supabase = await createServerClient();
   const { data: u } = await supabase.auth.getUser();
   const user = u.user ?? null;
+
   if (!user) {
     return (
       <main className="max-w-6xl mx-auto p-6">
@@ -32,12 +36,9 @@ export default async function InventoryLanding() {
       </main>
     );
   }
-  const { data: prof } = await supabase
-    .from("profiles")
-    .select("tenant_id")
-    .eq("id", user.id)
-    .maybeSingle();
-  const tenantId = prof?.tenant_id ?? null;
+
+  // 🔵 only change: use effective tenant (demo or own)
+  const tenantId = await getEffectiveTenant(supabase);
   if (!tenantId) {
     return (
       <main className="max-w-6xl mx-auto p-6">
@@ -46,6 +47,7 @@ export default async function InventoryLanding() {
       </main>
     );
   }
+
   // 1) Items
   const { data: itemsRaw, error: itemsErr } = await supabase
     .from("inventory_items")
@@ -70,17 +72,17 @@ export default async function InventoryLanding() {
     .eq("tenant_id", tenantId);
   const rcpts = (rcptsRaw ?? []) as ReceiptRow[];
 
-  // Reduce to per-item totals and earliest expiry
   const totals = new Map<string, { cost: number; qty: number }>();
   const expMap = new Map<string, string | null>();
+
   for (const r of rcpts) {
     const id = r.item_id;
     const cost = Number(r.total_cost_usd || 0);
     const qty = Number(r.qty_base || 0);
     const prev = totals.get(id) ?? { cost: 0, qty: 0 };
-    prev.cost += cost;
-    prev.qty += qty;
+    prev.cost += cost; prev.qty += qty;
     totals.set(id, prev);
+
     if (r.expires_on) {
       const prevDate = expMap.get(id);
       if (!prevDate || new Date(r.expires_on) < new Date(prevDate)) {
@@ -90,13 +92,13 @@ export default async function InventoryLanding() {
       expMap.set(id, null);
     }
   }
+
   const avgMap = new Map<string, number>();
   totals.forEach((v, id) => {
     const avg = v.qty > 0 ? v.cost / v.qty : 0;
     avgMap.set(id, avg);
   });
 
-  // Build rows
   const rows = items.map(i => {
     const on = onhandMap.get(i.id) ?? 0;
     const avg = avgMap.get(i.id) ?? 0;
@@ -111,7 +113,6 @@ export default async function InventoryLanding() {
     };
   });
 
-  // KPIs
   const itemsCount = rows.length;
   const totalValue = rows.reduce((s, r) => s + Number(r.on_hand_value_usd || 0), 0);
   const nearestExpiry = rows
