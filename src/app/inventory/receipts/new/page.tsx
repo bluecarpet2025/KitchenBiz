@@ -7,12 +7,13 @@ export const dynamic = "force-dynamic";
 type ItemRow = {
   id: string;
   name: string;
-  base_unit: string;
+  base_unit: string | null;
 };
 
 export default async function NewReceiptPage() {
   const supabase = await createServerClient();
 
+  // Auth
   const { data: u } = await supabase.auth.getUser();
   const user = u.user ?? null;
   if (!user) {
@@ -27,6 +28,7 @@ export default async function NewReceiptPage() {
     );
   }
 
+  // Tenant
   const { data: prof } = await supabase
     .from("profiles")
     .select("tenant_id")
@@ -43,11 +45,18 @@ export default async function NewReceiptPage() {
     );
   }
 
-  const { data: items } = await supabase
+  // Items for selector
+  const { data: itemsRaw } = await supabase
     .from("inventory_items")
     .select("id,name,base_unit")
     .eq("tenant_id", tenantId)
     .order("name");
+
+  const items: ItemRow[] = (itemsRaw ?? []).map((r) => ({
+    id: r.id,
+    name: r.name,
+    base_unit: r.base_unit,
+  }));
 
   return (
     <main className="max-w-5xl mx-auto p-6">
@@ -58,13 +67,7 @@ export default async function NewReceiptPage() {
         </Link>
       </div>
 
-      <NewReceiptForm
-        items={(items ?? []).map((r) => ({
-          id: r.id,
-          name: r.name,
-          base_unit: r.base_unit,
-        }))}
-      />
+      <NewReceiptForm items={items} tenantId={tenantId} />
     </main>
   );
 }

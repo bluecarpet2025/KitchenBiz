@@ -1,18 +1,24 @@
 "use client";
 
 import * as React from "react";
-import ReceiptCsvTools from "@/components/ReceiptCsvTools"; // your CSV helper (optional but you already have it)
+import ReceiptCsvTools from "@/components/ReceiptCsvTools";
 import { fmtUSD } from "@/lib/costing";
 
-type ItemOpt = { id: string; name: string; base_unit: string };
+type ItemOpt = { id: string; name: string; base_unit: string | null };
 
 type Line = {
   item_id: string;
-  qty_base: string;     // keep as string while typing
-  unit_cost_total: string; // total cost for this line (USD)
+  qty_base: string;          // keep as string while typing
+  unit_cost_total: string;   // total cost for this line (USD)
 };
 
-export default function NewReceiptForm({ items }: { items: ItemOpt[] }) {
+export default function NewReceiptForm({
+  items,
+  tenantId, // optional for future use (e.g., uploads)
+}: {
+  items: ItemOpt[];
+  tenantId?: string;
+}) {
   const [date, setDate] = React.useState<string>(() => {
     const d = new Date();
     // yyyy-mm-dd for <input type="date">
@@ -50,11 +56,10 @@ export default function NewReceiptForm({ items }: { items: ItemOpt[] }) {
       const payload = lines
         .filter((l) => l.item_id && Number(l.qty_base) > 0)
         .map((l) => ({
-          // route expects these fields for each row
           item_id: l.item_id,
           qty_base: Number(l.qty_base),             // already base units
           total_cost_usd: Number(l.unit_cost_total) || 0,
-          expires_on: null as string | null,        // left blank on the quick form
+          expires_on: null as string | null,        // quick form leaves blank
           note: note || null,
         }));
 
@@ -77,8 +82,8 @@ export default function NewReceiptForm({ items }: { items: ItemOpt[] }) {
         const t = await res.text();
         throw new Error(t || `HTTP ${res.status}`);
       }
+
       setOk(true);
-      // optional: redirect back to Inventory
       window.location.href = "/inventory";
     } catch (err: any) {
       setError(err?.message ?? "Failed to save.");
@@ -195,10 +200,8 @@ export default function NewReceiptForm({ items }: { items: ItemOpt[] }) {
         </button>
       </div>
 
-      {/* CSV helper (download template + upload) */}
       <div className="pt-4">
         <ReceiptCsvTools autoHideMs={15000} />
-
       </div>
 
       {error && <div className="text-red-400 text-sm">{error}</div>}
