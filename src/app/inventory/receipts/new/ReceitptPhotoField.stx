@@ -1,0 +1,69 @@
+"use client";
+
+import * as React from "react";
+import createClient from "@/lib/supabase/client";
+
+export default function ReceiptPhotoField({
+  tenantId,
+  onUploaded,
+}: {
+  tenantId: string;
+  onUploaded: (path: string | null) => void;
+}) {
+  const supabase = createClient();
+  const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
+  const [path, setPath] = React.useState<string | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState<string | null>(null);
+
+  async function handleFile(f: File) {
+    setErr(null);
+    setBusy(true);
+    try {
+      if (!f.type.startsWith("image/")) {
+        throw new Error("Please choose an image.");
+      }
+      const ext =
+        f.type === "image/png" ? "png" :
+        f.type === "image/webp" ? "webp" :
+        "jpg";
+      const key = `${tenantId}/${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2)}.${ext}`;
+
+      const { error } = await supabase
+        .storage
+        .from("receipts")
+        .upload(key, f, { contentType: f.type, cacheControl: "3600", upsert: false });
+
+      if (error) throw error;
+
+      // Build a signed preview URL (bucket is private)
+      const { data: signed, error: signErr } = await supabase
+        .storage
+        .from("receipts")
+        .createSignedUrl(key, 60 * 60); // 1 hour
+
+      if (signErr) throw signErr;
+
+      setPath(key);
+      setPreviewUrl(signed?.signedUrl ?? null);
+      onUploaded(key);
+    } catch (e: any) {
+      setErr(e?.message ?? "Upload failed.");
+      setPath(null);
+      setPreviewUrl(null);
+      onUploaded(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="border rounded p-3">
+      {!previewUrl ? (
+        <label className="block">
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+           

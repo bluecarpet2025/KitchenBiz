@@ -1,13 +1,21 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
 
-type Row = {
+type CsvRow = {
   item_name: string;
   sku?: string | null;
   qty: number;
   unit: string; // base or purchase unit
   total_cost_usd: number;
   expires_on?: string | null; // yyyy-mm-dd
+  note?: string | null;
+};
+
+type QuickRow = {
+  item_id: string;
+  qty_base: number;          // already in base units
+  total_cost_usd: number;
+  expires_on?: string | null;
   note?: string | null;
 };
 
@@ -32,14 +40,77 @@ export async function POST(req: Request) {
   if (pErr || !prof?.tenant_id) return bad("Profile/tenant not found", 401);
   const tenantId = prof.tenant_id as string;
 
+  // payload
   const body = await req.json().catch(() => null);
-  const rows: Row[] = Array.isArray(body?.rows) ? body.rows : [];
-  if (rows.length === 0) return bad("No rows provided");
+  const purchased_at: string | null =
+    typeof body?.purchased_at === "string" ? body.purchased_at : null;
+  const photo_path: string | null =
+    typeof body?.photo_path === "string" ? body.photo_path : null;
+
+  const rowsIn: unknown[] = Array.isArray(body?.rows) ? body.rows : [];
+  if (rowsIn.length === 0) return bad("No rows provided");
 
   const warnings: string[] = [];
   let inserted = 0;
 
-  for (const r of rows) {
+  // Helper to insert a receipt row
+  async function insertRow(partial: {
+    item_id: string;
+    qty_base: number;
+    total_cost_usd: number;
+    expires_on?: string | null;
+    note?: string | null;
+  }) {
+    const { error: rErr } = await supabase.from("inventory_receipts").insert({
+      tenant_id: tenantId,
+      item_id: partial.item_id,
+      qty_base: partial.qty_base,
+      total_cost_usd: partial.total_cost_usd,
+      expires_on: partial.expires_on ?? null,
+      note: partial.note ?? null,
+      purchased_at: purchased_at ?? null,
+      photo_path: photo_path ?? null,
+    });
+
+    if (rErr) return bad(rErr.message);
+    inserted++;
+  }
+
+  for (const raw of rowsIn) {
+    // Path A: quick form (has item_id)
+    if (raw && typeof (raw as any).item_id === "string") {
+      const r = raw as QuickRow;
+      const qty_base = Number(r.qty_base);
+      const cost = Number(r.total_cost_usd);
+
+      if (!r.item_id) return bad("Missing item_id");
+      if (!Number.isFinite(qty_base) || qty_base <= 0)
+        return bad("Invalid qty_base");
+      if (!Number.isFinite(cost) || cost < 0)
+        return bad("Invalid total_cost_usd");
+
+      const { data: exists, error: iErr } = await supabase
+        .from("inventory_items")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .eq("id", r.item_id)
+        .maybeSingle();
+      if (iErr) return bad(iErr.message);
+      if (!exists) return bad("Item not found for this tenant");
+
+      const res = await insertRow({
+        item_id: r.item_id,
+        qty_base,
+        total_cost_usd: cost,
+        expires_on: r.expires_on ?? null,
+        note: r.note ?? null,
+      });
+      if (res) return res; // bubble up bad(...)
+      continue;
+    }
+
+    // Path B: CSV import (your original behavior)
+    const r = raw as CsvRow;
     const name = String(r.item_name ?? "").trim();
     const unit = String(r.unit ?? "").trim().toLowerCase();
     const qty = Number(r.qty);
@@ -52,17 +123,14 @@ export async function POST(req: Request) {
       return bad(`Invalid total_cost_usd for "${name}"`);
     if (!unit) return bad(`Missing unit for "${name}"`);
 
-    // Find item by (tenant, name) and disambiguate by unit (prefer base match), then SKU if provided
+    // Find item by (tenant, name) and disambiguate by unit (prefer base), then SKU if provided
     const { data: candidates, error: iErr } = await supabase
       .from("inventory_items")
-      .select(
-        "id, name, base_unit, purchase_unit, pack_to_base_factor, sku"
-      )
+      .select("id, name, base_unit, purchase_unit, pack_to_base_factor, sku")
       .eq("tenant_id", tenantId)
       .ilike("name", name);
 
     if (iErr) return bad(iErr.message);
-
     if (!candidates || candidates.length === 0) {
       return bad(`Item not found: "${name}"`);
     }
@@ -98,18 +166,15 @@ export async function POST(req: Request) {
 
     const qty_base = qty * factor;
 
-    // Insert receipt → trigger writes a matching inflow transaction
-    const { error: rErr } = await supabase.from("inventory_receipts").insert({
-      tenant_id: tenantId,
+    const res = await insertRow({
       item_id: item.id,
       qty_base,
       total_cost_usd: cost,
       expires_on: r.expires_on ?? null,
       note: r.note ?? null,
     });
+    if (res) return res;
 
-    if (rErr) return bad(rErr.message);
-    inserted++;
     if (candidates.length > 1 && !sku) {
       warnings.push(
         `Multiple items named "${name}"; matched by unit (${unit}). Consider adding SKU in CSV to pin the exact item.`

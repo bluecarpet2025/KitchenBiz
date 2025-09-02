@@ -8,20 +8,19 @@ type ItemOpt = { id: string; name: string; base_unit: string | null };
 
 type Line = {
   item_id: string;
-  qty_base: string;          // keep as string while typing
-  unit_cost_total: string;   // total cost for this line (USD)
+  qty_base: string;
+  unit_cost_total: string;
 };
 
 export default function NewReceiptForm({
   items,
-  tenantId, // optional for future use (e.g., uploads)
+  tenantId,
 }: {
   items: ItemOpt[];
   tenantId?: string;
 }) {
   const [date, setDate] = React.useState<string>(() => {
     const d = new Date();
-    // yyyy-mm-dd for <input type="date">
     return new Date(d.getTime() - d.getTimezoneOffset() * 60000)
       .toISOString()
       .slice(0, 10);
@@ -30,6 +29,11 @@ export default function NewReceiptForm({
   const [lines, setLines] = React.useState<Line[]>([
     { item_id: "", qty_base: "", unit_cost_total: "" },
   ]);
+
+  // New: photo state
+  const [photo, setPhoto] = React.useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = React.useState<string | null>(null);
+
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [ok, setOk] = React.useState(false);
@@ -37,7 +41,6 @@ export default function NewReceiptForm({
   function addLine() {
     setLines((xs) => [...xs, { item_id: "", qty_base: "", unit_cost_total: "" }]);
   }
-
   function setLine(idx: number, patch: Partial<Line>) {
     setLines((xs) => xs.map((x, i) => (i === idx ? { ...x, ...patch } : x)));
   }
@@ -47,34 +50,62 @@ export default function NewReceiptForm({
     return sum + (isFinite(v) ? v : 0);
   }, 0);
 
+  function onPickPhoto(file: File | null) {
+    setPhoto(file);
+    if (photoPreview) URL.revokeObjectURL(photoPreview);
+    setPhotoPreview(file ? URL.createObjectURL(file) : null);
+  }
+
+  async function uploadPhotoIfNeeded(): Promise<string | null> {
+    if (!photo) return null;
+    const fd = new FormData();
+    fd.append("file", photo);
+    const res = await fetch("/api/receipt-upload", {
+      method: "POST",
+      body: fd,
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(t || "Photo upload failed");
+    }
+    const data = await res.json();
+    return data?.path || null;
+  }
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
     setOk(false);
+
     try {
-      const payload = lines
+      const payloadLines = lines
         .filter((l) => l.item_id && Number(l.qty_base) > 0)
         .map((l) => ({
           item_id: l.item_id,
-          qty_base: Number(l.qty_base),             // already base units
+          qty_base: Number(l.qty_base),
           total_cost_usd: Number(l.unit_cost_total) || 0,
-          expires_on: null as string | null,        // quick form leaves blank
+          expires_on: null as string | null,
           note: note || null,
         }));
 
-      if (payload.length === 0) {
+      if (payloadLines.length === 0) {
         setError("Add at least one valid line.");
         setBusy(false);
         return;
       }
 
+      // 1) upload photo if provided
+      const photo_path = await uploadPhotoIfNeeded();
+
+      // 2) save receipt rows
       const res = await fetch("/inventory/receipts/import", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           purchased_at: date,
-          rows: payload,
+          rows: payloadLines,
+          photo_path, // <-- stored on each inserted row
         }),
       });
 
@@ -84,7 +115,7 @@ export default function NewReceiptForm({
       }
 
       setOk(true);
-      window.location.href = "/inventory";
+      window.location.href = "/inventory/receipts";
     } catch (err: any) {
       setError(err?.message ?? "Failed to save.");
     } finally {
@@ -116,6 +147,26 @@ export default function NewReceiptForm({
             onChange={(e) => setNote(e.target.value)}
           />
         </label>
+      </div>
+
+      {/* Receipt photo */}
+      <div className="border rounded p-3">
+        <div className="text-sm mb-2 font-medium">Receipt photo (optional)</div>
+        <input
+          type="file"
+          accept="image/*"
+          onChange={(e) => onPickPhoto(e.target.files?.[0] ?? null)}
+          className="block w-full text-sm"
+        />
+        {photoPreview && (
+          <div className="mt-2">
+            <img
+              src={photoPreview}
+              alt="Preview"
+              className="max-h-48 rounded-md border"
+            />
+          </div>
+        )}
       </div>
 
       <div className="border rounded">
