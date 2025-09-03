@@ -6,6 +6,9 @@ import { revalidatePath } from "next/cache";
 export const runtime = "edge";
 
 async function handleDeleteAction(id: string) {
+   if (!id || typeof id !== "string") {
+    return NextResponse.json({ ok: false, error: "missing_id" }, { status: 400 });
+  }
   const supabase = await createServerClient();
 
   // auth
