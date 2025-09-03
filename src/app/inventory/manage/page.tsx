@@ -1,4 +1,4 @@
-// Server component
+// src/app/inventory/manage/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import DeleteInventoryItemButton from "@/components/DeleteInventoryItemButton";
@@ -18,30 +18,39 @@ type Item = {
 
 async function getTenant() {
   const supabase = await createServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   if (!user) return { supabase, user: null, tenantId: null };
   const { data: prof } = await supabase
-    .from("profiles").select("tenant_id").eq("id", user.id).maybeSingle();
+    .from("profiles")
+    .select("tenant_id")
+    .eq("id", user.id)
+    .maybeSingle();
   return { supabase, user, tenantId: prof?.tenant_id ?? null };
 }
 
 export default async function ManageInventoryPage() {
   const { supabase, user, tenantId } = await getTenant();
-
   if (!user || !tenantId) {
     return (
       <main className="max-w-5xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Manage inventory</h1>
         <p className="mt-4">Sign in required, or tenant not configured.</p>
-        <Link className="underline" href="/inventory">Back to Inventory</Link>
+        <Link className="underline" href="/inventory">
+          Back to Inventory
+        </Link>
       </main>
     );
   }
 
   const { data: items } = await supabase
     .from("inventory_items")
-    .select("id,tenant_id,name,base_unit,purchase_unit,pack_to_base_factor,sku,par_level")
+    .select(
+      "id,tenant_id,name,base_unit,purchase_unit,pack_to_base_factor,sku,par_level"
+    )
     .eq("tenant_id", tenantId)
+    .is("deleted_at", null) // hide soft-deleted
     .order("name");
 
   const rows: Item[] = (items ?? []) as Item[];
@@ -51,10 +60,16 @@ export default async function ManageInventoryPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Manage items</h1>
         <div className="flex gap-2">
-          <Link href="/inventory" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
+          <Link
+            href="/inventory"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
             Back to Inventory
           </Link>
-          <Link href="/inventory/items/new" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
+          <Link
+            href="/inventory/items/new"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
             New item
           </Link>
         </div>
@@ -74,13 +89,15 @@ export default async function ManageInventoryPage() {
             </tr>
           </thead>
           <tbody>
-            {rows.map(r => (
+            {rows.map((r) => (
               <tr key={r.id} className="border-t">
                 <td className="p-2">{r.name}</td>
                 <td className="p-2">{r.base_unit ?? "—"}</td>
                 <td className="p-2">{r.purchase_unit ?? "—"}</td>
                 <td className="p-2 text-right tabular-nums">
-                  {r.pack_to_base_factor == null ? "—" : r.pack_to_base_factor.toLocaleString()}
+                  {r.pack_to_base_factor == null
+                    ? "—"
+                    : r.pack_to_base_factor.toLocaleString()}
                 </td>
                 <td className="p-2">{r.sku ?? "—"}</td>
                 <td className="p-2 text-right">{r.par_level ?? 0}</td>
@@ -92,13 +109,17 @@ export default async function ManageInventoryPage() {
                     >
                       Edit
                     </Link>
-                    <DeleteInventoryItemButton id={r.id} />
+                    <DeleteInventoryItemButton itemId={r.id} />
                   </div>
                 </td>
               </tr>
             ))}
             {rows.length === 0 && (
-              <tr><td className="p-3 text-neutral-400" colSpan={7}>No items yet.</td></tr>
+              <tr>
+                <td className="p-3 text-neutral-400" colSpan={7}>
+                  No items yet.
+                </td>
+              </tr>
             )}
           </tbody>
         </table>

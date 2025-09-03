@@ -4,6 +4,7 @@ import { createServerClient } from "@/lib/supabase/server";
 import { fmtUSD } from "@/lib/costing";
 import { fmtQty } from "@/lib/format";
 import { getEffectiveTenant } from "@/lib/effective-tenant";
+import DeleteInventoryItemButton from "@/components/DeleteInventoryItemButton";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,9 @@ type Item = {
   purchase_unit: string | null;
   pack_to_base_factor: number | null;
 };
+
 type Onhand = { item_id: string; qty_on_hand_base: number | null };
+
 type ReceiptRow = {
   item_id: string;
   total_cost_usd: number | null;
@@ -32,7 +35,9 @@ export default async function InventoryLanding() {
       <main className="max-w-6xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Inventory</h1>
         <p className="mt-4">Sign in required.</p>
-        <Link href="/login?redirect=/inventory" className="underline">Go to login</Link>
+        <Link href="/login?redirect=/inventory" className="underline">
+          Go to login
+        </Link>
       </main>
     );
   }
@@ -48,12 +53,14 @@ export default async function InventoryLanding() {
     );
   }
 
-  // 1) Items
+  // 1) Items (hide soft-deleted)
   const { data: itemsRaw, error: itemsErr } = await supabase
     .from("inventory_items")
     .select("id,name,base_unit,purchase_unit,pack_to_base_factor")
     .eq("tenant_id", tenantId)
+    .is("deleted_at", null)
     .order("name");
+
   if (itemsErr) throw itemsErr;
   const items = (itemsRaw ?? []) as Item[];
 
@@ -62,18 +69,22 @@ export default async function InventoryLanding() {
     .from("v_inventory_on_hand")
     .select("item_id, qty_on_hand_base")
     .eq("tenant_id", tenantId);
+
   const onhands = (onhandsRaw ?? []) as Onhand[];
-  const onhandMap = new Map(onhands.map(o => [o.item_id, Number(o.qty_on_hand_base || 0)]));
+  const onhandMap = new Map(
+    onhands.map((o) => [o.item_id, Number(o.qty_on_hand_base || 0)])
+  );
 
   // 3) Receipts (for avg $/base & earliest expiry)
   const { data: rcptsRaw } = await supabase
     .from("inventory_receipts")
     .select("item_id,total_cost_usd,qty_base,expires_on")
     .eq("tenant_id", tenantId);
-  const rcpts = (rcptsRaw ?? []) as ReceiptRow[];
 
+  const rcpts = (rcptsRaw ?? []) as ReceiptRow[];
   const totals = new Map<string, { cost: number; qty: number }>();
   const expMap = new Map<string, string | null>();
+
   for (const r of rcpts) {
     const id = r.item_id;
     const cost = Number(r.total_cost_usd || 0);
@@ -82,6 +93,7 @@ export default async function InventoryLanding() {
     prev.cost += cost;
     prev.qty += qty;
     totals.set(id, prev);
+
     if (r.expires_on) {
       const prevDate = expMap.get(id);
       if (!prevDate || new Date(r.expires_on) < new Date(prevDate)) {
@@ -98,7 +110,7 @@ export default async function InventoryLanding() {
     avgMap.set(id, avg);
   });
 
-  const rows = items.map(i => {
+  const rows = items.map((i) => {
     const on = onhandMap.get(i.id) ?? 0;
     const avg = avgMap.get(i.id) ?? 0;
     const value = on * avg;
@@ -113,9 +125,12 @@ export default async function InventoryLanding() {
   });
 
   const itemsCount = rows.length;
-  const totalValue = rows.reduce((s, r) => s + Number(r.on_hand_value_usd || 0), 0);
+  const totalValue = rows.reduce(
+    (s, r) => s + Number(r.on_hand_value_usd || 0),
+    0
+  );
   const nearestExpiry = rows
-    .map(r => (r.expires_soon ? new Date(r.expires_soon) : null))
+    .map((r) => (r.expires_soon ? new Date(r.expires_soon) : null))
     .filter((d): d is Date => !!d)
     .sort((a, b) => a.getTime() - b.getTime())[0];
 
@@ -124,32 +139,59 @@ export default async function InventoryLanding() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Inventory</h1>
         <div className="flex gap-2">
-          <Link href="/inventory/counts/new" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">New count</Link>
-          <Link href="/inventory/counts" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Counts history</Link>
-          <Link href="/inventory/manage" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Manage items</Link>
-          <Link href="/inventory/purchase" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Purchase</Link>
-          <Link href="/help/inventory" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Help</Link>
+          <Link
+            href="/inventory/counts/new"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
+            New count
+          </Link>
+          <Link
+            href="/inventory/counts"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
+            Counts history
+          </Link>
+          <Link
+            href="/inventory/manage"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
+            Manage items
+          </Link>
+          <Link
+            href="/inventory/purchase"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
+            Purchase
+          </Link>
+          {/* Removed the broken Help button */}
         </div>
       </div>
 
       <div className="grid md:grid-cols-3 gap-4">
         <div className="border rounded p-3">
           <div className="text-xs uppercase opacity-70">Items</div>
-          <div className="text-xl font-semibold tabular-nums">{itemsCount.toLocaleString()}</div>
+          <div className="text-xl font-semibold tabular-nums">
+            {itemsCount.toLocaleString()}
+          </div>
         </div>
         <div className="border rounded p-3">
           <div className="text-xs uppercase opacity-70">On-hand value</div>
-          <div className="text-xl font-semibold tabular-nums">{fmtUSD(totalValue)}</div>
+          <div className="text-xl font-semibold tabular-nums">
+            {fmtUSD(totalValue)}
+          </div>
         </div>
         <div className="border rounded p-3">
           <div className="text-xs uppercase opacity-70">Nearest expiry</div>
-          <div className="text-xl font-semibold">{nearestExpiry ? nearestExpiry.toLocaleDateString() : "—"}</div>
+          <div className="text-xl font-semibold">
+            {nearestExpiry ? nearestExpiry.toLocaleDateString() : "—"}
+          </div>
         </div>
       </div>
 
       <p className="text-xs opacity-70">
-        Avg cost is calculated from purchases (receipts). Add receipts to update avg cost and on-hand.
-        The “Pack→Base” number is formatted with commas and stored as an integer.
+        Avg cost is calculated from purchases (receipts). Add receipts to update
+        avg cost and on-hand. The “Pack→Base” number is formatted with commas
+        and stored as an integer.
       </p>
 
       <div className="border rounded-lg overflow-hidden">
@@ -168,7 +210,7 @@ export default async function InventoryLanding() {
             </tr>
           </thead>
           <tbody>
-            {rows.map(r => (
+            {rows.map((r) => (
               <tr key={r.id} className="border-t">
                 <td className="p-2">{r.name}</td>
                 <td className="p-2">{r.base_unit ?? "—"}</td>
@@ -178,27 +220,40 @@ export default async function InventoryLanding() {
                     ? Number(r.pack_to_base_factor).toLocaleString()
                     : "—"}
                 </td>
-                <td className="p-2 text-right tabular-nums">{fmtQty(r.on_hand_base)}</td>
-                <td className="p-2 text-right tabular-nums">{fmtUSD(Number(r.avg_unit_cost || 0))}</td>
-                <td className="p-2 text-right tabular-nums">{fmtUSD(Number(r.on_hand_value_usd || 0))}</td>
+                <td className="p-2 text-right tabular-nums">
+                  {fmtQty(r.on_hand_base)}
+                </td>
+                <td className="p-2 text-right tabular-nums">
+                  {fmtUSD(Number(r.avg_unit_cost || 0))}
+                </td>
+                <td className="p-2 text-right tabular-nums">
+                  {fmtUSD(Number(r.on_hand_value_usd || 0))}
+                </td>
                 <td className="p-2 text-right">
-                  {r.expires_soon ? new Date(r.expires_soon).toLocaleDateString() : "—"}
+                  {r.expires_soon
+                    ? new Date(r.expires_soon).toLocaleDateString()
+                    : "—"}
                 </td>
                 <td className="p-2 text-right">
                   <div className="flex gap-1 justify-end">
-                    <Link href={`/inventory/receipts/new?item=${encodeURIComponent(r.id)}`} className="px-2 py-1 border rounded text-xs hover:bg-neutral-900">
+                    <Link
+                      href={`/inventory/receipts/new?item=${encodeURIComponent(
+                        r.id
+                      )}`}
+                      className="px-2 py-1 border rounded text-xs hover:bg-neutral-900"
+                    >
                       Add receipt
                     </Link>
-                    <Link href={`/inventory/items/${r.id}/delete`} className="px-2 py-1 border rounded text-xs hover:bg-neutral-900 text-red-300">
-                      Delete
-                    </Link>
+                    <DeleteInventoryItemButton itemId={r.id} />
                   </div>
                 </td>
               </tr>
             ))}
             {rows.length === 0 && (
               <tr>
-                <td className="p-3 text-neutral-400" colSpan={9}>No items yet.</td>
+                <td className="p-3 text-neutral-400" colSpan={9}>
+                  No items yet.
+                </td>
               </tr>
             )}
           </tbody>
