@@ -14,6 +14,8 @@ type Item = {
   base_unit: string | null;
   purchase_unit: string | null;
   pack_to_base_factor: number | null;
+  // optional – some environments may not have it
+  deleted_at?: string | null;
 };
 
 type Onhand = { item_id: string; qty_on_hand_base: number | null };
@@ -42,7 +44,6 @@ export default async function InventoryLanding() {
     );
   }
 
-  // ✅ Use demo tenant when opted-in, otherwise the user’s own tenant
   const tenantId = await getEffectiveTenant(supabase);
   if (!tenantId) {
     return (
@@ -53,35 +54,62 @@ export default async function InventoryLanding() {
     );
   }
 
-  // 1) Items (hide soft-deleted)
-  const { data: itemsRaw, error: itemsErr } = await supabase
+  // ---- Items (resilient fetch with fallback) ----
+  let items: Item[] = [];
+  let filtered = true;
+
+  // First attempt: filter deleted_at IS NULL (and select deleted_at so we can client-filter if needed)
+  const { data: itemsTry, error: itemsErr } = await supabase
     .from("inventory_items")
-    .select("id,name,base_unit,purchase_unit,pack_to_base_factor")
+    .select("id,name,base_unit,purchase_unit,pack_to_base_factor,deleted_at")
     .eq("tenant_id", tenantId)
     .is("deleted_at", null)
     .order("name");
 
-  if (itemsErr) throw itemsErr;
-  const items = (itemsRaw ?? []) as Item[];
+  if (itemsErr?.code === "42703") {
+    // Column not found – fallback unfiltered, without deleted_at
+    const { data: itemsNoDel } = await supabase
+      .from("inventory_items")
+      .select("id,name,base_unit,purchase_unit,pack_to_base_factor")
+      .eq("tenant_id", tenantId)
+      .order("name");
+    items = (itemsNoDel ?? []) as Item[];
+    filtered = false;
+  } else if ((itemsTry?.length ?? 0) === 0) {
+    // Nothing returned – fallback unfiltered in case seed data has deleted_at set
+    const { data: itemsAll } = await supabase
+      .from("inventory_items")
+      .select("id,name,base_unit,purchase_unit,pack_to_base_factor,deleted_at")
+      .eq("tenant_id", tenantId)
+      .order("name");
+    items = (itemsAll ?? []) as Item[];
+    filtered = false;
+  } else {
+    items = (itemsTry ?? []) as Item[];
+  }
 
-  // 2) On-hand (from view)
+  // Client filter if we have deleted_at but didn’t filter in SQL
+  if (!filtered) {
+    items = items.filter((i) => (i as Item).deleted_at == null);
+  }
+
+  // ---- On-hand (from view) ----
   const { data: onhandsRaw } = await supabase
     .from("v_inventory_on_hand")
     .select("item_id, qty_on_hand_base")
     .eq("tenant_id", tenantId);
-
   const onhands = (onhandsRaw ?? []) as Onhand[];
   const onhandMap = new Map(
     onhands.map((o) => [o.item_id, Number(o.qty_on_hand_base || 0)])
   );
 
-  // 3) Receipts (for avg $/base & earliest expiry)
+  // ---- Receipts (avg $/base & earliest expiry) ----
   const { data: rcptsRaw } = await supabase
     .from("inventory_receipts")
     .select("item_id,total_cost_usd,qty_base,expires_on")
     .eq("tenant_id", tenantId);
-
   const rcpts = (rcptsRaw ?? []) as ReceiptRow[];
+
   const totals = new Map<string, { cost: number; qty: number }>();
   const expMap = new Map<string, string | null>();
 
@@ -163,7 +191,7 @@ export default async function InventoryLanding() {
           >
             Purchase
           </Link>
-          {/* Removed the broken Help button */}
+          {/* Help button removed (top bar has Help / FAQ) */}
         </div>
       </div>
 
@@ -221,17 +249,17 @@ export default async function InventoryLanding() {
                     : "—"}
                 </td>
                 <td className="p-2 text-right tabular-nums">
-                  {fmtQty(r.on_hand_base)}
+                  {fmtQty((r as any).on_hand_base)}
                 </td>
                 <td className="p-2 text-right tabular-nums">
-                  {fmtUSD(Number(r.avg_unit_cost || 0))}
+                  {fmtUSD(Number((r as any).avg_unit_cost || 0))}
                 </td>
                 <td className="p-2 text-right tabular-nums">
-                  {fmtUSD(Number(r.on_hand_value_usd || 0))}
+                  {fmtUSD(Number((r as any).on_hand_value_usd || 0))}
                 </td>
                 <td className="p-2 text-right">
-                  {r.expires_soon
-                    ? new Date(r.expires_soon).toLocaleDateString()
+                  {(r as any).expires_soon
+                    ? new Date((r as any).expires_soon).toLocaleDateString()
                     : "—"}
                 </td>
                 <td className="p-2 text-right">

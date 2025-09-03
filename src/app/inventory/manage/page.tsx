@@ -14,6 +14,7 @@ type Item = {
   pack_to_base_factor: number | null;
   sku: string | null;
   par_level: number | null;
+  deleted_at?: string | null;
 };
 
 async function getTenant() {
@@ -44,16 +45,45 @@ export default async function ManageInventoryPage() {
     );
   }
 
-  const { data: items } = await supabase
+  let rows: Item[] = [];
+  let filtered = true;
+
+  const { data: itemsTry, error: itemsErr } = await supabase
     .from("inventory_items")
     .select(
-      "id,tenant_id,name,base_unit,purchase_unit,pack_to_base_factor,sku,par_level"
+      "id,tenant_id,name,base_unit,purchase_unit,pack_to_base_factor,sku,par_level,deleted_at"
     )
     .eq("tenant_id", tenantId)
-    .is("deleted_at", null) // hide soft-deleted
+    .is("deleted_at", null)
     .order("name");
 
-  const rows: Item[] = (items ?? []) as Item[];
+  if (itemsErr?.code === "42703") {
+    const { data: itemsNoDel } = await supabase
+      .from("inventory_items")
+      .select(
+        "id,tenant_id,name,base_unit,purchase_unit,pack_to_base_factor,sku,par_level"
+      )
+      .eq("tenant_id", tenantId)
+      .order("name");
+    rows = (itemsNoDel ?? []) as Item[];
+    filtered = false;
+  } else if ((itemsTry?.length ?? 0) === 0) {
+    const { data: itemsAll } = await supabase
+      .from("inventory_items")
+      .select(
+        "id,tenant_id,name,base_unit,purchase_unit,pack_to_base_factor,sku,par_level,deleted_at"
+      )
+      .eq("tenant_id", tenantId)
+      .order("name");
+    rows = (itemsAll ?? []) as Item[];
+    filtered = false;
+  } else {
+    rows = (itemsTry ?? []) as Item[];
+  }
+
+  if (!filtered) {
+    rows = rows.filter((r) => r.deleted_at == null);
+  }
 
   return (
     <main className="max-w-5xl mx-auto p-6 space-y-4">
