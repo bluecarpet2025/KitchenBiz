@@ -1,79 +1,61 @@
 // src/app/inventory/items/[id]/delete/route.ts
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
-import { revalidatePath } from "next/cache";
 
 export const runtime = "edge";
 
-function extractItemIdFromUrl(urlStr: string): string | null {
-  const u = new URL(urlStr);
-  // e.g. /inventory/items/<id>/delete
-  const parts = u.pathname.split("/").filter(Boolean);
-  const idx = parts.findIndex((p) => p === "items");
-  if (idx >= 0 && parts[idx + 1]) return parts[idx + 1];
-  return null;
-}
-
-async function deleteItem(itemId: string) {
+async function handleDelete(id: string) {
   const supabase = await createServerClient();
 
-  const {
-    data: { user },
-    error: userErr,
-  } = await supabase.auth.getUser();
-
+  // auth
+  const { data: u, error: userErr } = await supabase.auth.getUser();
   if (userErr) {
-    return NextResponse.json({ error: userErr.message }, { status: 500 });
+    return NextResponse.json({ ok: false, error: userErr.message }, { status: 500 });
   }
+  const user = u.user ?? null;
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json({ ok: false, error: "not_authenticated" }, { status: 401 });
   }
 
-  // Prefer soft-delete if column exists; fall back to hard delete.
-  const nowIso = new Date().toISOString();
+  // tenant
+  const { data: prof, error: profErr } = await supabase
+    .from("profiles")
+    .select("tenant_id")
+    .eq("id", user.id)
+    .maybeSingle();
 
-  const { error: softErr } = await supabase
+  if (profErr) {
+    return NextResponse.json({ ok: false, error: profErr.message }, { status: 400 });
+  }
+
+  const tenantId = prof?.tenant_id ?? null;
+  if (!tenantId) {
+    return NextResponse.json({ ok: false, error: "no_tenant" }, { status: 400 });
+  }
+
+  // soft-delete (hide from lists)
+  const { error } = await supabase
     .from("inventory_items")
-    .update({ archived_at: nowIso })
-    .eq("id", itemId);
+    .update({ deleted_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("tenant_id", tenantId);
 
-  if (softErr) {
-    if (softErr.code === "42703") {
-      const { error: hardErr } = await supabase
-        .from("inventory_items")
-        .delete()
-        .eq("id", itemId);
-      if (hardErr) {
-        return NextResponse.json({ error: hardErr.message }, { status: 400 });
-      }
-    } else {
-      return NextResponse.json({ error: softErr.message }, { status: 400 });
-    }
-  }
-
-  try {
-    revalidatePath("/inventory");
-    revalidatePath("/inventory/manage");
-  } catch {
-    // ignore in edge if unavailable
+  if (error) {
+    return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
   }
 
   return NextResponse.json({ ok: true });
 }
 
-export async function DELETE(req: Request) {
-  const itemId = extractItemIdFromUrl(req.url);
-  if (!itemId) {
-    return NextResponse.json({ error: "Missing id" }, { status: 400 });
-  }
-  return deleteItem(itemId);
+// Next 15 passes params as a Promise in route handlers. Support both verbs.
+type Ctx = { params: Promise<{ id: string }> };
+
+export async function POST(_req: Request, ctx: Ctx) {
+  const { id } = await ctx.params;
+  return handleDelete(id);
 }
 
-// Keep POST for backward-compat callers; same logic as DELETE
-export async function POST(req: Request) {
-  const itemId = extractItemIdFromUrl(req.url);
-  if (!itemId) {
-    return NextResponse.json({ error: "Missing id" }, { status: 400 });
-  }
-  return deleteItem(itemId);
+export async function DELETE(_req: Request, ctx: Ctx) {
+  const { id } = await ctx.params;
+  return handleDelete(id);
 }
