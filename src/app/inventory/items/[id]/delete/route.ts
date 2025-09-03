@@ -5,10 +5,18 @@ import { revalidatePath } from "next/cache";
 
 export const runtime = "edge";
 
+function extractItemIdFromUrl(urlStr: string): string | null {
+  const u = new URL(urlStr);
+  // e.g. /inventory/items/<id>/delete
+  const parts = u.pathname.split("/").filter(Boolean);
+  const idx = parts.findIndex((p) => p === "items");
+  if (idx >= 0 && parts[idx + 1]) return parts[idx + 1];
+  return null;
+}
+
 async function deleteItem(itemId: string) {
   const supabase = await createServerClient();
 
-  // Ensure user is signed in (RLS will also protect the delete)
   const {
     data: { user },
     error: userErr,
@@ -21,8 +29,7 @@ async function deleteItem(itemId: string) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Prefer a soft delete if the table has archived_at; otherwise hard delete.
-  // If archived_at doesn't exist, PostgREST returns code 42703.
+  // Prefer soft-delete if column exists; fall back to hard delete.
   const nowIso = new Date().toISOString();
 
   const { error: softErr } = await supabase
@@ -31,50 +38,40 @@ async function deleteItem(itemId: string) {
     .eq("id", itemId);
 
   if (softErr) {
-    // Column doesn't exist -> fall back to hard delete
     if (softErr.code === "42703") {
       const { error: hardErr } = await supabase
         .from("inventory_items")
         .delete()
         .eq("id", itemId);
-
       if (hardErr) {
         return NextResponse.json({ error: hardErr.message }, { status: 400 });
       }
     } else {
-      // Some other failure trying to soft delete
       return NextResponse.json({ error: softErr.message }, { status: 400 });
     }
   }
 
-  // Revalidate common pages that list items
   try {
     revalidatePath("/inventory");
     revalidatePath("/inventory/manage");
   } catch {
-    // Best-effort revalidation; ignore in edge if not supported
+    // ignore in edge if unavailable
   }
 
   return NextResponse.json({ ok: true });
 }
 
-export async function DELETE(
-  _req: Request,
-  { params }: { params: { id: string } }
-) {
-  const itemId = params.id;
+export async function DELETE(req: Request) {
+  const itemId = extractItemIdFromUrl(req.url);
   if (!itemId) {
     return NextResponse.json({ error: "Missing id" }, { status: 400 });
   }
   return deleteItem(itemId);
 }
 
-// Some clients might still call POST—support it for backward compatibility.
-export async function POST(
-  _req: Request,
-  { params }: { params: { id: string } }
-) {
-  const itemId = params.id;
+// Keep POST for backward-compat callers; same logic as DELETE
+export async function POST(req: Request) {
+  const itemId = extractItemIdFromUrl(req.url);
   if (!itemId) {
     return NextResponse.json({ error: "Missing id" }, { status: 400 });
   }
