@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { fmtUSD } from "@/lib/costing";
+import { getEffectiveTenant } from "@/lib/effective-tenant";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,13 @@ type ReceiptRow = {
 
 type Item = { id: string; name: string | null; base_unit: string | null };
 
-export default async function ReceiptsPage() {
+type SearchParams = { [key: string]: string | string[] | undefined };
+
+export default async function ReceiptsPage({
+  searchParams,
+}: {
+  searchParams?: SearchParams;
+}) {
   const supabase = await createServerClient();
   const { data: au } = await supabase.auth.getUser();
   const user = au.user ?? null;
@@ -34,13 +41,8 @@ export default async function ReceiptsPage() {
     );
   }
 
-  const { data: prof } = await supabase
-    .from("profiles")
-    .select("tenant_id")
-    .eq("id", user.id)
-    .maybeSingle();
-
-  const tenantId = prof?.tenant_id ?? null;
+  // Respect demo toggle
+  const tenantId = await getEffectiveTenant(supabase);
   if (!tenantId) {
     return (
       <main className="max-w-5xl mx-auto p-6">
@@ -50,57 +52,75 @@ export default async function ReceiptsPage() {
     );
   }
 
-  // fetch latest receipts for the tenant
-  const { data: receiptsRaw } = await supabase
+  // Parse optional ?item= filter
+  const itemFilterRaw = searchParams?.item;
+  const itemFilter =
+    typeof itemFilterRaw === "string"
+      ? itemFilterRaw
+      : Array.isArray(itemFilterRaw)
+      ? itemFilterRaw[0]
+      : undefined;
+
+  // Fetch latest receipts
+  let q = supabase
     .from("inventory_receipts")
     .select(
       "id,item_id,qty_base,total_cost_usd,purchased_at,note,photo_path,created_at"
     )
     .eq("tenant_id", tenantId)
     .order("created_at", { ascending: false })
-    .limit(100);
+    .limit(200);
+
+  if (itemFilter) {
+    q = q.eq("item_id", itemFilter);
+  }
+
+  const { data: receiptsRaw, error: receiptsErr } = await q;
+  if (receiptsErr) throw receiptsErr;
 
   const receipts = (receiptsRaw ?? []) as ReceiptRow[];
 
-  // fetch item names (small helper map)
-  const ids = Array.from(new Set(receipts.map((r) => r.item_id)));
-  let itemName = new Map<string, Item>();
-  if (ids.length) {
+  // Item name map for display (and to show filter chip)
+  const itemIds = Array.from(new Set(receipts.map((r) => r.item_id)));
+  if (itemFilter && !itemIds.includes(itemFilter)) itemIds.push(itemFilter);
+
+  const itemName = new Map<string, Item>();
+  if (itemIds.length) {
     const { data: itemsRaw } = await supabase
       .from("inventory_items")
       .select("id,name,base_unit")
-      .in("id", ids);
+      .in("id", itemIds);
     (itemsRaw ?? []).forEach((it: any) => itemName.set(it.id, it));
   }
 
-  // signed URLs for photos
-  async function signedUrl(path: string) {
-    const { data, error } = await supabase.storage
-      .from("receipts")
-      .createSignedUrl(path, 60 * 10); // 10 minutes
-    if (error || !data?.signedUrl) return null;
-    return data.signedUrl;
-  }
-
-  // generate in parallel
-  const photoMap = new Map<string, string | null>();
-  await Promise.all(
-    receipts.map(async (r) => {
-      if (r.photo_path) {
-        photoMap.set(r.id, await signedUrl(r.photo_path));
-      } else {
-        photoMap.set(r.id, null);
-      }
-    })
-  );
+  const filterItem = itemFilter ? itemName.get(itemFilter) : undefined;
 
   return (
     <main className="max-w-6xl mx-auto p-6 space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Receipts</h1>
-        <Link href="/inventory/receipts/new" className="underline">
-          New Purchase
-        </Link>
+        <div>
+          <h1 className="text-2xl font-semibold">Receipts</h1>
+          {itemFilter ? (
+            <div className="mt-1 text-sm text-neutral-400">
+              Showing receipts for{" "}
+              <span className="text-neutral-200">
+                {filterItem?.name ?? itemFilter}
+              </span>{" "}
+              ·{" "}
+              <Link href="/inventory/receipts" className="underline">
+                Clear filter
+              </Link>
+            </div>
+          ) : null}
+        </div>
+        <div className="flex gap-3">
+          <Link href="/inventory/receipts/new" className="underline">
+            New Purchase
+          </Link>
+          <Link href="/inventory/receipts/import" className="underline">
+            Import CSV
+          </Link>
+        </div>
       </div>
 
       <div className="border rounded-lg overflow-hidden">
@@ -118,10 +138,28 @@ export default async function ReceiptsPage() {
           <tbody>
             {receipts.map((r) => {
               const it = itemName.get(r.item_id);
-              const url = photoMap.get(r.id) ?? null;
+              const proxyUrl = r.photo_path
+                ? `/api/receipt-photo?path=${encodeURIComponent(r.photo_path)}`
+                : null;
+
               return (
                 <tr key={r.id} className="border-t">
-                  <td className="p-2">{it?.name ?? r.item_id}</td>
+                  <td className="p-2">
+                    <div className="flex items-center gap-2">
+                      <span>{it?.name ?? r.item_id}</span>
+                      {/* Quick filter link */}
+                      {!itemFilter && (
+                        <Link
+                          href={`/inventory/receipts?item=${encodeURIComponent(
+                            r.item_id
+                          )}`}
+                          className="text-xs underline opacity-70"
+                        >
+                          only this
+                        </Link>
+                      )}
+                    </div>
+                  </td>
                   <td className="p-2 text-right tabular-nums">
                     {Number(r.qty_base ?? 0).toLocaleString()}
                   </td>
@@ -135,9 +173,20 @@ export default async function ReceiptsPage() {
                   </td>
                   <td className="p-2">{r.note ?? "—"}</td>
                   <td className="p-2 text-center">
-                    {url ? (
-                      <a href={url} target="_blank" className="underline">
-                        View
+                    {proxyUrl ? (
+                      <a
+                        href={proxyUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-block"
+                        title="Open photo"
+                      >
+                        <img
+                          src={proxyUrl}
+                          alt="Receipt"
+                          className="h-16 w-16 object-cover rounded border border-neutral-800 inline-block"
+                          loading="lazy"
+                        />
                       </a>
                     ) : (
                       "—"
