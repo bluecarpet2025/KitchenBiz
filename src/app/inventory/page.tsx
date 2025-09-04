@@ -1,12 +1,12 @@
-// src/app/inventory/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { fmtUSD } from "@/lib/costing";
 import { fmtQty } from "@/lib/format";
 import { getEffectiveTenant } from "@/lib/effective-tenant";
-import DeleteInventoryItemButton from "@/components/DeleteInventoryItemButton";
 
 export const dynamic = "force-dynamic";
+
+type SearchParams = Record<string, string | string[] | undefined>;
 
 type Item = {
   id: string;
@@ -18,7 +18,6 @@ type Item = {
 };
 
 type Onhand = { item_id: string; qty_on_hand_base: number | null };
-
 type ReceiptRow = {
   item_id: string;
   total_cost_usd: number | null;
@@ -26,17 +25,29 @@ type ReceiptRow = {
   expires_on: string | null;
 };
 
-export default async function InventoryLanding() {
+export default async function InventoryLanding({
+  searchParams,
+}: {
+  // Next 15: searchParams is a Promise in server components
+  searchParams?: Promise<SearchParams>;
+}) {
+  const sp = (await searchParams) ?? {};
+  const sort = (typeof sp.sort === "string" ? sp.sort : "name") as "name";
+  const dirParam = typeof sp.dir === "string" ? sp.dir : "asc";
+  const dir: "asc" | "desc" = dirParam === "desc" ? "desc" : "asc";
+  const nextDir: "asc" | "desc" = dir === "asc" ? "desc" : "asc";
+
   const supabase = await createServerClient();
   const { data: u } = await supabase.auth.getUser();
   const user = u.user ?? null;
-
   if (!user) {
     return (
       <main className="max-w-6xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Inventory</h1>
         <p className="mt-4">Sign in required.</p>
-        <Link href="/login?redirect=/inventory" className="underline">Go to login</Link>
+        <Link href="/login?redirect=/inventory" className="underline">
+          Go to login
+        </Link>
       </main>
     );
   }
@@ -51,48 +62,52 @@ export default async function InventoryLanding() {
     );
   }
 
-  // Items (filter deleted when present; fall back if needed)
+  // 1) Items (hide soft-deleted; tolerate schema without deleted_at)
   let items: Item[] = [];
   let filtered = true;
 
+  const orderAsc = dir !== "desc";
   const { data: itemsTry, error: itemsErr } = await supabase
     .from("inventory_items")
     .select("id,name,base_unit,purchase_unit,pack_to_base_factor,deleted_at")
     .eq("tenant_id", tenantId)
     .is("deleted_at", null)
-    .order("name");
+    .order(sort, { ascending: orderAsc });
 
   if (itemsErr?.code === "42703") {
+    // Older schema (no deleted_at); fall back and then filter in JS
     const { data } = await supabase
       .from("inventory_items")
       .select("id,name,base_unit,purchase_unit,pack_to_base_factor")
       .eq("tenant_id", tenantId)
-      .order("name");
+      .order(sort, { ascending: orderAsc });
     items = (data ?? []) as Item[];
     filtered = false;
   } else if ((itemsTry?.length ?? 0) === 0) {
+    // If server-side filter yields 0, re-query then filter in JS
     const { data } = await supabase
       .from("inventory_items")
       .select("id,name,base_unit,purchase_unit,pack_to_base_factor,deleted_at")
       .eq("tenant_id", tenantId)
-      .order("name");
+      .order(sort, { ascending: orderAsc });
     items = (data ?? []) as Item[];
     filtered = false;
   } else {
     items = (itemsTry ?? []) as Item[];
   }
+  if (!filtered) items = items.filter((i) => (i as any).deleted_at == null);
 
-  if (!filtered) items = items.filter((i) => i.deleted_at == null);
-
-  // On-hand
+  // 2) On-hand
   const { data: onhandsRaw } = await supabase
     .from("v_inventory_on_hand")
     .select("item_id, qty_on_hand_base")
     .eq("tenant_id", tenantId);
   const onhands = (onhandsRaw ?? []) as Onhand[];
-  const onhandMap = new Map(onhands.map(o => [o.item_id, Number(o.qty_on_hand_base || 0)]));
+  const onhandMap = new Map(
+    onhands.map((o) => [o.item_id, Number(o.qty_on_hand_base || 0)])
+  );
 
-  // Receipts
+  // 3) Receipts (for avg $/base & earliest expiry)
   const { data: rcptsRaw } = await supabase
     .from("inventory_receipts")
     .select("item_id,total_cost_usd,qty_base,expires_on")
@@ -121,59 +136,111 @@ export default async function InventoryLanding() {
   const avgMap = new Map<string, number>();
   totals.forEach((v, id) => avgMap.set(id, v.qty > 0 ? v.cost / v.qty : 0));
 
-  const rows = items.map(i => {
+  const rows = items.map((i) => {
     const on = onhandMap.get(i.id) ?? 0;
     const avg = avgMap.get(i.id) ?? 0;
     const value = on * avg;
     const expiresSoon = expMap.get(i.id) ?? null;
-    return { ...i, on_hand_base: on, avg_unit_cost: avg, on_hand_value_usd: value, expires_soon: expiresSoon };
+    return {
+      ...i,
+      on_hand_base: on,
+      avg_unit_cost: avg,
+      on_hand_value_usd: value,
+      expires_soon: expiresSoon,
+    };
   });
 
   const itemsCount = rows.length;
-  const totalValue = rows.reduce((s, r) => s + Number(r.on_hand_value_usd || 0), 0);
+  const totalValue = rows.reduce(
+    (s, r: any) => s + Number(r.on_hand_value_usd || 0),
+    0
+  );
   const nearestExpiry = rows
-    .map(r => (r.expires_soon ? new Date(r.expires_soon) : null))
+    .map((r: any) => (r.expires_soon ? new Date(r.expires_soon) : null))
     .filter((d): d is Date => !!d)
     .sort((a, b) => a.getTime() - b.getTime())[0];
+
+  // little arrow for sort indicator
+  const arrow = dir === "asc" ? "▲" : "▼";
 
   return (
     <main className="max-w-6xl mx-auto p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Inventory</h1>
         <div className="flex gap-2">
-          <Link href="/inventory/counts/new" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">New count</Link>
-          <Link href="/inventory/counts" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Counts history</Link>
-          <Link href="/inventory/manage" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Manage items</Link>
-          <Link href="/inventory/purchase" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Purchase</Link>
-          <Link href="/inventory/receipts" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Receipts</Link>
+          <Link
+            href="/inventory/counts/new"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
+            New count
+          </Link>
+          <Link
+            href="/inventory/counts"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
+            Counts history
+          </Link>
+          <Link
+            href="/inventory/manage"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
+            Manage items
+          </Link>
+          <Link
+            href="/inventory/purchase"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
+            Purchase
+          </Link>
+          <Link
+            href="/inventory/receipts"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
+            Receipts
+          </Link>
         </div>
       </div>
 
       <div className="grid md:grid-cols-3 gap-4">
         <div className="border rounded p-3">
           <div className="text-xs uppercase opacity-70">Items</div>
-          <div className="text-xl font-semibold tabular-nums">{itemsCount.toLocaleString()}</div>
+          <div className="text-xl font-semibold tabular-nums">
+            {itemsCount.toLocaleString()}
+          </div>
         </div>
         <div className="border rounded p-3">
           <div className="text-xs uppercase opacity-70">On-hand value</div>
-          <div className="text-xl font-semibold tabular-nums">{fmtUSD(totalValue)}</div>
+          <div className="text-xl font-semibold tabular-nums">
+            {fmtUSD(totalValue)}
+          </div>
         </div>
         <div className="border rounded p-3">
           <div className="text-xs uppercase opacity-70">Nearest expiry</div>
-          <div className="text-xl font-semibold">{nearestExpiry ? nearestExpiry.toLocaleDateString() : "—"}</div>
+          <div className="text-xl font-semibold">
+            {nearestExpiry ? nearestExpiry.toLocaleDateString() : "—"}
+          </div>
         </div>
       </div>
 
       <p className="text-xs opacity-70">
-        Avg cost is calculated from purchases (receipts). Add receipts to update avg cost and on-hand.
-        The “Pack→Base” number is formatted with commas and stored as an integer.
+        Avg cost is calculated from purchases (receipts). Add receipts to update
+        avg cost and on-hand. The “Pack→Base” number is formatted with commas
+        and stored as an integer.
       </p>
 
       <div className="border rounded-lg overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-neutral-900/60">
             <tr>
-              <th className="p-2 text-left">Name</th>
+              <th className="p-2 text-left">
+                <Link
+                  href={`/inventory?sort=name&dir=${nextDir}`}
+                  className="inline-flex items-center gap-1 underline-offset-4 hover:underline"
+                  title="Sort by name"
+                >
+                  Name {sort === "name" && <span className="text-xs">{arrow}</span>}
+                </Link>
+              </th>
               <th className="p-2 text-left">Base</th>
               <th className="p-2 text-left">Purchase</th>
               <th className="p-2 text-right">Pack→Base</th>
@@ -185,19 +252,29 @@ export default async function InventoryLanding() {
             </tr>
           </thead>
           <tbody>
-            {rows.map(r => (
+            {rows.map((r: any) => (
               <tr key={r.id} className="border-t">
                 <td className="p-2">{r.name}</td>
                 <td className="p-2">{r.base_unit ?? "—"}</td>
                 <td className="p-2">{r.purchase_unit ?? "—"}</td>
                 <td className="p-2 text-right tabular-nums">
-                  {r.pack_to_base_factor != null ? Number(r.pack_to_base_factor).toLocaleString() : "—"}
+                  {r.pack_to_base_factor != null
+                    ? Number(r.pack_to_base_factor).toLocaleString()
+                    : "—"}
                 </td>
-                <td className="p-2 text-right tabular-nums">{fmtQty((r as any).on_hand_base)}</td>
-                <td className="p-2 text-right tabular-nums">{fmtUSD(Number((r as any).avg_unit_cost || 0))}</td>
-                <td className="p-2 text-right tabular-nums">{fmtUSD(Number((r as any).on_hand_value_usd || 0))}</td>
+                <td className="p-2 text-right tabular-nums">
+                  {fmtQty(r.on_hand_base)}
+                </td>
+                <td className="p-2 text-right tabular-nums">
+                  {fmtUSD(Number(r.avg_unit_cost || 0))}
+                </td>
+                <td className="p-2 text-right tabular-nums">
+                  {fmtUSD(Number(r.on_hand_value_usd || 0))}
+                </td>
                 <td className="p-2 text-right">
-                  {(r as any).expires_soon ? new Date((r as any).expires_soon).toLocaleDateString() : "—"}
+                  {r.expires_soon
+                    ? new Date(r.expires_soon).toLocaleDateString()
+                    : "—"}
                 </td>
                 <td className="p-2 text-right">
                   <div className="flex gap-1 justify-end">
@@ -213,14 +290,22 @@ export default async function InventoryLanding() {
                     >
                       Add receipt
                     </Link>
-                    <DeleteInventoryItemButton itemId={r.id} />
+                    {/* Keep legacy GET delete route for quick action */}
+                    <Link
+                      href={`/inventory/items/${r.id}/delete`}
+                      className="px-2 py-1 border rounded text-xs hover:bg-neutral-900 text-red-300"
+                    >
+                      Delete
+                    </Link>
                   </div>
                 </td>
               </tr>
             ))}
             {rows.length === 0 && (
               <tr>
-                <td className="p-3 text-neutral-400" colSpan={9}>No items yet.</td>
+                <td className="p-3 text-neutral-400" colSpan={9}>
+                  No items yet.
+                </td>
               </tr>
             )}
           </tbody>
