@@ -25,21 +25,51 @@ type ReceiptRow = {
   expires_on: string | null;
 };
 
+type Row = Item & {
+  on_hand_base: number;
+  avg_unit_cost: number;
+  on_hand_value_usd: number;
+  expires_soon: string | null;
+};
+
+const SORT_KEYS = [
+  "name",
+  "base",
+  "purchase",
+  "pack",
+  "onhand",
+  "avg",
+  "value",
+  "expiry",
+] as const;
+type SortKey = (typeof SORT_KEYS)[number];
+
+function normalizeDir(d?: string): "asc" | "desc" {
+  return d === "desc" ? "desc" : "asc";
+}
+
+function nextDir(d: "asc" | "desc"): "asc" | "desc" {
+  return d === "asc" ? "desc" : "asc";
+}
+
 export default async function InventoryLanding({
   searchParams,
 }: {
-  // Next 15: searchParams is a Promise in server components
+  // Next 15 server component: searchParams is a Promise
   searchParams?: Promise<SearchParams>;
 }) {
   const sp = (await searchParams) ?? {};
-  const sort = (typeof sp.sort === "string" ? sp.sort : "name") as "name";
-  const dirParam = typeof sp.dir === "string" ? sp.dir : "asc";
-  const dir: "asc" | "desc" = dirParam === "desc" ? "desc" : "asc";
-  const nextDir: "asc" | "desc" = dir === "asc" ? "desc" : "asc";
+  const sortParam = typeof sp.sort === "string" ? sp.sort : "name";
+  const sort: SortKey = SORT_KEYS.includes(sortParam as SortKey)
+    ? (sortParam as SortKey)
+    : "name";
+  const dir = normalizeDir(typeof sp.dir === "string" ? sp.dir : "asc");
+  const arrow = dir === "asc" ? "▲" : "▼";
 
   const supabase = await createServerClient();
   const { data: u } = await supabase.auth.getUser();
   const user = u.user ?? null;
+
   if (!user) {
     return (
       <main className="max-w-6xl mx-auto p-6">
@@ -62,42 +92,28 @@ export default async function InventoryLanding({
     );
   }
 
-  // 1) Items (hide soft-deleted; tolerate schema without deleted_at)
+  // Items (hide soft-deleted; tolerate schema without deleted_at)
   let items: Item[] = [];
-  let filtered = true;
-
-  const orderAsc = dir !== "desc";
   const { data: itemsTry, error: itemsErr } = await supabase
     .from("inventory_items")
     .select("id,name,base_unit,purchase_unit,pack_to_base_factor,deleted_at")
     .eq("tenant_id", tenantId)
     .is("deleted_at", null)
-    .order(sort, { ascending: orderAsc });
+    .order("name", { ascending: true });
 
   if (itemsErr?.code === "42703") {
-    // Older schema (no deleted_at); fall back and then filter in JS
+    // Older schema (no deleted_at)
     const { data } = await supabase
       .from("inventory_items")
       .select("id,name,base_unit,purchase_unit,pack_to_base_factor")
       .eq("tenant_id", tenantId)
-      .order(sort, { ascending: orderAsc });
+      .order("name", { ascending: true });
     items = (data ?? []) as Item[];
-    filtered = false;
-  } else if ((itemsTry?.length ?? 0) === 0) {
-    // If server-side filter yields 0, re-query then filter in JS
-    const { data } = await supabase
-      .from("inventory_items")
-      .select("id,name,base_unit,purchase_unit,pack_to_base_factor,deleted_at")
-      .eq("tenant_id", tenantId)
-      .order(sort, { ascending: orderAsc });
-    items = (data ?? []) as Item[];
-    filtered = false;
   } else {
     items = (itemsTry ?? []) as Item[];
   }
-  if (!filtered) items = items.filter((i) => (i as any).deleted_at == null);
 
-  // 2) On-hand
+  // On-hand
   const { data: onhandsRaw } = await supabase
     .from("v_inventory_on_hand")
     .select("item_id, qty_on_hand_base")
@@ -107,7 +123,7 @@ export default async function InventoryLanding({
     onhands.map((o) => [o.item_id, Number(o.qty_on_hand_base || 0)])
   );
 
-  // 3) Receipts (for avg $/base & earliest expiry)
+  // Receipts (for avg $/base & earliest expiry)
   const { data: rcptsRaw } = await supabase
     .from("inventory_receipts")
     .select("item_id,total_cost_usd,qty_base,expires_on")
@@ -124,6 +140,7 @@ export default async function InventoryLanding({
     prev.cost += cost;
     prev.qty += qty;
     totals.set(id, prev);
+
     if (r.expires_on) {
       const prevDate = expMap.get(id);
       if (!prevDate || new Date(r.expires_on) < new Date(prevDate)) {
@@ -133,10 +150,12 @@ export default async function InventoryLanding({
       expMap.set(id, null);
     }
   }
+
   const avgMap = new Map<string, number>();
   totals.forEach((v, id) => avgMap.set(id, v.qty > 0 ? v.cost / v.qty : 0));
 
-  const rows = items.map((i) => {
+  // Compose rows
+  let rows: Row[] = items.map((i) => {
     const on = onhandMap.get(i.id) ?? 0;
     const avg = avgMap.get(i.id) ?? 0;
     const value = on * avg;
@@ -150,18 +169,81 @@ export default async function InventoryLanding({
     };
   });
 
+  // Sort rows IN MEMORY (prevents “blank table” issues)
+  const cmp = (a: Row, b: Row) => {
+    const m = dir === "asc" ? 1 : -1;
+    switch (sort) {
+      case "name": {
+        const A = (a.name || "").toLowerCase();
+        const B = (b.name || "").toLowerCase();
+        return A < B ? -1 * m : A > B ? 1 * m : 0;
+      }
+      case "base": {
+        const A = (a.base_unit || "").toLowerCase();
+        const B = (b.base_unit || "").toLowerCase();
+        return A < B ? -1 * m : A > B ? 1 * m : 0;
+      }
+      case "purchase": {
+        const A = (a.purchase_unit || "").toLowerCase();
+        const B = (b.purchase_unit || "").toLowerCase();
+        return A < B ? -1 * m : A > B ? 1 * m : 0;
+      }
+      case "pack": {
+        const A = a.pack_to_base_factor ?? -Infinity;
+        const B = b.pack_to_base_factor ?? -Infinity;
+        return A < B ? -1 * m : A > B ? 1 * m : 0;
+      }
+      case "onhand": {
+        const A = a.on_hand_base ?? 0;
+        const B = b.on_hand_base ?? 0;
+        return A < B ? -1 * m : A > B ? 1 * m : 0;
+      }
+      case "avg": {
+        const A = a.avg_unit_cost ?? 0;
+        const B = b.avg_unit_cost ?? 0;
+        return A < B ? -1 * m : A > B ? 1 * m : 0;
+      }
+      case "value": {
+        const A = a.on_hand_value_usd ?? 0;
+        const B = b.on_hand_value_usd ?? 0;
+        return A < B ? -1 * m : A > B ? 1 * m : 0;
+      }
+      case "expiry": {
+        const A = a.expires_soon ? new Date(a.expires_soon).getTime() : Infinity;
+        const B = b.expires_soon ? new Date(b.expires_soon).getTime() : Infinity;
+        return A < B ? -1 * m : A > B ? 1 * m : 0;
+      }
+      default:
+        return 0;
+    }
+  };
+  rows.sort(cmp);
+
+  // KPIs
   const itemsCount = rows.length;
   const totalValue = rows.reduce(
-    (s, r: any) => s + Number(r.on_hand_value_usd || 0),
+    (s, r) => s + Number(r.on_hand_value_usd || 0),
     0
   );
   const nearestExpiry = rows
-    .map((r: any) => (r.expires_soon ? new Date(r.expires_soon) : null))
+    .map((r) => (r.expires_soon ? new Date(r.expires_soon) : null))
     .filter((d): d is Date => !!d)
     .sort((a, b) => a.getTime() - b.getTime())[0];
 
-  // little arrow for sort indicator
-  const arrow = dir === "asc" ? "▲" : "▼";
+  // Helper to build sortable header link
+  const sortHref = (k: SortKey) => {
+    const d = sort === k ? nextDir(dir) : "asc";
+    return `/inventory?sort=${k}&dir=${d}`;
+  };
+  const SortLabel = ({ k, label }: { k: SortKey; label: string }) => (
+    <Link
+      href={sortHref(k)}
+      className="inline-flex items-center gap-1 underline-offset-4 hover:underline"
+      title={`Sort by ${label}`}
+    >
+      {label} {sort === k && <span className="text-xs">{arrow}</span>}
+    </Link>
+  );
 
   return (
     <main className="max-w-6xl mx-auto p-6 space-y-4">
@@ -232,27 +314,19 @@ export default async function InventoryLanding({
         <table className="w-full text-sm">
           <thead className="bg-neutral-900/60">
             <tr>
-              <th className="p-2 text-left">
-                <Link
-                  href={`/inventory?sort=name&dir=${nextDir}`}
-                  className="inline-flex items-center gap-1 underline-offset-4 hover:underline"
-                  title="Sort by name"
-                >
-                  Name {sort === "name" && <span className="text-xs">{arrow}</span>}
-                </Link>
-              </th>
-              <th className="p-2 text-left">Base</th>
-              <th className="p-2 text-left">Purchase</th>
-              <th className="p-2 text-right">Pack→Base</th>
-              <th className="p-2 text-right">On hand (base)</th>
-              <th className="p-2 text-right">Avg $ / base</th>
-              <th className="p-2 text-right">Value on hand</th>
-              <th className="p-2 text-right">Expiring soon</th>
+              <th className="p-2 text-left"><SortLabel k="name" label="Name" /></th>
+              <th className="p-2 text-left"><SortLabel k="base" label="Base" /></th>
+              <th className="p-2 text-left"><SortLabel k="purchase" label="Purchase" /></th>
+              <th className="p-2 text-right"><SortLabel k="pack" label="Pack→Base" /></th>
+              <th className="p-2 text-right"><SortLabel k="onhand" label="On hand (base)" /></th>
+              <th className="p-2 text-right"><SortLabel k="avg" label="Avg $ / base" /></th>
+              <th className="p-2 text-right"><SortLabel k="value" label="Value on hand" /></th>
+              <th className="p-2 text-right"><SortLabel k="expiry" label="Expiring soon" /></th>
               <th className="p-2 text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((r: any) => (
+            {rows.map((r) => (
               <tr key={r.id} className="border-t">
                 <td className="p-2">{r.name}</td>
                 <td className="p-2">{r.base_unit ?? "—"}</td>
@@ -262,19 +336,11 @@ export default async function InventoryLanding({
                     ? Number(r.pack_to_base_factor).toLocaleString()
                     : "—"}
                 </td>
-                <td className="p-2 text-right tabular-nums">
-                  {fmtQty(r.on_hand_base)}
-                </td>
-                <td className="p-2 text-right tabular-nums">
-                  {fmtUSD(Number(r.avg_unit_cost || 0))}
-                </td>
-                <td className="p-2 text-right tabular-nums">
-                  {fmtUSD(Number(r.on_hand_value_usd || 0))}
-                </td>
+                <td className="p-2 text-right tabular-nums">{fmtQty(r.on_hand_base)}</td>
+                <td className="p-2 text-right tabular-nums">{fmtUSD(r.avg_unit_cost || 0)}</td>
+                <td className="p-2 text-right tabular-nums">{fmtUSD(r.on_hand_value_usd || 0)}</td>
                 <td className="p-2 text-right">
-                  {r.expires_soon
-                    ? new Date(r.expires_soon).toLocaleDateString()
-                    : "—"}
+                  {r.expires_soon ? new Date(r.expires_soon).toLocaleDateString() : "—"}
                 </td>
                 <td className="p-2 text-right">
                   <div className="flex gap-1 justify-end">
@@ -290,7 +356,6 @@ export default async function InventoryLanding({
                     >
                       Add receipt
                     </Link>
-                    {/* Keep legacy GET delete route for quick action */}
                     <Link
                       href={`/inventory/items/${r.id}/delete`}
                       className="px-2 py-1 border rounded text-xs hover:bg-neutral-900 text-red-300"
