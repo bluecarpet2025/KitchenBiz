@@ -10,11 +10,11 @@ type ReceiptRow = {
   item_id: string;
   qty_base: number | null;
   total_cost_usd: number | null;
-  purchased_at: string | null; // <- unified name (we alias to this)
+  purchased_at: string | null; // aliased from created_at
   note: string | null;
   photo_path: string | null;
-  created_at: string | null;
-  expires_on?: string | null;
+  image_path: string | null;
+  expires_on: string | null;
 };
 
 type Item = { id: string; name: string | null; base_unit: string | null };
@@ -23,6 +23,7 @@ type SearchParams = Record<string, string | string[] | undefined>;
 export default async function ReceiptsPage({
   searchParams,
 }: {
+  // Next 15 (app router) passes searchParams as a Promise in server components
   searchParams?: Promise<SearchParams>;
 }) {
   const sp = (await searchParams) ?? {};
@@ -50,6 +51,7 @@ export default async function ReceiptsPage({
     );
   }
 
+  // Respect demo toggle / effective tenant
   const tenantId = await getEffectiveTenant(supabase);
   if (!tenantId) {
     return (
@@ -60,62 +62,24 @@ export default async function ReceiptsPage({
     );
   }
 
-  // --- Fetch receipts with resilient column selection for purchase date ---
-  const baseOrder = { ascending: false as const };
-  const limit = 200;
-
-  // Attempt 1: purchased_at
-  let q1 = supabase
+  // Fetch receipts (alias created_at -> purchased_at to match UI)
+  let q = supabase
     .from("inventory_receipts")
     .select(
-      "id,item_id,qty_base,total_cost_usd,purchased_at,note,photo_path,created_at,expires_on"
+      // created_at is the only date in your schema -> alias to purchased_at
+      "id,item_id,qty_base,total_cost_usd,purchased_at:created_at,note,photo_path,image_path,expires_on"
     )
     .eq("tenant_id", tenantId)
-    .order("created_at", baseOrder)
-    .limit(limit);
-  if (itemFilter) q1 = q1.eq("item_id", itemFilter);
-  let { data: r1, error: e1 } = await q1;
+    .order("purchased_at", { ascending: false }) // sorts by the alias
+    .limit(200);
 
-  let receipts: ReceiptRow[] = [];
-  if (!e1) {
-    receipts = (r1 ?? []) as ReceiptRow[];
-  } else if (e1.code === "42703") {
-    // Attempt 2: purchased_on -> alias to purchased_at
-    let q2 = supabase
-      .from("inventory_receipts")
-      .select(
-        "id,item_id,qty_base,total_cost_usd,purchased_at:purchased_on,note,photo_path,created_at,expires_on"
-      )
-      .eq("tenant_id", tenantId)
-      .order("created_at", baseOrder)
-      .limit(limit);
-    if (itemFilter) q2 = q2.eq("item_id", itemFilter);
-    const { data: r2, error: e2 } = await q2;
+  if (itemFilter) q = q.eq("item_id", itemFilter);
 
-    if (!e2) {
-      receipts = (r2 ?? []) as ReceiptRow[];
-    } else if (e2.code === "42703") {
-      // Attempt 3: purchase_date -> alias to purchased_at
-      let q3 = supabase
-        .from("inventory_receipts")
-        .select(
-          "id,item_id,qty_base,total_cost_usd,purchased_at:purchase_date,note,photo_path,created_at,expires_on"
-        )
-        .eq("tenant_id", tenantId)
-        .order("created_at", baseOrder)
-        .limit(limit);
-      if (itemFilter) q3 = q3.eq("item_id", itemFilter);
-      const { data: r3, error: e3 } = await q3;
-      if (e3) throw e3;
-      receipts = (r3 ?? []) as ReceiptRow[];
-    } else {
-      throw e2;
-    }
-  } else {
-    throw e1;
-  }
+  const { data: receiptsRaw, error: receiptsErr } = await q;
+  if (receiptsErr) throw receiptsErr;
+  const receipts = (receiptsRaw ?? []) as ReceiptRow[];
 
-  // Item names (include filter id even if no receipts match yet)
+  // Item names (also include the filtered id so header can render even with 0 receipts)
   const itemIds = Array.from(new Set(receipts.map((r) => r.item_id)));
   if (itemFilter && !itemIds.includes(itemFilter)) itemIds.push(itemFilter);
 
@@ -172,10 +136,11 @@ export default async function ReceiptsPage({
           <tbody>
             {receipts.map((r) => {
               const it = itemName.get(r.item_id);
-              const proxyUrl = r.photo_path
-                ? `/api/receipt-photo?path=${encodeURIComponent(r.photo_path)}`
+              // Prefer photo_path but fall back to image_path if present
+              const storagePath = r.photo_path ?? r.image_path ?? null;
+              const proxyUrl = storagePath
+                ? `/api/receipt-photo?path=${encodeURIComponent(storagePath)}`
                 : null;
-
               return (
                 <tr key={r.id} className="border-t">
                   <td className="p-2">
