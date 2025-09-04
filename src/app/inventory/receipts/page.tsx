@@ -10,7 +10,7 @@ type ReceiptRow = {
   item_id: string;
   qty_base: number | null;
   total_cost_usd: number | null;
-  purchased_at: string | null; // aliased from created_at
+  purchased_at: string | null; // alias of created_at
   note: string | null;
   photo_path: string | null;
   image_path: string | null;
@@ -23,7 +23,6 @@ type SearchParams = Record<string, string | string[] | undefined>;
 export default async function ReceiptsPage({
   searchParams,
 }: {
-  // Next 15 (app router) passes searchParams as a Promise in server components
   searchParams?: Promise<SearchParams>;
 }) {
   const sp = (await searchParams) ?? {};
@@ -51,7 +50,6 @@ export default async function ReceiptsPage({
     );
   }
 
-  // Respect demo toggle / effective tenant
   const tenantId = await getEffectiveTenant(supabase);
   if (!tenantId) {
     return (
@@ -62,15 +60,14 @@ export default async function ReceiptsPage({
     );
   }
 
-  // Fetch receipts (alias created_at -> purchased_at to match UI)
+  // Select with alias, but ORDER BY the real column (created_at)
   let q = supabase
     .from("inventory_receipts")
     .select(
-      // created_at is the only date in your schema -> alias to purchased_at
       "id,item_id,qty_base,total_cost_usd,purchased_at:created_at,note,photo_path,image_path,expires_on"
     )
     .eq("tenant_id", tenantId)
-    .order("purchased_at", { ascending: false }) // sorts by the alias
+    .order("created_at", { ascending: false }) // <- key fix
     .limit(200);
 
   if (itemFilter) q = q.eq("item_id", itemFilter);
@@ -79,7 +76,7 @@ export default async function ReceiptsPage({
   if (receiptsErr) throw receiptsErr;
   const receipts = (receiptsRaw ?? []) as ReceiptRow[];
 
-  // Item names (also include the filtered id so header can render even with 0 receipts)
+  // Item names (include filter even if no receipts)
   const itemIds = Array.from(new Set(receipts.map((r) => r.item_id)));
   if (itemFilter && !itemIds.includes(itemFilter)) itemIds.push(itemFilter);
 
@@ -136,11 +133,11 @@ export default async function ReceiptsPage({
           <tbody>
             {receipts.map((r) => {
               const it = itemName.get(r.item_id);
-              // Prefer photo_path but fall back to image_path if present
               const storagePath = r.photo_path ?? r.image_path ?? null;
               const proxyUrl = storagePath
                 ? `/api/receipt-photo?path=${encodeURIComponent(storagePath)}`
                 : null;
+
               return (
                 <tr key={r.id} className="border-t">
                   <td className="p-2">
