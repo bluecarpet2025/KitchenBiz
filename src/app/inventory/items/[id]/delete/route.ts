@@ -1,4 +1,3 @@
-// src/app/inventory/items/[id]/delete/route.ts
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
@@ -6,7 +5,7 @@ import { revalidatePath } from "next/cache";
 export const runtime = "edge";
 
 async function handleDeleteAction(id: string) {
-   if (!id || typeof id !== "string") {
+  if (!id || typeof id !== "string") {
     return NextResponse.json({ ok: false, error: "missing_id" }, { status: 400 });
   }
   const supabase = await createServerClient();
@@ -23,22 +22,19 @@ async function handleDeleteAction(id: string) {
     .select("tenant_id")
     .eq("id", user.id)
     .maybeSingle();
-
   if (profErr) return NextResponse.json({ ok: false, error: profErr.message }, { status: 400 });
 
   const tenantId = prof?.tenant_id ?? null;
   if (!tenantId) return NextResponse.json({ ok: false, error: "no_tenant" }, { status: 400 });
 
-  // soft-delete (hide from lists)
+  // soft-delete
   const { error } = await supabase
     .from("inventory_items")
     .update({ deleted_at: new Date().toISOString() })
     .eq("id", id)
     .eq("tenant_id", tenantId);
-
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
 
-  // best-effort revalidation
   try {
     revalidatePath("/inventory");
     revalidatePath("/inventory/manage");
@@ -59,13 +55,7 @@ export async function DELETE(_req: Request, ctx: Ctx) {
   return handleDeleteAction(id);
 }
 
-// Support legacy GET links (Inventory list likely navigates via <a>/<Link>)
-export async function GET(req: Request, ctx: Ctx) {
-  const { id } = await ctx.params;
-  const res = await handleDeleteAction(id);
-  if (res.status < 400) {
-    // redirect back to inventory after delete
-    return NextResponse.redirect(new URL("/inventory", req.url), 303);
-  }
-  return res;
+// 🚫 Safety: never delete on GET (block crawlers/prefetchers)
+export async function GET() {
+  return NextResponse.json({ ok: false, error: "method_not_allowed" }, { status: 405 });
 }
