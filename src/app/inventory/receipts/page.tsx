@@ -17,14 +17,23 @@ type ReceiptRow = {
 };
 
 type Item = { id: string; name: string | null; base_unit: string | null };
-
-type SearchParams = { [key: string]: string | string[] | undefined };
+type SearchParams = Record<string, string | string[] | undefined>;
 
 export default async function ReceiptsPage({
   searchParams,
 }: {
-  searchParams?: SearchParams;
+  // Next 15 expects a Promise here
+  searchParams?: Promise<SearchParams>;
 }) {
+  const sp = (await searchParams) ?? {};
+  const itemFilterRaw = sp.item;
+  const itemFilter =
+    typeof itemFilterRaw === "string"
+      ? itemFilterRaw
+      : Array.isArray(itemFilterRaw)
+      ? itemFilterRaw[0]
+      : undefined;
+
   const supabase = await createServerClient();
   const { data: au } = await supabase.auth.getUser();
   const user = au.user ?? null;
@@ -52,16 +61,7 @@ export default async function ReceiptsPage({
     );
   }
 
-  // Parse optional ?item= filter
-  const itemFilterRaw = searchParams?.item;
-  const itemFilter =
-    typeof itemFilterRaw === "string"
-      ? itemFilterRaw
-      : Array.isArray(itemFilterRaw)
-      ? itemFilterRaw[0]
-      : undefined;
-
-  // Fetch latest receipts
+  // Fetch latest receipts (optionally filtered by item)
   let q = supabase
     .from("inventory_receipts")
     .select(
@@ -71,16 +71,13 @@ export default async function ReceiptsPage({
     .order("created_at", { ascending: false })
     .limit(200);
 
-  if (itemFilter) {
-    q = q.eq("item_id", itemFilter);
-  }
+  if (itemFilter) q = q.eq("item_id", itemFilter);
 
   const { data: receiptsRaw, error: receiptsErr } = await q;
   if (receiptsErr) throw receiptsErr;
-
   const receipts = (receiptsRaw ?? []) as ReceiptRow[];
 
-  // Item name map for display (and to show filter chip)
+  // Item names (also include the filter id if no receipts yet)
   const itemIds = Array.from(new Set(receipts.map((r) => r.item_id)));
   if (itemFilter && !itemIds.includes(itemFilter)) itemIds.push(itemFilter);
 
@@ -92,7 +89,6 @@ export default async function ReceiptsPage({
       .in("id", itemIds);
     (itemsRaw ?? []).forEach((it: any) => itemName.set(it.id, it));
   }
-
   const filterItem = itemFilter ? itemName.get(itemFilter) : undefined;
 
   return (
@@ -135,7 +131,7 @@ export default async function ReceiptsPage({
               <th className="p-2 text-center">Photo</th>
             </tr>
           </thead>
-          <tbody>
+            <tbody>
             {receipts.map((r) => {
               const it = itemName.get(r.item_id);
               const proxyUrl = r.photo_path
@@ -147,7 +143,6 @@ export default async function ReceiptsPage({
                   <td className="p-2">
                     <div className="flex items-center gap-2">
                       <span>{it?.name ?? r.item_id}</span>
-                      {/* Quick filter link */}
                       {!itemFilter && (
                         <Link
                           href={`/inventory/receipts?item=${encodeURIComponent(
