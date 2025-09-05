@@ -21,19 +21,17 @@ export default async function NewInventoryItemPage() {
     );
   }
 
-  // Basic allowed unit suggestions for convenience only
   const commonUnits = ["g", "kg", "ml", "l", "lb", "each"];
 
   return (
     <main className="max-w-5xl mx-auto p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">New inventory item</h1>
-        {/* You already have Inventory in the top nav, so no extra “Back” button here */}
       </div>
 
       <form
         method="POST"
-        action="/inventory/items/new"
+        action="/inventory/items/create"
         className="space-y-4 border rounded-lg p-4"
       >
         <div className="grid md:grid-cols-2 gap-4">
@@ -91,9 +89,7 @@ export default async function NewInventoryItemPage() {
           </label>
 
           <label className="block">
-            <span className="text-sm opacity-80">
-              Pack → Base factor (integer)
-            </span>
+            <span className="text-sm opacity-80">Pack → Base factor (integer)</span>
             <input
               name="pack_to_base_factor"
               type="number"
