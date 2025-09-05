@@ -36,10 +36,11 @@ export default async function ManageInventoryPage() {
   if (!user || !tenantId) {
     return (
       <main className="max-w-5xl mx-auto p-6">
-        <h1 className="text-2xl font-semibold">Manage inventory</h1>
+        <h1 className="text-2xl font-semibold">Manage items</h1>
         <p className="mt-4">Sign in required, or tenant not configured.</p>
-        <Link className="underline" href="/inventory">
-          Back to Inventory
+        {/* Removed redundant “Back to Inventory”. Keep a clear path to login. */}
+        <Link className="underline" href="/login?redirect=/inventory/manage">
+          Go to login
         </Link>
       </main>
     );
@@ -58,6 +59,7 @@ export default async function ManageInventoryPage() {
     .order("name");
 
   if (itemsErr?.code === "42703") {
+    // Fallback for schemas without deleted_at
     const { data: itemsNoDel } = await supabase
       .from("inventory_items")
       .select(
@@ -68,6 +70,7 @@ export default async function ManageInventoryPage() {
     rows = (itemsNoDel ?? []) as Item[];
     filtered = false;
   } else if ((itemsTry?.length ?? 0) === 0) {
+    // If filtered set returns empty, pull all and filter in-process for safety
     const { data: itemsAll } = await supabase
       .from("inventory_items")
       .select(
@@ -90,12 +93,7 @@ export default async function ManageInventoryPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Manage items</h1>
         <div className="flex gap-2">
-          <Link
-            href="/inventory"
-            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-          >
-            Back to Inventory
-          </Link>
+          {/* Removed the redundant “Back to Inventory” button */}
           <Link
             href="/inventory/items/new"
             className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
@@ -139,6 +137,7 @@ export default async function ManageInventoryPage() {
                     >
                       Edit
                     </Link>
+                    {/* Keep Delete button exactly as you had it */}
                     <DeleteInventoryItemButton itemId={r.id} />
                   </div>
                 </td>
