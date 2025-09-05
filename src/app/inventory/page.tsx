@@ -305,9 +305,13 @@ export default async function InventoryLanding({
                 </td>
                 <td className="p-2 text-right">
                   <div className="flex gap-1 justify-end">
-                    <Link href={`/inventory/receipts?item=${encodeURIComponent(r.id)}`} className="px-2 py-1 border rounded text-xs hover:bg-neutral-900" prefetch={false}>Receipts</Link>
-                    <Link href={`/inventory/receipts/new?item=${encodeURIComponent(r.id)}`} className="px-2 py-1 border rounded text-xs hover:bg-neutral-900" prefetch={false}>Add receipt</Link>
-                    {/* Safe client button (no prefetch) */}
+                    <Link
+                      href={`/inventory/receipts?item=${encodeURIComponent(r.id)}`}
+                      className="px-2 py-1 border rounded text-xs hover:bg-neutral-900"
+                      prefetch={false}
+                    >
+                      Receipts
+                    </Link>
                     <DeleteInventoryItemButton id={r.id} />
                   </div>
                 </td>

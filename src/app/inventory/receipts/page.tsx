@@ -5,20 +5,20 @@ import { getEffectiveTenant } from "@/lib/effective-tenant";
 
 export const dynamic = "force-dynamic";
 
+type SearchParams = Record<string, string | string[] | undefined>;
+
 type ReceiptRow = {
   id: string;
   item_id: string;
   qty_base: number | null;
   total_cost_usd: number | null;
-  purchased_at: string | null; // alias of created_at
+  created_at: string | null;
   note: string | null;
   photo_path: string | null;
-  image_path: string | null;
   expires_on: string | null;
 };
 
 type Item = { id: string; name: string | null; base_unit: string | null };
-type SearchParams = Record<string, string | string[] | undefined>;
 
 export default async function ReceiptsPage({
   searchParams,
@@ -26,13 +26,7 @@ export default async function ReceiptsPage({
   searchParams?: Promise<SearchParams>;
 }) {
   const sp = (await searchParams) ?? {};
-  const itemFilterRaw = sp.item;
-  const itemFilter =
-    typeof itemFilterRaw === "string"
-      ? itemFilterRaw
-      : Array.isArray(itemFilterRaw)
-      ? itemFilterRaw[0]
-      : undefined;
+  const itemFilter = typeof sp.item === "string" ? sp.item : null;
 
   const supabase = await createServerClient();
   const { data: au } = await supabase.auth.getUser();
@@ -40,7 +34,7 @@ export default async function ReceiptsPage({
 
   if (!user) {
     return (
-      <main className="max-w-5xl mx-auto p-6">
+      <main className="max-w-6xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Receipts</h1>
         <p className="mt-4">Sign in required.</p>
         <Link className="underline" href="/login?redirect=/inventory/receipts">
@@ -53,67 +47,64 @@ export default async function ReceiptsPage({
   const tenantId = await getEffectiveTenant(supabase);
   if (!tenantId) {
     return (
-      <main className="max-w-5xl mx-auto p-6">
+      <main className="max-w-6xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Receipts</h1>
         <p className="mt-4">Profile missing tenant.</p>
       </main>
     );
   }
 
-  // Select with alias, but ORDER BY the real column (created_at)
+  // Fetch receipts (optionally filtered by item)
   let q = supabase
     .from("inventory_receipts")
     .select(
-      "id,item_id,qty_base,total_cost_usd,purchased_at:created_at,note,photo_path,image_path,expires_on"
+      "id,item_id,qty_base,total_cost_usd,created_at,note,photo_path,expires_on",
     )
     .eq("tenant_id", tenantId)
-    .order("created_at", { ascending: false }) // <- key fix
+    .order("created_at", { ascending: false })
     .limit(200);
 
   if (itemFilter) q = q.eq("item_id", itemFilter);
 
-  const { data: receiptsRaw, error: receiptsErr } = await q;
-  if (receiptsErr) throw receiptsErr;
+  const { data: receiptsRaw } = await q;
   const receipts = (receiptsRaw ?? []) as ReceiptRow[];
 
-  // Item names (include filter even if no receipts)
-  const itemIds = Array.from(new Set(receipts.map((r) => r.item_id)));
-  if (itemFilter && !itemIds.includes(itemFilter)) itemIds.push(itemFilter);
-
-  const itemName = new Map<string, Item>();
-  if (itemIds.length) {
+  // Fetch item names for display
+  const ids = Array.from(new Set(receipts.map((r) => r.item_id)));
+  const itemMap = new Map<string, Item>();
+  if (ids.length) {
     const { data: itemsRaw } = await supabase
       .from("inventory_items")
       .select("id,name,base_unit")
-      .in("id", itemIds);
-    (itemsRaw ?? []).forEach((it: any) => itemName.set(it.id, it));
+      .in("id", ids);
+    (itemsRaw ?? []).forEach((it: any) => itemMap.set(it.id, it));
   }
-  const filterItem = itemFilter ? itemName.get(itemFilter) : undefined;
 
   return (
     <main className="max-w-6xl mx-auto p-6 space-y-4">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Receipts</h1>
-          {itemFilter ? (
-            <div className="mt-1 text-sm text-neutral-400">
-              Showing receipts for{" "}
-              <span className="text-neutral-200">
-                {filterItem?.name ?? itemFilter}
-              </span>{" "}
-              ·{" "}
-              <Link href="/inventory/receipts" className="underline">
-                Clear filter
-              </Link>
-            </div>
-          ) : null}
-        </div>
-        <div className="flex gap-3">
-          <Link href="/inventory/receipts/new" className="underline">
+        <h1 className="text-2xl font-semibold">Receipts</h1>
+        <div className="flex gap-2">
+          <Link
+            href="/inventory/purchase"
+            prefetch={false}
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
             New Purchase
           </Link>
-          <Link href="/inventory/receipts/import" className="underline">
+          <Link
+            href="/inventory/receipts/import"
+            prefetch={false}
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
             Import CSV
+          </Link>
+          <Link
+            href="/inventory/receipts/import/template"
+            prefetch={false}
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
+            Download template
           </Link>
         </div>
       </div>
@@ -132,28 +123,26 @@ export default async function ReceiptsPage({
           </thead>
           <tbody>
             {receipts.map((r) => {
-              const it = itemName.get(r.item_id);
-              const storagePath = r.photo_path ?? r.image_path ?? null;
-              const proxyUrl = storagePath
-                ? `/api/receipt-photo?path=${encodeURIComponent(storagePath)}`
+              const it = itemMap.get(r.item_id);
+              const label = it?.name ?? r.item_id;
+              const purchased =
+                r.created_at ? new Date(r.created_at).toLocaleDateString() : "—";
+              const photoUrl = r.photo_path
+                ? `/api/receipt-photo?path=${encodeURIComponent(r.photo_path)}`
                 : null;
 
               return (
                 <tr key={r.id} className="border-t">
                   <td className="p-2">
-                    <div className="flex items-center gap-2">
-                      <span>{it?.name ?? r.item_id}</span>
-                      {!itemFilter && (
-                        <Link
-                          href={`/inventory/receipts?item=${encodeURIComponent(
-                            r.item_id
-                          )}`}
-                          className="text-xs underline opacity-70"
-                        >
-                          only this
-                        </Link>
-                      )}
-                    </div>
+                    {label}
+                    {" "}
+                    <Link
+                      href={`/inventory/receipts?item=${encodeURIComponent(r.item_id)}`}
+                      prefetch={false}
+                      className="ml-2 text-xs opacity-60 underline"
+                    >
+                      only this
+                    </Link>
                   </td>
                   <td className="p-2 text-right tabular-nums">
                     {Number(r.qty_base ?? 0).toLocaleString()}
@@ -161,27 +150,12 @@ export default async function ReceiptsPage({
                   <td className="p-2 text-right tabular-nums">
                     {fmtUSD(Number(r.total_cost_usd ?? 0))}
                   </td>
-                  <td className="p-2">
-                    {r.purchased_at
-                      ? new Date(r.purchased_at).toLocaleDateString()
-                      : "—"}
-                  </td>
+                  <td className="p-2">{purchased}</td>
                   <td className="p-2">{r.note ?? "—"}</td>
                   <td className="p-2 text-center">
-                    {proxyUrl ? (
-                      <a
-                        href={proxyUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-block"
-                        title="Open photo"
-                      >
-                        <img
-                          src={proxyUrl}
-                          alt="Receipt"
-                          className="h-16 w-16 object-cover rounded border border-neutral-800 inline-block"
-                          loading="lazy"
-                        />
+                    {photoUrl ? (
+                      <a href={photoUrl} target="_blank" className="underline">
+                        View
                       </a>
                     ) : (
                       "—"
@@ -190,6 +164,7 @@ export default async function ReceiptsPage({
                 </tr>
               );
             })}
+
             {receipts.length === 0 && (
               <tr>
                 <td className="p-3 text-neutral-400" colSpan={6}>
