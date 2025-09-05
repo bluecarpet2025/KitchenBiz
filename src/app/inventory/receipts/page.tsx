@@ -69,7 +69,7 @@ export default async function ReceiptsPage({
   const { data: receiptsRaw } = await q;
   const receipts = (receiptsRaw ?? []) as ReceiptRow[];
 
-  // Fetch item names for display
+  // Item names
   const ids = Array.from(new Set(receipts.map((r) => r.item_id)));
   const itemMap = new Map<string, Item>();
   if (ids.length) {
@@ -93,7 +93,7 @@ export default async function ReceiptsPage({
             New Purchase
           </Link>
           <Link
-            href="/inventory/receipts/import"
+            href="/inventory/receipts/upload"
             prefetch={false}
             className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
           >
@@ -134,8 +134,7 @@ export default async function ReceiptsPage({
               return (
                 <tr key={r.id} className="border-t">
                   <td className="p-2">
-                    {label}
-                    {" "}
+                    {label}{" "}
                     <Link
                       href={`/inventory/receipts?item=${encodeURIComponent(r.item_id)}`}
                       prefetch={false}

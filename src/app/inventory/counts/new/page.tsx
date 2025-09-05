@@ -1,4 +1,3 @@
-// src/app/inventory/counts/new/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import CountFormClient from "@/components/CountFormClient";
@@ -51,7 +50,7 @@ export default async function NewCountPage() {
         <h1 className="text-2xl font-semibold">New Inventory Count</h1>
         <div className="flex gap-2">
           <Link href="/inventory/counts" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">History</Link>
-          <Link href="/inventory" className="underline text-sm">← Inventory</Link>
+          <Link href="/inventory" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Inventory</Link>
         </div>
       </div>
 

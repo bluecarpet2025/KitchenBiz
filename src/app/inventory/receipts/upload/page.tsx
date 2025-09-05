@@ -4,7 +4,7 @@ import { getEffectiveTenant } from "@/lib/effective-tenant";
 
 export const dynamic = "force-dynamic";
 
-export default async function ImportReceiptsPage() {
+export default async function ImportReceiptsUploadPage() {
   const supabase = await createServerClient();
   const { data: u } = await supabase.auth.getUser();
   const user = u.user ?? null;
@@ -14,7 +14,7 @@ export default async function ImportReceiptsPage() {
       <main className="max-w-5xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Import receipts (CSV)</h1>
         <p className="mt-4">Sign in required.</p>
-        <Link className="underline" href="/login?redirect=/inventory/receipts/import">
+        <Link className="underline" href="/login?redirect=/inventory/receipts/upload">
           Go to login
         </Link>
       </main>
