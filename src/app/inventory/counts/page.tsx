@@ -75,9 +75,20 @@ export default async function CountsListPage() {
     <main className="max-w-5xl mx-auto p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Inventory Counts</h1>
-        <Link href="/inventory/counts/new" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
-          New Count
-        </Link>
+        <div className="flex gap-2">
+          <Link
+            href="/inventory/counts/export"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
+            Export CSV
+          </Link>
+          <Link
+            href="/inventory/counts/new"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
+            New Count
+          </Link>
+        </div>
       </div>
 
       <table className="w-full text-sm table-auto">
