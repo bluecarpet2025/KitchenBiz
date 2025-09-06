@@ -1,4 +1,3 @@
-// src/components/CountFormClient.tsx
 "use client";
 
 import { useMemo, useState } from "react";
@@ -21,12 +20,14 @@ export default function CountFormClient({
   expected: Record<string, number>;
   tenantId: string;
 }) {
-  // Local copy of item options so a newly created item appears instantly in <select>.
-  const [itemOptions, setItemOptions] = useState<Item[]>(items);
+  // keep a *local* items list so new items show up in dropdowns immediately
+  const [localItems, setLocalItems] = useState<Item[]>(
+    [...items].sort((a, b) => a.name.localeCompare(b.name))
+  );
 
   const [note, setNote] = useState("");
   const [rows, setRows] = useState<FormItem[]>(
-    items.map((it) => ({
+    localItems.map((it) => ({
       ...it,
       expected: expected[it.id] ?? 0,
       counted: "",
@@ -37,11 +38,6 @@ export default function CountFormClient({
 
   const deltas = useMemo(
     () => rows.map((r) => toNum(r.counted) - (r.expected ?? 0)),
-    [rows]
-  );
-
-  const hasNegativeCounts = useMemo(
-    () => rows.some((r) => toNum(r.counted) < 0),
     [rows]
   );
 
@@ -67,9 +63,12 @@ export default function CountFormClient({
       return;
     }
 
-    // Make the new item available in dropdowns immediately (fixes bug #4).
-    setItemOptions((prev) => [...prev, data]);
+    // 1) add to local items so dropdowns see it immediately
+    setLocalItems((prev) =>
+      [...prev, data as Item].sort((a, b) => a.name.localeCompare(b.name))
+    );
 
+    // 2) insert a new line using the new item
     const row: FormItem = {
       id: data.id,
       name: data.name,
@@ -77,7 +76,6 @@ export default function CountFormClient({
       expected: 0,
       counted: "",
     };
-
     setRows((prev) => {
       const copy = prev.slice();
       copy.splice(atIndex, 0, row);
@@ -89,41 +87,6 @@ export default function CountFormClient({
 
   async function commit() {
     try {
-      if (hasNegativeCounts) {
-        alert("You have one or more negative counts. Please fix before committing.");
-        return;
-      }
-
-      // Build a preview summary for confirmation (non-destructive).
-      const previewLines = rows
-        .map((r, i) => ({
-          name: r.name,
-          expected: r.expected || 0,
-          counted: toNum(r.counted),
-          delta: deltas[i],
-        }))
-        .filter((x) => Math.abs(x.delta) > 0);
-
-      const totalChanged = previewLines.length;
-      const sample = previewLines.slice(0, 5);
-      const sampleText = sample
-        .map(
-          (x) =>
-            `• ${x.name}: expected ${x.expected.toFixed(3)}, counted ${x.counted.toFixed(
-              3
-            )}, Δ ${x.delta.toFixed(3)}`
-        )
-        .join("\n");
-
-      const msg =
-        totalChanged === 0
-          ? "No changes detected (all deltas are zero). Commit anyway?"
-          : `You are about to commit this count.\n\nLines that will change: ${totalChanged}\n\nPreview:\n${sampleText}${
-              totalChanged > sample.length ? `\n…and ${totalChanged - sample.length} more` : ""
-            }\n\nProceed?`;
-
-      if (!window.confirm(msg)) return;
-
       setBusy(true);
       setStatus("Saving…");
 
@@ -144,13 +107,13 @@ export default function CountFormClient({
         return { item_id: r.id, expected: exp, counted: cnt, delta };
       });
 
-      // 3) insert lines
+      // 3) insert lines (column names must match your DB schema — see section B)
       const lineRows = lines.map((l) => ({
         count_id: countId,
         tenant_id: tenantId,
         item_id: l.item_id,
         expected_base: l.expected,
-        counted_base: l.counted,
+        counted_base: l.counted, // <-- ensure this column exists (Section B)
         delta_base: l.delta,
       }));
       const { error: lErr } = await supabase
@@ -179,7 +142,7 @@ export default function CountFormClient({
       setStatus("Count committed. Adjustments posted.");
     } catch (err: any) {
       console.error(err);
-      alert(err?.message ?? "Failed to commit count");
+      alert(err.message ?? "Failed to commit count");
       setStatus("Error.");
     } finally {
       setBusy(false);
@@ -208,106 +171,89 @@ export default function CountFormClient({
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, idx) => {
-              const countedNum = toNum(r.counted);
-              const isNegative = countedNum < 0;
-
-              return (
-                <tr key={`${r.id}-${idx}`} className="border-t">
-                  <td className="p-2">
-                    <div className="flex items-center gap-2">
-                      <select
-                        className="border rounded px-2 py-1"
-                        value={r.id}
-                        onChange={(e) => {
-                          const id = e.target.value;
-                          const item = itemOptions.find((it) => it.id === id)!;
-                          setRows((prev) =>
-                            prev.map((x, i) =>
-                              i === idx
-                                ? {
-                                    ...x,
-                                    id,
-                                    name: item.name,
-                                    base_unit: item.base_unit,
-                                    expected: expected[id] ?? 0,
-                                    counted: "",
-                                  }
-                                : x
-                            )
-                          );
-                        }}
-                      >
-                        {itemOptions.map((it) => (
-                          <option key={it.id} value={it.id}>
-                            {it.name}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        className="text-xs underline"
-                        onClick={() => quickAddNewItem(idx)}
-                      >
-                        + New item
-                      </button>
-                    </div>
-                  </td>
-
-                  <td className="p-2 text-right tabular-nums">
-                    {(r.expected ?? 0).toFixed(3)}
-                  </td>
-
-                  <td className="p-2">
-                    <input
-                      className={`w-full border rounded px-2 py-1 text-right ${
-                        isNegative ? "border-red-500/70 bg-red-950/20" : ""
-                      }`}
-                      type="number"
-                      step="0.001"
-                      value={r.counted}
+            {rows.map((r, idx) => (
+              <tr key={`${r.id}-${idx}`} className="border-t">
+                <td className="p-2">
+                  <div className="flex items-center gap-2">
+                    <select
+                      className="border rounded px-2 py-1"
+                      value={r.id}
                       onChange={(e) => {
-                        const v = e.target.value;
+                        const id = e.target.value;
+                        const item = localItems.find((it) => it.id === id)!;
                         setRows((prev) =>
-                          prev.map((x, i) => (i === idx ? { ...x, counted: v } : x))
+                          prev.map((x, i) =>
+                            i === idx
+                              ? {
+                                  ...x,
+                                  id,
+                                  name: item.name,
+                                  base_unit: item.base_unit,
+                                  expected: expected[id] ?? 0,
+                                  counted: "",
+                                }
+                              : x
+                          )
                         );
                       }}
-                    />
-                    {isNegative && (
-                      <div className="mt-1 text-xs text-red-400">
-                        Counted value can’t be negative.
-                      </div>
-                    )}
-                  </td>
-
-                  <td
-                    className={`p-2 text-right tabular-nums ${
-                      deltas[idx] < 0
-                        ? "text-red-500"
-                        : deltas[idx] > 0
-                        ? "text-emerald-500"
-                        : ""
-                    }`}
-                  >
-                    {Number.isFinite(deltas[idx])
-                      ? deltas[idx].toFixed(3)
-                      : "0.000"}
-                  </td>
-
-                  <td className="p-2">{r.base_unit ?? ""}</td>
-
-                  <td className="p-2">
+                    >
+                      {localItems.map((it) => (
+                        <option key={it.id} value={it.id}>
+                          {it.name}
+                        </option>
+                      ))}
+                    </select>
                     <button
                       className="text-xs underline"
-                      onClick={() =>
-                        setRows((prev) => prev.filter((_, i) => i !== idx))
-                      }
+                      onClick={() => quickAddNewItem(idx)}
                     >
-                      Remove
+                      + New item
                     </button>
-                  </td>
-                </tr>
-              );
-            })}
+                  </div>
+                </td>
+                <td className="p-2 text-right tabular-nums">
+                  {(r.expected ?? 0).toFixed(3)}
+                </td>
+                <td className="p-2">
+                  <input
+                    className="w-full border rounded px-2 py-1 text-right"
+                    type="number"
+                    step="0.001"
+                    value={r.counted}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setRows((prev) =>
+                        prev.map((x, i) => (i === idx ? { ...x, counted: v } : x))
+                      );
+                    }}
+                  />
+                </td>
+                <td
+                  className={`p-2 text-right tabular-nums ${
+                    deltas[idx] < 0
+                      ? "text-red-500"
+                      : deltas[idx] > 0
+                      ? "text-emerald-500"
+                      : ""
+                  }`}
+                >
+                  {Number.isFinite(deltas[idx])
+                    ? deltas[idx].toFixed(3)
+                    : "0.000"}
+                </td>
+                <td className="p-2">{r.base_unit ?? ""}</td>
+                <td className="p-2">
+                  <button
+                    className="text-xs underline"
+                    onClick={() =>
+                      setRows((prev) => prev.filter((_, i) => i !== idx))
+                    }
+                  >
+                    Remove
+                  </button>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
@@ -316,8 +262,8 @@ export default function CountFormClient({
         <button
           className="px-3 py-2 border rounded-md hover:bg-neutral-900"
           onClick={() => {
-            if (!itemOptions.length) return;
-            const first = itemOptions[0];
+            if (!localItems.length) return;
+            const first = localItems[0];
             setRows((prev) => [
               ...prev,
               {
