@@ -61,18 +61,28 @@ export default async function CountsListPage() {
 
   const counts: CountRow[] = (countsRaw ?? []) as any[];
 
-  // If no counts, render empty state UI quickly.
   if (counts.length === 0) {
     return (
       <main className="max-w-5xl mx-auto p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">Inventory Counts</h1>
-          <Link
-            href="/inventory/counts/new"
-            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-          >
-            New Count
-          </Link>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled
+              aria-disabled="true"
+              title="Export CSV (coming soon)"
+              className="px-3 py-2 border rounded-md text-sm opacity-60 cursor-not-allowed"
+            >
+              Export CSV
+            </button>
+            <Link
+              href="/inventory/counts/new"
+              className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+            >
+              New Count
+            </Link>
+          </div>
         </div>
 
         <div className="border rounded-lg overflow-hidden">
@@ -134,11 +144,7 @@ export default async function CountsListPage() {
   }
 
   // 4) Aggregate totals per count
-  const totals = new Map<
-    string,
-    { units: number; dollars: number }
-  >();
-
+  const totals = new Map<string, { units: number; dollars: number }>();
   for (const l of lines) {
     const cid = l.count_id;
     const delta = Math.abs(Number(l.delta_base || 0));
@@ -155,14 +161,15 @@ export default async function CountsListPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Inventory Counts</h1>
         <div className="flex gap-2">
-          {/* We’ll wire this to a real export after you pick the spec (latest/specific/range) */}
-          <Link
-            href="/inventory/counts"
-            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-            onClick={(e) => e.preventDefault()}
+          <button
+            type="button"
+            disabled
+            aria-disabled="true"
+            title="Export CSV (coming soon)"
+            className="px-3 py-2 border rounded-md text-sm opacity-60 cursor-not-allowed"
           >
             Export CSV
-          </Link>
+          </button>
           <Link
             href="/inventory/counts/new"
             className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
