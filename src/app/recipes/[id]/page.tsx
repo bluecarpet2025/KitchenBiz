@@ -5,7 +5,7 @@ import { fmtQty } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-type Recipe = {
+type RecipeRow = {
   id: string;
   tenant_id: string;
   name: string;
@@ -22,39 +22,19 @@ type IngredientRow = {
   sub_recipe_id: string | null;
   qty: number;
   unit: string;
+  // joined fields (if item)
+  item_name?: string | null;
+  base_unit?: string | null;
+  purchase_unit?: string | null;
+  pack_to_base_factor?: number | null;
 };
 
-type Item = {
-  id: string;
-  name: string;
-  base_unit: string;
-  purchase_unit: string;
-  pack_to_base_factor: number;
-};
-
-type OnHandRow = {
-  item_id: string;
-  on_hand_base: number;
-};
-
-function toBase(qty: number, unit: string | null | undefined, item: Item | undefined): number {
-  const q = Number(qty || 0);
-  if (!item) return q;
-  const u = (unit || "").toLowerCase();
-  const baseU = (item.base_unit || "").toLowerCase();
-  const purchU = (item.purchase_unit || "").toLowerCase();
-
-  if (u === baseU) return q;
-  if (u === purchU) return q * Number(item.pack_to_base_factor || 1);
-
-  // Fallback: treat as base if unit doesn't match (prevents zeroing out)
-  return q;
-}
+type MakeableRow = { recipe_id: string; makeable: number | null };
 
 async function getTenant() {
   const supabase = await createServerClient();
-  const { data: au } = await supabase.auth.getUser();
-  const uid = au.user?.id ?? null;
+  const { data: u } = await supabase.auth.getUser();
+  const uid = u.user?.id ?? null;
   if (!uid) return { supabase, tenantId: null };
 
   const { data: prof } = await supabase
@@ -66,13 +46,29 @@ async function getTenant() {
   return { supabase, tenantId: prof?.tenant_id ?? null };
 }
 
-// NOTE: this project expects Promise-style params
-type Ctx = { params: Promise<{ id: string }> };
+function toBaseQty(ing: IngredientRow): { baseQty: number | null; baseUnit: string | null } {
+  if (!ing.item_id) return { baseQty: null, baseUnit: null }; // sub-recipes not converted here
+  const unit = ing.unit?.trim()?.toLowerCase();
+  const bu = ing.base_unit?.trim()?.toLowerCase() || null;
+  const pu = ing.purchase_unit?.trim()?.toLowerCase() || null;
+  const factor = Number(ing.pack_to_base_factor ?? 0);
 
-export default async function RecipePage(ctx: Ctx) {
-  const { id } = await ctx.params;
-  const recipeId = id;
+  if (bu && (unit === bu || unit == null)) {
+    return { baseQty: Number(ing.qty), baseUnit: ing.base_unit ?? null };
+  }
+  if (pu && unit === pu && factor > 0) {
+    return { baseQty: Number(ing.qty) * factor, baseUnit: ing.base_unit ?? null };
+  }
+  // Fallback: unknown conversion, show the original qty and the item base unit to avoid lying
+  return { baseQty: Number(ing.qty), baseUnit: ing.base_unit ?? null };
+}
 
+export default async function RecipePage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
   const { supabase, tenantId } = await getTenant();
 
   if (!tenantId) {
@@ -80,170 +76,173 @@ export default async function RecipePage(ctx: Ctx) {
       <main className="max-w-5xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Recipe</h1>
         <p className="mt-4">Sign in required or profile missing tenant.</p>
-        <Link className="underline" href="/login?redirect=/recipes">
-          Go to login
-        </Link>
+        <Link className="underline" href="/login?redirect=/recipes">Go to login</Link>
       </main>
     );
   }
 
   // Load recipe
-  const { data: rec, error: recErr } = await supabase
+  const { data: recipe } = await supabase
     .from("recipes")
-    .select("id,tenant_id,name,description,batch_yield_qty,batch_yield_unit,yield_pct")
+    .select("id,tenant_id,name,description,batch_yield_qty,batch_yield_unit,yield_pct,deleted_at")
     .eq("tenant_id", tenantId)
-    .eq("id", recipeId)
+    .eq("id", id)
     .maybeSingle();
 
-  if (recErr || !rec) {
+  if (!recipe || (recipe as any).deleted_at) {
     return (
       <main className="max-w-5xl mx-auto p-6">
-        <h1 className="text-2xl font-semibold">Recipe</h1>
-        <p className="mt-4">Recipe not found.</p>
+        <h1 className="text-2xl font-semibold">Recipe not found</h1>
+        <p className="mt-4">The recipe doesn’t exist or was removed.</p>
         <Link className="underline" href="/recipes">Back to recipes</Link>
       </main>
     );
   }
 
-  // Load ingredients
-  const { data: ing } = await supabase
+  const r = recipe as RecipeRow;
+
+  // Ingredients (join item info; sub-recipe lines will have item_id = null)
+  const { data: ings } = await supabase
     .from("recipe_ingredients")
-    .select("id,recipe_id,item_id,sub_recipe_id,qty,unit")
-    .eq("recipe_id", recipeId);
-
-  const ingredients = (ing ?? []) as IngredientRow[];
-
-  // Load relevant items
-  const itemIds = Array.from(
-    new Set(
-      ingredients
-        .map((r) => r.item_id)
-        .filter((x): x is string => !!x)
+    .select(
+      [
+        "id",
+        "recipe_id",
+        "item_id",
+        "sub_recipe_id",
+        "qty",
+        "unit",
+        "inventory_items!inner(id, name, base_unit, purchase_unit, pack_to_base_factor)"
+      ].join(",")
     )
-  );
+    .eq("recipe_id", r.id);
 
-  let items: Item[] = [];
-  if (itemIds.length) {
-    const { data: itData } = await supabase
-      .from("inventory_items")
-      .select("id,name,base_unit,purchase_unit,pack_to_base_factor")
-      .in("id", itemIds)
-      .eq("tenant_id", tenantId);
-
-    items = (itData ?? []) as Item[];
-  }
-
-  const itemMap = new Map(items.map((i) => [i.id, i]));
-
-  // Aggregate per-item required base qty for ONE BATCH
-  const requiredByItem = new Map<string, number>();
-  for (const r of ingredients) {
-    if (!r.item_id) continue; // skip sub-recipes for makeable (we can flatten later)
-    const it = itemMap.get(r.item_id);
-    const baseQty = toBase(Number(r.qty || 0), r.unit, it);
-    if (!Number.isFinite(baseQty) || baseQty <= 0) continue;
-
-    const prev = requiredByItem.get(r.item_id) || 0;
-    requiredByItem.set(r.item_id, prev + baseQty);
-  }
-
-  // Load on-hand in base units
-  const { data: onhandRows } = await supabase
-    .from("v_item_on_hand")
-    .select("item_id,on_hand_base")
-    .eq("tenant_id", tenantId);
-
-  const onHandMap = new Map<string, number>(
-    (onhandRows ?? []).map((r: OnHandRow) => [r.item_id, Number(r.on_hand_base || 0)])
-  );
-
-  // Compute makeable
-  let makeable: number | null = null;
-  if (requiredByItem.size > 0) {
-    let minBatches = Infinity;
-    for (const [itemId, needBase] of requiredByItem.entries()) {
-      if (needBase <= 0) continue;
-      const have = onHandMap.get(itemId) || 0;
-      const canDo = Math.floor(have / needBase);
-      minBatches = Math.min(minBatches, canDo);
+  const rows: IngredientRow[] = (ings ?? []).map((row: any) => {
+    if (row.inventory_items?.id) {
+      return {
+        id: row.id,
+        recipe_id: row.recipe_id,
+        item_id: row.item_id,
+        sub_recipe_id: row.sub_recipe_id,
+        qty: Number(row.qty ?? 0),
+        unit: row.unit ?? "",
+        item_name: row.inventory_items.name ?? null,
+        base_unit: row.inventory_items.base_unit ?? null,
+        purchase_unit: row.inventory_items.purchase_unit ?? null,
+        pack_to_base_factor: row.inventory_items.pack_to_base_factor ?? null,
+      };
     }
-    makeable = Number.isFinite(minBatches) ? Math.max(0, minBatches) : 0;
-  } else {
-    makeable = 0; // explicit
-  }
-
-  // Prepare rows for display (with formatting)
-  const displayRows = ingredients.map((r) => {
-    const it = r.item_id ? itemMap.get(r.item_id) : undefined;
-    const baseQty = r.item_id ? toBase(Number(r.qty || 0), r.unit, it) : Number(r.qty || 0);
+    // sub-recipe line (no item join)
     return {
-      id: r.id,
-      type: r.item_id ? "item" : "sub",
-      name: r.item_id ? it?.name ?? r.item_id : `Sub-recipe ${r.sub_recipe_id?.slice(0, 8) ?? ""}`,
-      qty: r.qty,
-      unit: r.unit,
-      baseQty,
-      baseUnit: r.item_id ? it?.base_unit ?? "" : r.unit,
+      id: row.id,
+      recipe_id: row.recipe_id,
+      item_id: row.item_id,
+      sub_recipe_id: row.sub_recipe_id,
+      qty: Number(row.qty ?? 0),
+      unit: row.unit ?? "",
+      item_name: null,
+      base_unit: null,
+      purchase_unit: null,
+      pack_to_base_factor: null,
     };
   });
 
+  // Makeable value (batches) from the view
+  const { data: mkRow } = await supabase
+    .from("v_recipe_makeable_simple")
+    .select("recipe_id, makeable")
+    .eq("tenant_id", tenantId)
+    .eq("recipe_id", r.id)
+    .maybeSingle();
+
+  const makeable = Number((mkRow as MakeableRow | null)?.makeable ?? 0);
+
   return (
-    <main className="max-w-5xl mx-auto p-6 space-y-6">
+    <main className="max-w-5xl mx-auto p-6 space-y-5">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">{rec.name}</h1>
+        <h1 className="text-2xl font-semibold">{r.name}</h1>
         <div className="flex gap-2">
-          <Link href="/recipes" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Back to recipes</Link>
-          <Link href={`/recipes/${rec.id}/edit`} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Edit</Link>
+          <Link
+            href="/recipes"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
+            Back to recipes
+          </Link>
+          <Link
+            href={`/recipes/${r.id}/edit`}
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
+            Edit
+          </Link>
         </div>
       </div>
 
-      <div className="grid sm:grid-cols-3 gap-4">
+      <div className="grid md:grid-cols-3 gap-3">
         <div className="border rounded p-3">
           <div className="text-sm opacity-70">Batch yield</div>
-          <div className="text-lg font-medium">
-            {fmtQty(rec.batch_yield_qty ?? 0)} {rec.batch_yield_unit ?? ""}
+          <div className="text-xl font-semibold">
+            {fmtQty(r.batch_yield_qty ?? 1)}{" "}
+            <span className="text-base opacity-80">{r.batch_yield_unit ?? "each"}</span>
           </div>
         </div>
         <div className="border rounded p-3">
           <div className="text-sm opacity-70">Yield %</div>
-          <div className="text-lg font-medium">
-            {rec.yield_pct == null ? "—" : `${fmtQty(Number(rec.yield_pct) * 100)}%`}
+          <div className="text-xl font-semibold">
+            {r.yield_pct == null ? "100%" : `${Math.round(Number(r.yield_pct))}%`}
           </div>
         </div>
         <div className="border rounded p-3">
           <div className="text-sm opacity-70">Makeable (batches)</div>
-          <div className="text-lg font-medium">{makeable ?? 0}</div>
+          <div className="text-xl font-semibold tabular-nums">
+            {makeable.toLocaleString()}
+          </div>
         </div>
       </div>
 
-      {rec.description ? (
-        <div className="border rounded p-3 text-sm whitespace-pre-wrap">{rec.description}</div>
+      {r.description ? (
+        <p className="text-sm opacity-80 border rounded p-3">{r.description}</p>
       ) : null}
 
-      <div className="border rounded overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="border rounded-lg overflow-hidden">
+        <table className="w-full text-sm table-auto">
           <thead className="bg-neutral-900/60">
-            <tr>
-              <th className="p-2 text-left">Ingredient</th>
+            <tr className="text-left text-neutral-300">
+              <th className="p-2">Ingredient</th>
               <th className="p-2 text-right">Qty</th>
-              <th className="p-2 text-left">Unit</th>
+              <th className="p-2">Unit</th>
               <th className="p-2 text-right">Base qty</th>
-              <th className="p-2 text-left">Base unit</th>
+              <th className="p-2">Base unit</th>
             </tr>
           </thead>
           <tbody>
-            {displayRows.map((r) => (
-              <tr key={r.id} className="border-t">
-                <td className="p-2">{r.name}</td>
-                <td className="p-2 text-right tabular-nums">{fmtQty(r.qty)}</td>
-                <td className="p-2">{r.unit}</td>
-                <td className="p-2 text-right tabular-nums">{fmtQty(r.baseQty)}</td>
-                <td className="p-2">{r.baseUnit}</td>
-              </tr>
-            ))}
-            {displayRows.length === 0 && (
+            {rows.map((ing) => {
+              // Label for ingredient
+              const label =
+                ing.item_id && ing.item_name
+                  ? ing.item_name
+                  : ing.sub_recipe_id
+                  ? "Sub-recipe"
+                  : "Ingredient";
+
+              const { baseQty, baseUnit } = toBaseQty(ing);
+
+              return (
+                <tr key={ing.id} className="border-t">
+                  <td className="p-2">{label}</td>
+                  <td className="p-2 text-right tabular-nums">{fmtQty(ing.qty)}</td>
+                  <td className="p-2">{ing.unit || "—"}</td>
+                  <td className="p-2 text-right tabular-nums">
+                    {baseQty == null ? "—" : fmtQty(baseQty)}
+                  </td>
+                  <td className="p-2">{baseUnit ?? "—"}</td>
+                </tr>
+              );
+            })}
+            {rows.length === 0 && (
               <tr>
-                <td className="p-3 text-neutral-400" colSpan={5}>No ingredients yet.</td>
+                <td className="p-3 text-neutral-400" colSpan={5}>
+                  No ingredients yet.
+                </td>
               </tr>
             )}
           </tbody>

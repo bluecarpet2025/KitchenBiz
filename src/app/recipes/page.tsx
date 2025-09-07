@@ -13,12 +13,13 @@ type RecipeRow = {
   batch_yield_unit: string | null;
   yield_pct: number | null;
 };
+
 type IngredientRow = {
   id: string;
   recipe_id: string;
   item_id: string | null;
   sub_recipe_id: string | null;
-  qty: number | null;   // quantity per ONE portion of the parent recipe
+  qty: number | null; // quantity per ONE portion of the parent recipe
   unit: string | null;
 };
 
@@ -36,12 +37,16 @@ function buildRequirementsIndex(
   recipes: RecipeRow[],
   linesByRecipe: Map<string, IngredientRow[]>
 ): Record<string, Record<string, number>> {
-  const recipeById = new Map(recipes.map(r => [r.id, r]));
+  const recipeById = new Map(recipes.map((r) => [r.id, r]));
   const memo = new Map<string, Record<string, number>>();
   const visiting = new Set<string>();
   const MAX_DEPTH = 32;
 
-  function addInto(dst: Record<string, number>, src: Record<string, number>, multiplier = 1) {
+  function addInto(
+    dst: Record<string, number>,
+    src: Record<string, number>,
+    multiplier = 1
+  ) {
     for (const [k, v] of Object.entries(src)) dst[k] = (dst[k] ?? 0) + v * multiplier;
   }
 
@@ -84,13 +89,17 @@ function buildRequirementsIndex(
 
 export default async function RecipesPage() {
   const supabase = await createServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   if (!user) {
     return (
       <main className="max-w-5xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Recipes</h1>
         <p className="mt-4">Sign in required.</p>
-        <Link href="/login?redirect=/recipes" className="underline">Go to login</Link>
+        <Link href="/login?redirect=/recipes" className="underline">
+          Go to login
+        </Link>
       </main>
     );
   }
@@ -106,15 +115,147 @@ export default async function RecipesPage() {
     );
   }
 
+  // Recipes
   const { data: recipesRaw, error: rErr } = await supabase
     .from("recipes")
-    .select("id,name,created_at,batch_yield_qty,batch_yield_unit,yield_pct")
+    .select("id,name,created_at,batch_yield_qty,batch_yield_unit,yield_pct,deleted_at")
     .eq("tenant_id", tenantId)
     .order("name");
   if (rErr) throw rErr;
-  const recipes = (recipesRaw ?? []) as RecipeRow[];
+  const recipes = (recipesRaw ?? []).filter((r: any) => r.deleted_at == null) as RecipeRow[];
 
-  const recipeIds = recipes.map(r => r.id);
+  // --- Makeable via DB view (preferred) --------------------------------------
+  let makeableMap: Map<string, number> | null = null;
+  try {
+    const { data: mk } = await supabase
+      .from("v_recipe_makeable_simple")
+      .select("recipe_id, makeable")
+      .eq("tenant_id", tenantId);
+    if (mk && mk.length) {
+      makeableMap = new Map(
+        mk.map((row: any) => [String(row.recipe_id), Number(row.makeable ?? 0)])
+      );
+    }
+  } catch {
+    // ignore; we'll fall back to old client-side calc below
+  }
+
+  // Always compute whether on-hand is empty for the hint
+  let onHandRows = 0;
+  try {
+    const { data: ohNew } = await supabase
+      .from("v_inventory_on_hand")
+      .select("item_id", { count: "estimated", head: true })
+      .eq("tenant_id", tenantId);
+    // head:true returns no rows; but supabase still returns count in a separate path.
+    // If data is null, we’ll fetch an actual small set:
+    if (!ohNew) {
+      const { data: ohPeek } = await supabase
+        .from("v_inventory_on_hand")
+        .select("item_id")
+        .eq("tenant_id", tenantId)
+        .limit(1);
+      onHandRows = (ohPeek ?? []).length;
+    } else {
+      onHandRows = ohNew.length; // may be 0
+    }
+  } catch {
+    // old view name fallback
+    const { data: ohOld } = await supabase
+      .from("v_item_on_hand")
+      .select("item_id")
+      .eq("tenant_id", tenantId)
+      .limit(1);
+    onHandRows = (ohOld ?? []).length;
+  }
+  const onHandEmpty = onHandRows === 0;
+
+  // If we got makeable from the view, render with it.
+  if (makeableMap) {
+    const rows = recipes.map((rec) => ({
+      id: rec.id,
+      name: rec.name ?? "Untitled",
+      created_at: rec.created_at,
+      makeable: makeableMap!.get(rec.id) ?? 0,
+    }));
+
+    return (
+      <main className="max-w-5xl mx-auto p-6">
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-semibold">Recipes</h1>
+          <Link
+            href="/recipes/new"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
+            New Recipe
+          </Link>
+        </div>
+
+        <div className="mt-4 border rounded-lg overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-neutral-900/60">
+              <tr>
+                <th className="text-left p-2">Recipe</th>
+                <th className="text-right p-2">Makeable</th>
+                <th className="text-left p-2">Created</th>
+                <th className="text-left p-2">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id} className="border-t">
+                  <td className="p-2">
+                    <Link href={`/recipes/${r.id}`} className="underline">
+                      {r.name}
+                    </Link>
+                  </td>
+                  <td className="p-2 text-right tabular-nums">
+                    {Number(r.makeable ?? 0).toLocaleString()}
+                  </td>
+                  <td className="p-2">
+                    {r.created_at ? new Date(r.created_at).toLocaleDateString() : "-"}
+                  </td>
+                  <td className="p-2">
+                    <Link href={`/recipes/${r.id}?dup=1`} className="underline">
+                      Duplicate
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="p-3 text-neutral-400">
+                    No recipes yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <p className="text-xs mt-3 opacity-70">
+          <strong>Makeable</strong> expands sub-recipes into base items and uses your
+          current on-hand (base units) to estimate how many portions you can prep now.
+        </p>
+        {onHandEmpty && (
+          <p className="text-xs mt-1 text-amber-300">
+            No on-hand data found for your items. Add stock in{" "}
+            <Link href="/inventory/counts/new" className="underline">
+              Inventory → Counts
+            </Link>{" "}
+            or{" "}
+            <Link href="/inventory/purchase" className="underline">
+              Inventory → Purchase
+            </Link>
+            .
+          </p>
+        )}
+      </main>
+    );
+  }
+
+  // --- Fallback to your original local calculation ---------------------------
+  const recipeIds = recipes.map((r) => r.id);
   let ingredients: IngredientRow[] = [];
   if (recipeIds.length) {
     const { data: ingRaw, error: iErr } = await supabase
@@ -126,30 +267,23 @@ export default async function RecipesPage() {
   }
 
   const onhandMap = new Map<string, number>();
-  let onHandRows = 0;
   try {
-    const { data: ohNew, error: ohNewErr } = await supabase
+    const { data: ohNew } = await supabase
       .from("v_inventory_on_hand")
       .select("item_id,qty_on_hand_base")
       .eq("tenant_id", tenantId);
-    if (ohNewErr) throw ohNewErr;
     (ohNew ?? []).forEach((r: any) => {
       onhandMap.set(r.item_id as string, Number(r.qty_on_hand_base ?? 0));
     });
-    onHandRows = (ohNew ?? []).length;
   } catch (_e) {
-    const { data: ohOld, error: ohOldErr } = await supabase
+    const { data: ohOld } = await supabase
       .from("v_item_on_hand")
       .select("item_id,on_hand_base")
       .eq("tenant_id", tenantId);
-    if (ohOldErr) throw ohOldErr;
     (ohOld ?? []).forEach((r: any) => {
       onhandMap.set(r.item_id as string, Number(r.on_hand_base ?? 0));
     });
-    onHandRows = (ohOld ?? []).length;
   }
-
-  const onHandEmpty = onHandRows === 0;
 
   const linesByRecipe = indexIngredients(ingredients);
   const reqIndex = buildRequirementsIndex(recipes, linesByRecipe);
@@ -205,7 +339,7 @@ export default async function RecipesPage() {
             </tr>
           </thead>
           <tbody>
-            {rows.map(r => (
+            {rows.map((r) => (
               <tr key={r.id} className="border-t">
                 <td className="p-2">
                   <Link href={`/recipes/${r.id}`} className="underline">
@@ -217,7 +351,9 @@ export default async function RecipesPage() {
                   {r.created_at ? new Date(r.created_at).toLocaleDateString() : "-"}
                 </td>
                 <td className="p-2">
-                  <Link href={`/recipes/${r.id}?dup=1`} className="underline">Duplicate</Link>
+                  <Link href={`/recipes/${r.id}?dup=1`} className="underline">
+                    Duplicate
+                  </Link>
                 </td>
               </tr>
             ))}
@@ -233,13 +369,20 @@ export default async function RecipesPage() {
       </div>
 
       <p className="text-xs mt-3 opacity-70">
-        <strong>Makeable</strong> expands sub-recipes into base items and uses your current on-hand (base units) to estimate how many portions you can prep now.
+        <strong>Makeable</strong> expands sub-recipes into base items and uses your
+        current on-hand (base units) to estimate how many portions you can prep now.
       </p>
       {onHandEmpty && (
         <p className="text-xs mt-1 text-amber-300">
           No on-hand data found for your items. Add stock in{" "}
-          <Link href="/inventory/counts/new" className="underline">Inventory → Counts</Link> or{" "}
-          <Link href="/inventory/purchase" className="underline">Inventory → Purchase</Link>.
+          <Link href="/inventory/counts/new" className="underline">
+            Inventory → Counts
+          </Link>{" "}
+          or{" "}
+          <Link href="/inventory/purchase" className="underline">
+            Inventory → Purchase
+          </Link>
+          .
         </p>
       )}
     </main>
