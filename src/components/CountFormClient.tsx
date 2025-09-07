@@ -20,7 +20,7 @@ export default function CountFormClient({
   expected: Record<string, number>;
   tenantId: string;
 }) {
-  // Local copy so newly created items show up instantly in <select>.
+  // Local copy so newly created items appear in the dropdown immediately.
   const [itemOptions, setItemOptions] = useState<Item[]>(items);
 
   const [note, setNote] = useState("");
@@ -66,7 +66,6 @@ export default function CountFormClient({
       return;
     }
 
-    // Make the new item available in dropdowns immediately.
     setItemOptions((prev) => [...prev, data]);
 
     const row: FormItem = {
@@ -88,7 +87,6 @@ export default function CountFormClient({
 
   async function commit() {
     try {
-      // Guard: block while saving (prevents double-commit)
       if (busy) return;
 
       if (hasNegativeCounts) {
@@ -96,34 +94,27 @@ export default function CountFormClient({
         return;
       }
 
-      // Build a preview + detect all-zero
-      const previewLines = rows.map((r, i) => ({
-        name: r.name,
-        expected: r.expected || 0,
-        counted: toNum(r.counted),
-        delta: deltas[i],
-      }));
+      // Compute deltas and detect all-zero
+      const computed = rows.map((r) => {
+        const exp = Number(r.expected || 0);
+        const cnt = toNum(r.counted);
+        return { ...r, exp, cnt, delta: cnt - exp };
+      });
 
-      const changed = previewLines.filter((x) => Math.abs(x.delta) > 0);
-
-      if (changed.length === 0) {
-        alert("All lines have a zero delta. Nothing to commit.");
+      const nonZero = computed.filter((x) => Math.abs(x.delta) > 0);
+      if (nonZero.length === 0) {
+        alert("Nothing to commit. All deltas are zero.");
         return;
       }
 
-      const sample = changed.slice(0, 5);
-      const sampleText = sample
-        .map(
-          (x) =>
-            `• ${x.name}: expected ${x.expected.toFixed(3)}, counted ${x.counted.toFixed(
-              3
-            )}, Δ ${x.delta.toFixed(3)}`
-        )
+      // Preview confirmation (first few lines)
+      const sample = nonZero.slice(0, 5)
+        .map((x) => `• ${x.name}: expected ${x.exp.toFixed(3)}, counted ${x.cnt.toFixed(3)}, Δ ${x.delta.toFixed(3)}`)
         .join("\n");
-
-      const msg = `You are about to commit this count.\n\nLines that will change: ${changed.length}\n\nPreview:\n${sampleText}${
-        changed.length > sample.length ? `\n…and ${changed.length - sample.length} more` : ""
-      }\n\nProceed?`;
+      const msg =
+        `You are about to commit this count.\n\nLines that will change: ${nonZero.length}\n\nPreview:\n${sample}${
+          nonZero.length > 5 ? `\n…and ${nonZero.length - 5} more` : ""
+        }\n\nProceed?`;
       if (!window.confirm(msg)) return;
 
       setBusy(true);
@@ -138,21 +129,13 @@ export default function CountFormClient({
       if (cErr) throw cErr;
       const countId = c!.id as string;
 
-      // 2) lines + adjustments
-      const lines = rows.map((r) => {
-        const exp = Number(r.expected || 0);
-        const cnt = toNum(r.counted);
-        const delta = cnt - exp;
-        return { item_id: r.id, expected: exp, counted: cnt, delta };
-      });
-
-      // 3) insert lines
-      const lineRows = lines.map((l) => ({
+      // 2) lines payload
+      const lineRows = computed.map((l) => ({
         count_id: countId,
         tenant_id: tenantId,
-        item_id: l.item_id,
-        expected_base: l.expected,
-        counted_base: l.counted,
+        item_id: l.id,
+        expected_base: l.exp,
+        counted_base: l.cnt,
         delta_base: l.delta,
       }));
       const { error: lErr } = await supabase
@@ -160,12 +143,12 @@ export default function CountFormClient({
         .insert(lineRows);
       if (lErr) throw lErr;
 
-      // 4) adjustments for non-zero deltas
-      const adjRows = lines
+      // 3) adjustments for non-zero deltas
+      const adjRows = computed
         .filter((l) => Math.abs(l.delta) > 0)
         .map((l) => ({
           tenant_id: tenantId,
-          item_id: l.item_id,
+          item_id: l.id,
           delta_base: l.delta,
           reason: "count",
           ref_count_id: countId,
@@ -179,9 +162,9 @@ export default function CountFormClient({
       }
 
       setStatus("Count committed. Adjustments posted.");
-      // Blocking acknowledgement, then redirect & clear the form context.
-      alert("Count committed. Adjustments posted.");
-      window.location.href = "/inventory/counts";
+      // Clear and redirect with an explicit acknowledgement.
+      window.alert("✅ Count committed and adjustments posted.");
+      window.location.assign("/inventory/counts");
     } catch (err: any) {
       console.error(err);
       alert(err?.message ?? "Failed to commit count");
@@ -341,7 +324,7 @@ export default function CountFormClient({
           onClick={commit}
           className="px-4 py-2 bg-white text-black rounded font-medium disabled:opacity-50"
         >
-          {busy ? "Saving…" : "Commit Count"}
+          Commit Count
         </button>
       </div>
 
