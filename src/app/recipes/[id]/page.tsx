@@ -66,7 +66,13 @@ async function getTenant() {
   return { supabase, tenantId: prof?.tenant_id ?? null };
 }
 
-export default async function RecipePage({ params }: { params: { id: string } }) {
+// NOTE: this project expects Promise-style params
+type Ctx = { params: Promise<{ id: string }> };
+
+export default async function RecipePage(ctx: Ctx) {
+  const { id } = await ctx.params;
+  const recipeId = id;
+
   const { supabase, tenantId } = await getTenant();
 
   if (!tenantId) {
@@ -80,8 +86,6 @@ export default async function RecipePage({ params }: { params: { id: string } })
       </main>
     );
   }
-
-  const recipeId = params.id;
 
   // Load recipe
   const { data: rec, error: recErr } = await supabase
@@ -165,7 +169,7 @@ export default async function RecipePage({ params }: { params: { id: string } })
     }
     makeable = Number.isFinite(minBatches) ? Math.max(0, minBatches) : 0;
   } else {
-    makeable = 0; // no direct items means nothing constrains; we show 0 to be explicit
+    makeable = 0; // explicit
   }
 
   // Prepare rows for display (with formatting)
