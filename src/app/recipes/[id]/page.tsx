@@ -13,7 +13,7 @@ type Recipe = {
   description: string | null;
   batch_yield_qty: number | null;
   batch_yield_unit: string | null;
-  yield_pct: number | null; // may be 1 for 100%, or 85 for 85%, etc.
+  yield_pct: number | null;
   created_at: string | null;
 };
 
@@ -28,10 +28,10 @@ type IngRow = {
 type Item = { id: string; name: string; base_unit: string | null };
 type SubRecipe = { id: string; name: string; batch_yield_unit: string | null };
 
-// Normalize yield to a fraction between 0..1
+// Normalize yield to a fraction (0..1). Accept 1 → 100%, 85 → 85%, etc.
 function normYieldFraction(y?: number | null): number {
-  if (!y || y <= 0) return 1;        // default 100%
-  return y > 1.5 ? y / 100 : y;      // handle 1==100%, or 85==85%
+  if (!y || y <= 0) return 1;
+  return y > 1.5 ? y / 100 : y;
 }
 
 export default async function RecipePage({
@@ -55,7 +55,6 @@ export default async function RecipePage({
     );
   }
 
-  // respect demo/real tenant
   const tenantId = await getEffectiveTenant(supabase);
   if (!tenantId) {
     return (
@@ -66,15 +65,14 @@ export default async function RecipePage({
     );
   }
 
-  // Load the recipe
-  const { data: recipe, error: rErr } = await supabase
+  const { data: recipe } = await supabase
     .from("recipes")
     .select(
       "id, tenant_id, name, description, batch_yield_qty, batch_yield_unit, yield_pct, created_at"
     )
     .eq("id", id)
     .maybeSingle();
-  if (rErr || !recipe) {
+  if (!recipe) {
     return (
       <main className="max-w-5xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Recipe not found</h1>
@@ -85,7 +83,6 @@ export default async function RecipePage({
     );
   }
 
-  // Ingredients for this recipe
   const { data: rows } = await supabase
     .from("recipe_ingredients")
     .select("id,item_id,sub_recipe_id,qty,unit")
@@ -93,7 +90,6 @@ export default async function RecipePage({
     .order("id");
   const ings = (rows ?? []) as IngRow[];
 
-  // Pull names/units for items and sub-recipes used
   const itemIds = ings.filter((r) => r.item_id).map((r) => r.item_id!) as string[];
   const subIds = ings.filter((r) => r.sub_recipe_id).map((r) => r.sub_recipe_id!) as string[];
 
@@ -113,10 +109,11 @@ export default async function RecipePage({
       .in("id", subIds);
     subs = (data ?? []) as SubRecipe[];
   }
+
   const itemMap = new Map(items.map((i) => [i.id, i]));
   const subMap = new Map(subs.map((s) => [s.id, s]));
 
-  // Makeable (batches) for this recipe (use simple view; fall back to 0 if missing)
+  // Makeable (simple)
   let makeable = 0;
   try {
     const { data: mk } = await supabase
@@ -153,7 +150,6 @@ export default async function RecipePage({
         </div>
       </div>
 
-      {/* Header cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <div className="border rounded p-4">
           <div className="text-sm opacity-70">Batch yield</div>
@@ -178,7 +174,6 @@ export default async function RecipePage({
         <div className="border rounded p-4">{recipe.description}</div>
       ) : null}
 
-      {/* Ingredients table */}
       <div className="border rounded-lg overflow-hidden">
         <table className="w-full text-sm table-auto">
           <thead>
@@ -190,42 +185,41 @@ export default async function RecipePage({
               <th className="p-2">Base unit</th>
             </tr>
           </thead>
-          <tbody>
-            {ings.map((r) => {
-              const isItem = !!r.item_id;
-              const it = r.item_id ? itemMap.get(r.item_id) : null;
-              const sub = r.sub_recipe_id ? subMap.get(r.sub_recipe_id) : null;
+        <tbody>
+          {ings.map((r) => {
+            const isItem = !!r.item_id;
+            const it = r.item_id ? itemMap.get(r.item_id) : null;
+            const sub = r.sub_recipe_id ? subMap.get(r.sub_recipe_id) : null;
 
-              const name =
-                isItem ? (it?.name ?? "—") : (sub?.name ?? "— (sub-recipe)");
-              const baseUnit = isItem
-                ? (it?.base_unit ?? r.unit ?? "")
-                : (sub?.batch_yield_unit ?? r.unit ?? "");
-              // We’re not converting units here; “Base qty” shows the quantity in the base unit context
-              const baseQty = Number(r.qty ?? 0);
+            const name =
+              isItem ? (it?.name ?? "—") : (sub?.name ?? "— (sub-recipe)");
+            const baseUnit = isItem
+              ? (it?.base_unit ?? r.unit ?? "")
+              : (sub?.batch_yield_unit ?? r.unit ?? "");
+            const baseQty = Number(r.qty ?? 0);
 
-              return (
-                <tr key={r.id} className="border-t">
-                  <td className="p-2">{name}</td>
-                  <td className="p-2 text-right tabular-nums">
-                    {fmtQty(Number(r.qty ?? 0))}
-                  </td>
-                  <td className="p-2">{r.unit ?? ""}</td>
-                  <td className="p-2 text-right tabular-nums">
-                    {fmtQty(baseQty)}
-                  </td>
-                  <td className="p-2">{baseUnit}</td>
-                </tr>
-              );
-            })}
-            {ings.length === 0 && (
-              <tr>
-                <td className="p-3 text-neutral-400" colSpan={5}>
-                  No ingredients yet.
+            return (
+              <tr key={r.id} className="border-t">
+                <td className="p-2">{name}</td>
+                <td className="p-2 text-right tabular-nums">
+                  {fmtQty(Number(r.qty ?? 0))}
                 </td>
+                <td className="p-2">{r.unit ?? ""}</td>
+                <td className="p-2 text-right tabular-nums">
+                  {fmtQty(baseQty)}
+                </td>
+                <td className="p-2">{baseUnit}</td>
               </tr>
-            )}
-          </tbody>
+            );
+          })}
+          {ings.length === 0 && (
+            <tr>
+              <td className="p-3 text-neutral-400" colSpan={5}>
+                No ingredients yet.
+              </td>
+            </tr>
+          )}
+        </tbody>
         </table>
       </div>
     </main>
