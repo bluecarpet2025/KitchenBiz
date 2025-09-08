@@ -6,9 +6,7 @@ import { fmtQty } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-type PageProps = {
-  params: Promise<{ id: string }>;
-};
+type PageProps = { params: Promise<{ id: string }> };
 
 type CountRow = {
   id: string;
@@ -24,50 +22,44 @@ type LineRow = {
   expected_base: number;
   counted_base: number;
   delta_base: number;
-  inventory_items: {
-    name: string | null;
-    base_unit: string | null;
-  } | null;
+  inventory_items: { name: string | null; base_unit: string | null } | null;
 };
 
 async function getTenant() {
   const supabase = await createServerClient();
   const { data: u } = await supabase.auth.getUser();
   const uid = u.user?.id ?? null;
-  if (!uid) return { supabase, tenantId: null, userId: null };
-
+  if (!uid) return { supabase, tenantId: null };
   const { data: prof } = await supabase
     .from("profiles")
     .select("tenant_id")
     .eq("id", uid)
     .maybeSingle();
-
-  return { supabase, tenantId: prof?.tenant_id ?? null, userId: uid };
+  return { supabase, tenantId: prof?.tenant_id ?? null };
 }
 
-export default async function CountDetailPage(props: PageProps) {
-  const { id } = await props.params; // <- Next 15: params is a Promise
+export default async function CountDetailPage(p: PageProps) {
+  const { id } = await p.params; // Next 15
   const { supabase, tenantId } = await getTenant();
 
   if (!tenantId) {
     return (
       <main className="max-w-5xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Inventory Count</h1>
-        <p className="mt-4">Sign in required or profile missing tenant.</p>
+        <p className="mt-4">Sign in required or tenant missing.</p>
         <Link className="underline" href="/inventory/counts">Back to counts</Link>
       </main>
     );
   }
 
   // Header
-  const { data: c, error: cErr } = await supabase
+  const { data: c } = await supabase
     .from("inventory_counts")
     .select("id,note,created_at,counted_at,status")
     .eq("tenant_id", tenantId)
     .eq("id", id)
     .maybeSingle();
-
-  if (cErr || !c) {
+  if (!c) {
     return (
       <main className="max-w-5xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Inventory Count</h1>
@@ -78,7 +70,7 @@ export default async function CountDetailPage(props: PageProps) {
   }
   const header = c as CountRow;
 
-  // Lines (join for item name/unit)
+  // Lines
   const { data: linesRaw } = await supabase
     .from("inventory_count_lines")
     .select(
@@ -86,16 +78,15 @@ export default async function CountDetailPage(props: PageProps) {
     )
     .eq("tenant_id", tenantId)
     .eq("count_id", id)
-    .order("id") as unknown as { data: LineRow[] | null };
+    .order("id");
 
-  const lines: LineRow[] = (linesRaw ?? []).map((r) => ({
+  const lines: LineRow[] = (linesRaw ?? []).map((r: any) => ({
     ...r,
     expected_base: Number(r.expected_base ?? 0),
     counted_base: Number(r.counted_base ?? 0),
     delta_base: Number(r.delta_base ?? 0),
   }));
 
-  // Avg $/base for each item
   const itemIds = Array.from(new Set(lines.map((l) => l.item_id)));
   let avgCostMap = new Map<string, number>();
   if (itemIds.length) {
@@ -104,16 +95,12 @@ export default async function CountDetailPage(props: PageProps) {
       .select("item_id, avg_cost_base")
       .eq("tenant_id", tenantId)
       .in("item_id", itemIds);
-
     avgCostMap = new Map(
-      (costs ?? []).map((r: any) => [
-        String(r.item_id),
-        Number(r.avg_cost_base ?? 0),
-      ])
+      (costs ?? []).map((r: any) => [String(r.item_id), Number(r.avg_cost_base ?? 0)])
     );
   }
 
-  // Totals
+  // Compute totals from lines
   let totalCountedValue = 0;
   let totalChangeUnits = 0;
   let totalChangeValue = 0;
@@ -143,6 +130,50 @@ export default async function CountDetailPage(props: PageProps) {
       changeValue,
     };
   });
+
+  // If snapshot looks empty (all zeros), FALL BACK to adjustments for header totals
+  const looksEmpty =
+    rows.length === 0 ||
+    rows.every((r) => r.counted === 0 && r.expected === 0 && r.delta === 0);
+
+  if (looksEmpty) {
+    const { data: adjs } = await supabase
+      .from("inventory_adjustments")
+      .select("item_id, delta_base")
+      .eq("tenant_id", tenantId)
+      .eq("ref_count_id", id);
+
+    const deltasByItem = new Map<string, number>();
+    (adjs ?? []).forEach((a: any) => {
+      const k = String(a.item_id);
+      deltasByItem.set(k, (deltasByItem.get(k) ?? 0) + Number(a.delta_base ?? 0));
+    });
+
+    if (deltasByItem.size) {
+      // get costs for items in adjustments (if not already loaded)
+      const missing = Array.from(deltasByItem.keys()).filter((k) => !avgCostMap.has(k));
+      if (missing.length) {
+        const { data: costs2 } = await supabase
+          .from("v_item_avg_costs")
+          .select("item_id, avg_cost_base")
+          .eq("tenant_id", tenantId)
+          .in("item_id", missing);
+        (costs2 ?? []).forEach((r: any) =>
+          avgCostMap.set(String(r.item_id), Number(r.avg_cost_base ?? 0))
+        );
+      }
+
+      totalChangeUnits = 0;
+      totalChangeValue = 0;
+      deltasByItem.forEach((delta, itemId) => {
+        totalChangeUnits += delta;
+        totalChangeValue += delta * (avgCostMap.get(itemId) ?? 0);
+      });
+
+      // We can’t reconstruct “counted line value” without a reliable snapshot,
+      // so leave totalCountedValue as 0 in the fallback.
+    }
+  }
 
   return (
     <main className="max-w-5xl mx-auto p-6 space-y-4">
@@ -220,13 +251,13 @@ export default async function CountDetailPage(props: PageProps) {
                 <td className="p-2"></td>
                 <td className="p-2"></td>
                 <td className="p-2 text-right tabular-nums">
-                  {fmtUSD(totalCountedValue)}
+                  {fmtUSD(rows.reduce((a, b) => a + b.lineValue, 0))}
                 </td>
                 <td className="p-2 text-right tabular-nums">
-                  {fmtQty(totalChangeUnits)}
+                  {fmtQty(rows.reduce((a, b) => a + b.delta, 0))}
                 </td>
                 <td className="p-2 text-right tabular-nums">
-                  {fmtUSD(totalChangeValue)}
+                  {fmtUSD(rows.reduce((a, b) => a + b.changeValue, 0))}
                 </td>
               </tr>
             )}
