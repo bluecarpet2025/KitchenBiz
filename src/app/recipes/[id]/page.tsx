@@ -1,4 +1,3 @@
-// src/app/inventory/counts/[id]/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { fmtUSD } from "@/lib/costing";
@@ -18,7 +17,12 @@ type LineBasic = {
   item_id: string;
   expected_base: number | null;
   counted_base: number | null;
-  delta_base: number | null; // present but we won’t trust it for display
+  delta_base: number | null; // present but not always reliable on legacy rows
+};
+
+type AdjRow = {
+  item_id: string;
+  delta_base: number;
 };
 
 type Item = {
@@ -49,6 +53,10 @@ function perBaseUSD(item: Item | undefined): number {
   const price = Number(item.last_price ?? 0);
   const factor = Number(item.pack_to_base_factor ?? 0);
   return factor > 0 ? price / factor : 0;
+}
+
+function safeNum(n: number | null | undefined) {
+  return Number.isFinite(Number(n)) ? Number(n) : 0;
 }
 
 export default async function CountDetailPage({ params }: Ctx) {
@@ -86,6 +94,7 @@ export default async function CountDetailPage({ params }: Ctx) {
     );
   }
 
+  // Base lines (may be partially empty for older rows)
   const { data: linesBasic } = await supabase
     .from("inventory_count_lines")
     .select("item_id,expected_base,counted_base,delta_base")
@@ -93,6 +102,20 @@ export default async function CountDetailPage({ params }: Ctx) {
     .eq("count_id", id);
 
   const basics: LineBasic[] = (linesBasic ?? []) as LineBasic[];
+
+  // Adjustments fallback – the source of truth for totals on the list
+  const { data: adjsRaw } = await supabase
+    .from("inventory_adjustments")
+    .select("item_id,delta_base")
+    .eq("tenant_id", tenantId)
+    .eq("ref_count_id", id);
+
+  const adjByItem = new Map<string, number>();
+  (adjsRaw ?? []).forEach((a) => {
+    const k = (a as AdjRow).item_id;
+    const v = safeNum((a as AdjRow).delta_base);
+    adjByItem.set(k, (adjByItem.get(k) ?? 0) + v);
+  });
 
   const itemIds = Array.from(new Set(basics.map((b) => b.item_id))).filter(Boolean);
   let items: Item[] = [];
@@ -105,16 +128,25 @@ export default async function CountDetailPage({ params }: Ctx) {
   }
   const itemMap = new Map(items.map((it) => [it.id, it]));
 
-  // Build rows; IMPORTANT: compute delta from counted - expected
+  // Build rows; choose the best available delta per item
   const rows = basics.map((b) => {
     const it = itemMap.get(b.item_id);
     const unit = it?.base_unit ?? "";
     const name = it?.name ?? "(deleted item)";
     const usdPerBase = perBaseUSD(it);
 
-    const counted = Number(b.counted_base ?? 0);
-    const expected = Number(b.expected_base ?? 0);
-    const delta = counted - expected; // <-- trust the math, not stored delta_base
+    const counted = safeNum(b.counted_base);
+    const expected = safeNum(b.expected_base);
+    const storedDelta = safeNum(b.delta_base);
+    const adjDelta = adjByItem.get(b.item_id) ?? 0;
+
+    // 1) if we have meaningful counted/expected, use that
+    const hasMeaningfulCounts = counted !== 0 || expected !== 0;
+    const computedDelta = counted - expected;
+
+    const delta = hasMeaningfulCounts
+      ? computedDelta
+      : (storedDelta !== 0 ? storedDelta : adjDelta);
 
     const lineValue = counted * usdPerBase;
     const changeValue = delta * usdPerBase;
