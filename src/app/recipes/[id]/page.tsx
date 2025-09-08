@@ -1,6 +1,7 @@
+// src/app/inventory/counts/[id]/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
-import { fmtUSD } from "@/lib/costing"; // used for currency formatting
+import { fmtUSD } from "@/lib/costing";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,7 @@ type LineBasic = {
   item_id: string;
   expected_base: number | null;
   counted_base: number | null;
-  delta_base: number | null;
+  delta_base: number | null; // present but we won’t trust it for display
 };
 
 type Item = {
@@ -43,7 +44,6 @@ async function getTenant() {
   return { supabase, tenantId: prof?.tenant_id ?? null };
 }
 
-// priced per *base* unit using last_price / pack_to_base_factor as a fallback
 function perBaseUSD(item: Item | undefined): number {
   if (!item) return 0;
   const price = Number(item.last_price ?? 0);
@@ -67,15 +67,14 @@ export default async function CountDetailPage({ params }: Ctx) {
     );
   }
 
-  // Header
-  const { data: count, error: cErr } = await supabase
+  const { data: count } = await supabase
     .from("inventory_counts")
     .select("id,note,created_at,status")
     .eq("tenant_id", tenantId)
     .eq("id", id)
     .maybeSingle();
 
-  if (cErr || !count) {
+  if (!count) {
     return (
       <main className="max-w-5xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Inventory Count</h1>
@@ -87,7 +86,6 @@ export default async function CountDetailPage({ params }: Ctx) {
     );
   }
 
-  // Detail lines – read the canonical table directly
   const { data: linesBasic } = await supabase
     .from("inventory_count_lines")
     .select("item_id,expected_base,counted_base,delta_base")
@@ -96,7 +94,6 @@ export default async function CountDetailPage({ params }: Ctx) {
 
   const basics: LineBasic[] = (linesBasic ?? []) as LineBasic[];
 
-  // Fetch item details in one go
   const itemIds = Array.from(new Set(basics.map((b) => b.item_id))).filter(Boolean);
   let items: Item[] = [];
   if (itemIds.length) {
@@ -108,7 +105,7 @@ export default async function CountDetailPage({ params }: Ctx) {
   }
   const itemMap = new Map(items.map((it) => [it.id, it]));
 
-  // Build rows with pricing
+  // Build rows; IMPORTANT: compute delta from counted - expected
   const rows = basics.map((b) => {
     const it = itemMap.get(b.item_id);
     const unit = it?.base_unit ?? "";
@@ -117,7 +114,7 @@ export default async function CountDetailPage({ params }: Ctx) {
 
     const counted = Number(b.counted_base ?? 0);
     const expected = Number(b.expected_base ?? 0);
-    const delta = Number(b.delta_base ?? counted - expected);
+    const delta = counted - expected; // <-- trust the math, not stored delta_base
 
     const lineValue = counted * usdPerBase;
     const changeValue = delta * usdPerBase;
@@ -135,7 +132,6 @@ export default async function CountDetailPage({ params }: Ctx) {
     };
   });
 
-  // Totals (match the “counts list” semantics: absolute deltas)
   const totalCountedUsd = rows.reduce((s, r) => s + r.lineValue, 0);
   const totalChangeUnits = rows.reduce((s, r) => s + Math.abs(r.delta), 0);
   const totalChangeUsd = rows.reduce((s, r) => s + Math.abs(r.changeValue), 0);
