@@ -6,213 +6,181 @@ import { fmtQty } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-type PageProps = { params: Promise<{ id: string }> };
-
-type CountRow = {
-  id: string;
-  note: string | null;
-  created_at: string;
-  counted_at: string | null;
-  status: string | null;
-};
-
-type LineRow = {
-  id: string;
+type LineAny = {
+  // Minimal, tolerant shape for the view
+  count_id: string;
   item_id: string;
-  expected_base: number;
-  counted_base: number;
-  delta_base: number;
-  inventory_items: { name: string | null; base_unit: string | null } | null;
+  item_name: string | null;
+  base_unit: string | null;
+  expected_base?: number | null;
+  counted_base?: number | null;
+  delta_base?: number | null;
+  // cost column name may vary by view; we’ll read whichever exists
+  unit_cost_base?: number | null;
+  avg_cost_base?: number | null;
+  avg_per_base?: number | null;
+  avg_cost_per_base?: number | null;
 };
 
-async function getTenant() {
-  const supabase = await createServerClient();
-  const { data: u } = await supabase.auth.getUser();
-  const uid = u.user?.id ?? null;
-  if (!uid) return { supabase, tenantId: null };
-  const { data: prof } = await supabase
-    .from("profiles")
-    .select("tenant_id")
-    .eq("id", uid)
-    .maybeSingle();
-  return { supabase, tenantId: prof?.tenant_id ?? null };
+function pickCostPerBase(row: LineAny): number {
+  return Number(
+    row.unit_cost_base ??
+      row.avg_cost_base ??
+      row.avg_per_base ??
+      row.avg_cost_per_base ??
+      0
+  );
 }
 
-export default async function CountDetailPage(p: PageProps) {
-  const { id } = await p.params; // Next 15
-  const { supabase, tenantId } = await getTenant();
+export default async function CountDetailPage({
+  params,
+}: {
+  // Next 15 server components receive params as a Promise
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  const supabase = await createServerClient();
 
-  if (!tenantId) {
-    return (
-      <main className="max-w-5xl mx-auto p-6">
-        <h1 className="text-2xl font-semibold">Inventory Count</h1>
-        <p className="mt-4">Sign in required or tenant missing.</p>
-        <Link className="underline" href="/inventory/counts">Back to counts</Link>
-      </main>
-    );
-  }
-
-  // Header
-  const { data: c } = await supabase
-    .from("inventory_counts")
-    .select("id,note,created_at,counted_at,status")
-    .eq("tenant_id", tenantId)
-    .eq("id", id)
-    .maybeSingle();
-  if (!c) {
-    return (
-      <main className="max-w-5xl mx-auto p-6">
-        <h1 className="text-2xl font-semibold">Inventory Count</h1>
-        <p className="mt-4">Count not found.</p>
-        <Link className="underline" href="/inventory/counts">Back to counts</Link>
-      </main>
-    );
-  }
-  const header = c as CountRow;
-
-  // Lines
-  const { data: linesRaw } = await supabase
-    .from("inventory_count_lines")
+  // 1) Try the detailed view first (preferred)
+  let lines: LineAny[] = [];
+  const { data: vlines, error: vErr } = await supabase
+    .from("v_count_lines_detailed")
     .select(
-      "id,item_id,expected_base,counted_base,delta_base,inventory_items(name,base_unit)"
+      "count_id,item_id,item_name,base_unit,expected_base,counted_base,delta_base,unit_cost_base,avg_cost_base,avg_per_base,avg_cost_per_base"
     )
-    .eq("tenant_id", tenantId)
     .eq("count_id", id)
-    .order("id");
+    .order("item_name", { ascending: true });
 
-  const lines: LineRow[] = (linesRaw ?? []).map((r: any) => ({
-    ...r,
-    expected_base: Number(r.expected_base ?? 0),
-    counted_base: Number(r.counted_base ?? 0),
-    delta_base: Number(r.delta_base ?? 0),
-  }));
+  if (!vErr && vlines) {
+    lines = vlines as LineAny[];
+  } else {
+    // 2) Fallback to raw lines + enrich lightly so the page still renders
+    const { data: raw, error: rawErr } = await supabase
+      .from("inventory_count_lines")
+      .select("count_id,item_id,expected_base,counted_base,delta_base")
+      .eq("count_id", id);
 
-  const itemIds = Array.from(new Set(lines.map((l) => l.item_id)));
-  let avgCostMap = new Map<string, number>();
-  if (itemIds.length) {
-    const { data: costs } = await supabase
-      .from("v_item_avg_costs")
-      .select("item_id, avg_cost_base")
-      .eq("tenant_id", tenantId)
-      .in("item_id", itemIds);
-    avgCostMap = new Map(
-      (costs ?? []).map((r: any) => [String(r.item_id), Number(r.avg_cost_base ?? 0)])
-    );
+    if (rawErr) {
+      // Hard failure: show a friendly message
+      return (
+        <main className="max-w-5xl mx-auto p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <h1 className="text-2xl font-semibold">Inventory Count</h1>
+            <Link
+              href="/inventory/counts"
+              className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+            >
+              Back to counts
+            </Link>
+          </div>
+          <p className="text-red-400">
+            Couldn’t load count lines (id {id}). {rawErr.message}
+          </p>
+        </main>
+      );
+    }
+
+    // Pull minimal item info for names/units
+    const itemIds = Array.from(new Set((raw ?? []).map((r: any) => r.item_id)));
+    let itemsById = new Map<string, { name: string; base_unit: string | null }>();
+    if (itemIds.length) {
+      const { data: items } = await supabase
+        .from("inventory_items")
+        .select("id,name,base_unit")
+        .in("id", itemIds);
+      (items ?? []).forEach((it: any) =>
+        itemsById.set(it.id, { name: it.name, base_unit: it.base_unit })
+      );
+    }
+
+    lines = (raw ?? []).map((r: any) => {
+      const info = itemsById.get(r.item_id) ?? { name: "(item)", base_unit: null };
+      return {
+        count_id: r.count_id,
+        item_id: r.item_id,
+        item_name: info.name,
+        base_unit: info.base_unit,
+        expected_base: Number(r.expected_base ?? 0),
+        counted_base: Number(r.counted_base ?? 0),
+        delta_base: Number(r.delta_base ?? 0),
+        unit_cost_base: 0, // no cost in fallback
+      } as LineAny;
+    });
+    // Sort by name for consistency
+    lines.sort((a, b) => (a.item_name ?? "").localeCompare(b.item_name ?? ""));
   }
 
-  // Compute totals from lines
+  // Aggregate totals (values based on cost per base)
   let totalCountedValue = 0;
-  let totalChangeUnits = 0;
-  let totalChangeValue = 0;
+  let totalDeltaUnits = 0;
+  let totalDeltaValue = 0;
 
-  const rows = lines.map((l) => {
-    const name = l.inventory_items?.name ?? "—";
-    const unit = l.inventory_items?.base_unit ?? "";
-    const cost = avgCostMap.get(l.item_id) ?? 0;
-
-    const lineValue = l.counted_base * cost;
-    const changeUnits = l.delta_base;
-    const changeValue = changeUnits * cost;
+  const viewRows = lines.map((r) => {
+    const qty = Number(r.counted_base ?? 0);
+    const delta = Number(r.delta_base ?? 0);
+    const price = pickCostPerBase(r); // $ per base unit
+    const lineValue = qty * price;
+    const changeValue = delta * price;
 
     totalCountedValue += lineValue;
-    totalChangeUnits += changeUnits;
-    totalChangeValue += changeValue;
+    totalDeltaUnits += delta;
+    totalDeltaValue += changeValue;
 
     return {
-      id: l.id,
-      name,
-      unit,
-      cost,
-      counted: l.counted_base,
-      expected: l.expected_base,
-      delta: changeUnits,
+      name: r.item_name ?? "(item)",
+      qty,
+      unit: r.base_unit ?? "",
+      price,
       lineValue,
+      delta,
       changeValue,
     };
   });
 
-  // If snapshot looks empty (all zeros), FALL BACK to adjustments for header totals
-  const looksEmpty =
-    rows.length === 0 ||
-    rows.every((r) => r.counted === 0 && r.expected === 0 && r.delta === 0);
-
-  if (looksEmpty) {
-    const { data: adjs } = await supabase
-      .from("inventory_adjustments")
-      .select("item_id, delta_base")
-      .eq("tenant_id", tenantId)
-      .eq("ref_count_id", id);
-
-    const deltasByItem = new Map<string, number>();
-    (adjs ?? []).forEach((a: any) => {
-      const k = String(a.item_id);
-      deltasByItem.set(k, (deltasByItem.get(k) ?? 0) + Number(a.delta_base ?? 0));
-    });
-
-    if (deltasByItem.size) {
-      // get costs for items in adjustments (if not already loaded)
-      const missing = Array.from(deltasByItem.keys()).filter((k) => !avgCostMap.has(k));
-      if (missing.length) {
-        const { data: costs2 } = await supabase
-          .from("v_item_avg_costs")
-          .select("item_id, avg_cost_base")
-          .eq("tenant_id", tenantId)
-          .in("item_id", missing);
-        (costs2 ?? []).forEach((r: any) =>
-          avgCostMap.set(String(r.item_id), Number(r.avg_cost_base ?? 0))
-        );
-      }
-
-      totalChangeUnits = 0;
-      totalChangeValue = 0;
-      deltasByItem.forEach((delta, itemId) => {
-        totalChangeUnits += delta;
-        totalChangeValue += delta * (avgCostMap.get(itemId) ?? 0);
-      });
-
-      // We can’t reconstruct “counted line value” without a reliable snapshot,
-      // so leave totalCountedValue as 0 in the fallback.
-    }
-  }
-
   return (
-    <main className="max-w-5xl mx-auto p-6 space-y-4">
+    <main className="max-w-6xl mx-auto p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Inventory Count</h1>
         <div className="flex items-center gap-2">
-          <Link href="/inventory/counts" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
+          <Link
+            href="/inventory/counts"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
             Back to counts
           </Link>
-          <Link href={`/inventory/counts/${header.id}/edit`} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
+          <Link
+            href={`/inventory/counts/${id}/edit`}
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
             Edit
           </Link>
         </div>
       </div>
 
       <div className="grid md:grid-cols-3 gap-3">
-        <div className="border rounded p-3">
-          <div className="text-xs opacity-70">TOTAL COUNTED VALUE</div>
+        <div className="border rounded-lg p-3">
+          <div className="text-xs opacity-75">TOTAL COUNTED VALUE</div>
           <div className="text-xl font-semibold">{fmtUSD(totalCountedValue)}</div>
         </div>
-        <div className="border rounded p-3">
-          <div className="text-xs opacity-70">TOTAL CHANGE (UNITS)</div>
+        <div className="border rounded-lg p-3">
+          <div className="text-xs opacity-75">TOTAL CHANGE (UNITS)</div>
           <div className="text-xl font-semibold tabular-nums">
-            {fmtQty(totalChangeUnits)}
+            {fmtQty(totalDeltaUnits)}
           </div>
         </div>
-        <div className="border rounded p-3">
-          <div className="text-xs opacity-70">TOTAL CHANGE ($)</div>
-          <div className="text-xl font-semibold">{fmtUSD(totalChangeValue)}</div>
+        <div className="border rounded-lg p-3">
+          <div className="text-xs opacity-75">TOTAL CHANGE ($)</div>
+          <div className="text-xl font-semibold">{fmtUSD(totalDeltaValue)}</div>
         </div>
       </div>
 
       <div className="border rounded-lg overflow-hidden">
-        <table className="w-full text-sm table-auto">
+        <table className="w-full text-sm">
           <thead className="bg-neutral-900/60">
-            <tr className="text-left">
-              <th className="p-2">Item</th>
+            <tr>
+              <th className="p-2 text-left">Item</th>
               <th className="p-2 text-right">Qty</th>
-              <th className="p-2">Unit</th>
+              <th className="p-2 text-left">Unit</th>
               <th className="p-2 text-right">$ / base</th>
               <th className="p-2 text-right">Line value</th>
               <th className="p-2 text-right">Change (units)</th>
@@ -220,54 +188,57 @@ export default async function CountDetailPage(p: PageProps) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
-              <tr key={r.id} className="border-t">
+            {viewRows.map((r, i) => (
+              <tr key={`${r.name}-${i}`} className="border-t">
                 <td className="p-2">{r.name}</td>
-                <td className="p-2 text-right tabular-nums">{fmtQty(r.counted)}</td>
+                <td className="p-2 text-right tabular-nums">{fmtQty(r.qty)}</td>
                 <td className="p-2">{r.unit}</td>
-                <td className="p-2 text-right tabular-nums">{fmtUSD(r.cost)}</td>
+                <td className="p-2 text-right tabular-nums">
+                  {r.price ? fmtUSD(r.price) : "$0.00"}
+                </td>
                 <td className="p-2 text-right tabular-nums">{fmtUSD(r.lineValue)}</td>
-                <td className={`p-2 text-right tabular-nums ${r.delta < 0 ? "text-red-500" : r.delta > 0 ? "text-emerald-500" : ""}`}>
+                <td
+                  className={`p-2 text-right tabular-nums ${
+                    r.delta < 0 ? "text-red-500" : r.delta > 0 ? "text-emerald-500" : ""
+                  }`}
+                >
                   {fmtQty(r.delta)}
                 </td>
-                <td className={`p-2 text-right tabular-nums ${r.changeValue < 0 ? "text-red-500" : r.changeValue > 0 ? "text-emerald-500" : ""}`}>
+                <td
+                  className={`p-2 text-right tabular-nums ${
+                    r.changeValue < 0
+                      ? "text-red-500"
+                      : r.changeValue > 0
+                      ? "text-emerald-500"
+                      : ""
+                  }`}
+                >
                   {fmtUSD(r.changeValue)}
                 </td>
               </tr>
             ))}
-            {rows.length === 0 && (
+            {viewRows.length === 0 && (
               <tr>
                 <td className="p-3 text-neutral-400" colSpan={7}>
-                  No lines for this count.
-                </td>
-              </tr>
-            )}
-            {rows.length > 0 && (
-              <tr className="border-t bg-neutral-900/30 font-medium">
-                <td className="p-2">Totals</td>
-                <td className="p-2 text-right tabular-nums">
-                  {fmtQty(rows.reduce((a, b) => a + b.counted, 0))}
-                </td>
-                <td className="p-2"></td>
-                <td className="p-2"></td>
-                <td className="p-2 text-right tabular-nums">
-                  {fmtUSD(rows.reduce((a, b) => a + b.lineValue, 0))}
-                </td>
-                <td className="p-2 text-right tabular-nums">
-                  {fmtQty(rows.reduce((a, b) => a + b.delta, 0))}
-                </td>
-                <td className="p-2 text-right tabular-nums">
-                  {fmtUSD(rows.reduce((a, b) => a + b.changeValue, 0))}
+                  No lines found for this count.
                 </td>
               </tr>
             )}
           </tbody>
+          <tfoot className="bg-neutral-900/40">
+            <tr>
+              <td className="p-2 font-medium">Totals</td>
+              <td className="p-2"></td>
+              <td className="p-2"></td>
+              <td className="p-2"></td>
+              <td className="p-2 text-right font-medium">{fmtUSD(totalCountedValue)}</td>
+              <td className="p-2 text-right font-medium tabular-nums">
+                {fmtQty(totalDeltaUnits)}
+              </td>
+              <td className="p-2 text-right font-medium">{fmtUSD(totalDeltaValue)}</td>
+            </tr>
+          </tfoot>
         </table>
-      </div>
-
-      <div className="text-xs opacity-70">
-        {new Date(header.created_at).toLocaleString()} · {header.status ?? "draft"}
-        {header.note ? <> · <span className="italic">{header.note}</span></> : null}
       </div>
     </main>
   );
