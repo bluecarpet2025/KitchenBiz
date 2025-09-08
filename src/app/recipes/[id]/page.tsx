@@ -1,43 +1,40 @@
+// src/app/inventory/counts/[id]/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { fmtUSD } from "@/lib/costing";
+import { fmtQty } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-type Ctx = { params: Promise<{ id: string }> };
+type PageProps = {
+  params: Promise<{ id: string }>;
+};
 
 type CountRow = {
   id: string;
   note: string | null;
   created_at: string;
+  counted_at: string | null;
   status: string | null;
 };
 
-type LineBasic = {
-  item_id: string;
-  expected_base: number | null;
-  counted_base: number | null;
-  delta_base: number | null; // present but not always reliable on legacy rows
-};
-
-type AdjRow = {
-  item_id: string;
-  delta_base: number;
-};
-
-type Item = {
+type LineRow = {
   id: string;
-  name: string | null;
-  base_unit: string | null;
-  pack_to_base_factor: number | null;
-  last_price: number | null;
+  item_id: string;
+  expected_base: number;
+  counted_base: number;
+  delta_base: number;
+  inventory_items: {
+    name: string | null;
+    base_unit: string | null;
+  } | null;
 };
 
 async function getTenant() {
   const supabase = await createServerClient();
   const { data: u } = await supabase.auth.getUser();
   const uid = u.user?.id ?? null;
-  if (!uid) return { supabase, tenantId: null };
+  if (!uid) return { supabase, tenantId: null, userId: null };
 
   const { data: prof } = await supabase
     .from("profiles")
@@ -45,22 +42,11 @@ async function getTenant() {
     .eq("id", uid)
     .maybeSingle();
 
-  return { supabase, tenantId: prof?.tenant_id ?? null };
+  return { supabase, tenantId: prof?.tenant_id ?? null, userId: uid };
 }
 
-function perBaseUSD(item: Item | undefined): number {
-  if (!item) return 0;
-  const price = Number(item.last_price ?? 0);
-  const factor = Number(item.pack_to_base_factor ?? 0);
-  return factor > 0 ? price / factor : 0;
-}
-
-function safeNum(n: number | null | undefined) {
-  return Number.isFinite(Number(n)) ? Number(n) : 0;
-}
-
-export default async function CountDetailPage({ params }: Ctx) {
-  const { id } = await params;
+export default async function CountDetailPage(props: PageProps) {
+  const { id } = await props.params; // <- Next 15: params is a Promise
   const { supabase, tenantId } = await getTenant();
 
   if (!tenantId) {
@@ -68,174 +54,190 @@ export default async function CountDetailPage({ params }: Ctx) {
       <main className="max-w-5xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Inventory Count</h1>
         <p className="mt-4">Sign in required or profile missing tenant.</p>
-        <Link className="underline" href="/login?redirect=/inventory/counts">
-          Go to login
-        </Link>
+        <Link className="underline" href="/inventory/counts">Back to counts</Link>
       </main>
     );
   }
 
-  const { data: count } = await supabase
+  // Header
+  const { data: c, error: cErr } = await supabase
     .from("inventory_counts")
-    .select("id,note,created_at,status")
+    .select("id,note,created_at,counted_at,status")
     .eq("tenant_id", tenantId)
     .eq("id", id)
     .maybeSingle();
 
-  if (!count) {
+  if (cErr || !c) {
     return (
       <main className="max-w-5xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Inventory Count</h1>
         <p className="mt-4">Count not found.</p>
-        <Link href="/inventory/counts" className="underline">
-          Back to counts
-        </Link>
+        <Link className="underline" href="/inventory/counts">Back to counts</Link>
       </main>
     );
   }
+  const header = c as CountRow;
 
-  // Base lines (may be partially empty for older rows)
-  const { data: linesBasic } = await supabase
+  // Lines (join for item name/unit)
+  const { data: linesRaw } = await supabase
     .from("inventory_count_lines")
-    .select("item_id,expected_base,counted_base,delta_base")
+    .select(
+      "id,item_id,expected_base,counted_base,delta_base,inventory_items(name,base_unit)"
+    )
     .eq("tenant_id", tenantId)
-    .eq("count_id", id);
+    .eq("count_id", id)
+    .order("id") as unknown as { data: LineRow[] | null };
 
-  const basics: LineBasic[] = (linesBasic ?? []) as LineBasic[];
+  const lines: LineRow[] = (linesRaw ?? []).map((r) => ({
+    ...r,
+    expected_base: Number(r.expected_base ?? 0),
+    counted_base: Number(r.counted_base ?? 0),
+    delta_base: Number(r.delta_base ?? 0),
+  }));
 
-  // Adjustments fallback – the source of truth for totals on the list
-  const { data: adjsRaw } = await supabase
-    .from("inventory_adjustments")
-    .select("item_id,delta_base")
-    .eq("tenant_id", tenantId)
-    .eq("ref_count_id", id);
-
-  const adjByItem = new Map<string, number>();
-  (adjsRaw ?? []).forEach((a) => {
-    const k = (a as AdjRow).item_id;
-    const v = safeNum((a as AdjRow).delta_base);
-    adjByItem.set(k, (adjByItem.get(k) ?? 0) + v);
-  });
-
-  const itemIds = Array.from(new Set(basics.map((b) => b.item_id))).filter(Boolean);
-  let items: Item[] = [];
+  // Avg $/base for each item
+  const itemIds = Array.from(new Set(lines.map((l) => l.item_id)));
+  let avgCostMap = new Map<string, number>();
   if (itemIds.length) {
-    const { data: itemsRaw } = await supabase
-      .from("inventory_items")
-      .select("id,name,base_unit,pack_to_base_factor,last_price")
-      .in("id", itemIds);
-    items = (itemsRaw ?? []) as Item[];
+    const { data: costs } = await supabase
+      .from("v_item_avg_costs")
+      .select("item_id, avg_cost_base")
+      .eq("tenant_id", tenantId)
+      .in("item_id", itemIds);
+
+    avgCostMap = new Map(
+      (costs ?? []).map((r: any) => [
+        String(r.item_id),
+        Number(r.avg_cost_base ?? 0),
+      ])
+    );
   }
-  const itemMap = new Map(items.map((it) => [it.id, it]));
 
-  // Build rows; choose the best available delta per item
-  const rows = basics.map((b) => {
-    const it = itemMap.get(b.item_id);
-    const unit = it?.base_unit ?? "";
-    const name = it?.name ?? "(deleted item)";
-    const usdPerBase = perBaseUSD(it);
+  // Totals
+  let totalCountedValue = 0;
+  let totalChangeUnits = 0;
+  let totalChangeValue = 0;
 
-    const counted = safeNum(b.counted_base);
-    const expected = safeNum(b.expected_base);
-    const storedDelta = safeNum(b.delta_base);
-    const adjDelta = adjByItem.get(b.item_id) ?? 0;
+  const rows = lines.map((l) => {
+    const name = l.inventory_items?.name ?? "—";
+    const unit = l.inventory_items?.base_unit ?? "";
+    const cost = avgCostMap.get(l.item_id) ?? 0;
 
-    // 1) if we have meaningful counted/expected, use that
-    const hasMeaningfulCounts = counted !== 0 || expected !== 0;
-    const computedDelta = counted - expected;
+    const lineValue = l.counted_base * cost;
+    const changeUnits = l.delta_base;
+    const changeValue = changeUnits * cost;
 
-    const delta = hasMeaningfulCounts
-      ? computedDelta
-      : (storedDelta !== 0 ? storedDelta : adjDelta);
-
-    const lineValue = counted * usdPerBase;
-    const changeValue = delta * usdPerBase;
+    totalCountedValue += lineValue;
+    totalChangeUnits += changeUnits;
+    totalChangeValue += changeValue;
 
     return {
-      item_id: b.item_id,
+      id: l.id,
       name,
       unit,
-      usdPerBase,
-      counted,
-      expected,
-      delta,
+      cost,
+      counted: l.counted_base,
+      expected: l.expected_base,
+      delta: changeUnits,
       lineValue,
       changeValue,
     };
   });
 
-  const totalCountedUsd = rows.reduce((s, r) => s + r.lineValue, 0);
-  const totalChangeUnits = rows.reduce((s, r) => s + Math.abs(r.delta), 0);
-  const totalChangeUsd = rows.reduce((s, r) => s + Math.abs(r.changeValue), 0);
-
   return (
     <main className="max-w-5xl mx-auto p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Inventory Count</h1>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           <Link href="/inventory/counts" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
             Back to counts
           </Link>
-          <Link href={`/inventory/counts/${count.id}/edit`} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
+          <Link href={`/inventory/counts/${header.id}/edit`} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
             Edit
           </Link>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div className="border rounded-lg p-4">
+      <div className="grid md:grid-cols-3 gap-3">
+        <div className="border rounded p-3">
           <div className="text-xs opacity-70">TOTAL COUNTED VALUE</div>
-          <div className="text-xl font-semibold">{fmtUSD(totalCountedUsd)}</div>
+          <div className="text-xl font-semibold">{fmtUSD(totalCountedValue)}</div>
         </div>
-        <div className="border rounded-lg p-4">
+        <div className="border rounded p-3">
           <div className="text-xs opacity-70">TOTAL CHANGE (UNITS)</div>
-          <div className="text-xl font-semibold tabular-nums">{totalChangeUnits.toFixed(3)}</div>
+          <div className="text-xl font-semibold tabular-nums">
+            {fmtQty(totalChangeUnits)}
+          </div>
         </div>
-        <div className="border rounded-lg p-4">
+        <div className="border rounded p-3">
           <div className="text-xs opacity-70">TOTAL CHANGE ($)</div>
-          <div className="text-xl font-semibold">{fmtUSD(totalChangeUsd)}</div>
+          <div className="text-xl font-semibold">{fmtUSD(totalChangeValue)}</div>
         </div>
       </div>
 
-      <table className="w-full text-sm table-auto">
-        <thead>
-          <tr className="text-left text-neutral-300">
-            <th className="p-2">Item</th>
-            <th className="p-2 text-right">Qty</th>
-            <th className="p-2">Unit</th>
-            <th className="p-2 text-right">$ / base</th>
-            <th className="p-2 text-right">Line value</th>
-            <th className="p-2 text-right">Change (units)</th>
-            <th className="p-2 text-right">Change value ($)</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.item_id} className="border-t">
-              <td className="p-2">{r.name}</td>
-              <td className="p-2 text-right tabular-nums">{(r.counted ?? 0).toFixed(3)}</td>
-              <td className="p-2">{r.unit}</td>
-              <td className="p-2 text-right tabular-nums">{fmtUSD(r.usdPerBase)}</td>
-              <td className="p-2 text-right tabular-nums">{fmtUSD(r.lineValue)}</td>
-              <td
-                className={`p-2 text-right tabular-nums ${
-                  r.delta < 0 ? "text-red-500" : r.delta > 0 ? "text-emerald-500" : ""
-                }`}
-              >
-                {Number(r.delta ?? 0).toFixed(3)}
-              </td>
-              <td className="p-2 text-right tabular-nums">{fmtUSD(r.changeValue)}</td>
+      <div className="border rounded-lg overflow-hidden">
+        <table className="w-full text-sm table-auto">
+          <thead className="bg-neutral-900/60">
+            <tr className="text-left">
+              <th className="p-2">Item</th>
+              <th className="p-2 text-right">Qty</th>
+              <th className="p-2">Unit</th>
+              <th className="p-2 text-right">$ / base</th>
+              <th className="p-2 text-right">Line value</th>
+              <th className="p-2 text-right">Change (units)</th>
+              <th className="p-2 text-right">Change value ($)</th>
             </tr>
-          ))}
-          {rows.length === 0 && (
-            <tr>
-              <td className="p-3 text-neutral-400" colSpan={7}>
-                No lines.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id} className="border-t">
+                <td className="p-2">{r.name}</td>
+                <td className="p-2 text-right tabular-nums">{fmtQty(r.counted)}</td>
+                <td className="p-2">{r.unit}</td>
+                <td className="p-2 text-right tabular-nums">{fmtUSD(r.cost)}</td>
+                <td className="p-2 text-right tabular-nums">{fmtUSD(r.lineValue)}</td>
+                <td className={`p-2 text-right tabular-nums ${r.delta < 0 ? "text-red-500" : r.delta > 0 ? "text-emerald-500" : ""}`}>
+                  {fmtQty(r.delta)}
+                </td>
+                <td className={`p-2 text-right tabular-nums ${r.changeValue < 0 ? "text-red-500" : r.changeValue > 0 ? "text-emerald-500" : ""}`}>
+                  {fmtUSD(r.changeValue)}
+                </td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr>
+                <td className="p-3 text-neutral-400" colSpan={7}>
+                  No lines for this count.
+                </td>
+              </tr>
+            )}
+            {rows.length > 0 && (
+              <tr className="border-t bg-neutral-900/30 font-medium">
+                <td className="p-2">Totals</td>
+                <td className="p-2 text-right tabular-nums">
+                  {fmtQty(rows.reduce((a, b) => a + b.counted, 0))}
+                </td>
+                <td className="p-2"></td>
+                <td className="p-2"></td>
+                <td className="p-2 text-right tabular-nums">
+                  {fmtUSD(totalCountedValue)}
+                </td>
+                <td className="p-2 text-right tabular-nums">
+                  {fmtQty(totalChangeUnits)}
+                </td>
+                <td className="p-2 text-right tabular-nums">
+                  {fmtUSD(totalChangeValue)}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="text-xs opacity-70">
+        {new Date(header.created_at).toLocaleString()} · {header.status ?? "draft"}
+        {header.note ? <> · <span className="italic">{header.note}</span></> : null}
+      </div>
     </main>
   );
 }
