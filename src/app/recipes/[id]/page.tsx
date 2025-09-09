@@ -1,137 +1,83 @@
-// src/app/recipes/[id]/page.tsx
+// src/app/inventory/counts/[id]/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
-import { getEffectiveTenant } from "@/lib/effective-tenant";
+import { fmtUSD } from "@/lib/costing";
 import { fmtQty } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-type RecipeRow = {
-  id: string;
-  tenant_id: string;
-  name: string | null;
-  description: string | null;
-  batch_yield_qty: number | null;
-  batch_yield_unit: string | null;
-  yield_pct: number | null;
-  created_at: string | null;
+type RawLine = {
+  count_id: string;
+  item_id: string;
+  expected_base: number | null;
+  counted_base: number | null;
+  delta_base: number | null;
 };
 
-type IngredientRow = {
-  id: string;
-  recipe_id: string;
-  item_id: string | null;
-  sub_recipe_id: string | null;
-  qty: number | null;
-  unit: string | null;
-};
+type ItemInfo = { id: string; name: string | null; base_unit: string | null };
 
-type ItemInfo = {
-  id: string;
-  name: string | null;
-  base_unit: string | null;
-};
+type CostRow = { item_id: string; [k: string]: number | string | null };
 
-type SubRecipeInfo = {
-  id: string;
-  name: string | null;
-  batch_yield_unit: string | null;
-};
-
-// --- helpers ---------------------------------------------------------------
-
-/** Normalize yield to a 0..1 fraction. Accepts 0..1 or 0..100 input. */
-function normYieldFraction(y?: number | null): number {
-  if (!y || y <= 0) return 1;          // default 100%
-  return y > 1.5 ? y / 100 : y;
+function pickCostPerBase(row?: CostRow | null): number {
+  if (!row) return 0;
+  // Be tolerant to different column names in v_item_avg_costs
+  const candidates = [
+    "avg_unit_cost",
+    "avg_cost_per_base",
+    "avg_per_base",
+    "unit_cost_base",
+  ];
+  for (const key of candidates) {
+    const v = row[key];
+    const n = Number(v);
+    if (!Number.isNaN(n) && Number.isFinite(n) && n >= 0) return n;
+  }
+  return 0;
 }
 
-/** For display, return a 0..100 number (without a % sign). */
-function asPercent(y?: number | null): number {
-  const f = normYieldFraction(y);
-  return Math.round(f * 100);
-}
-
-// --- page ------------------------------------------------------------------
-
-export default async function RecipeDetailPage({
+export default async function CountDetailPage({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-
   const supabase = await createServerClient();
 
-  // Require tenant (respects demo tenant flag)
-  const tenantId = await getEffectiveTenant(supabase);
+  // 1) Load raw count lines (truth source)
+  const { data: rawLines, error: rawErr } = await supabase
+    .from("inventory_count_lines")
+    .select("count_id,item_id,expected_base,counted_base,delta_base")
+    .eq("count_id", id);
 
-  // Load recipe
-  const { data: recipeRows, error: rErr } = await supabase
-    .from("recipes")
-    .select(
-      "id,tenant_id,name,description,batch_yield_qty,batch_yield_unit,yield_pct,created_at"
-    )
-    .eq("id", id)
-    .maybeSingle();
-
-  if (rErr || !recipeRows) {
+  if (rawErr) {
     return (
-      <main className="max-w-5xl mx-auto p-6 space-y-4">
+      <main className="max-w-6xl mx-auto p-6 space-y-4">
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">Recipe</h1>
+          <h1 className="text-2xl font-semibold">Inventory Count</h1>
           <Link
-            href="/recipes"
+            href="/inventory/counts"
             className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
           >
-            Back to recipes
+            Back to counts
           </Link>
         </div>
         <p className="text-red-400">
-          Couldn’t load recipe (id {id}). {rErr?.message ?? "Not found."}
+          Couldn’t load count lines (id {id}). {rawErr.message}
         </p>
       </main>
     );
   }
 
-  const recipe: RecipeRow = recipeRows as unknown as RecipeRow;
+  const lines: RawLine[] = (rawLines ?? []).map((r: any) => ({
+    count_id: r.count_id,
+    item_id: r.item_id,
+    expected_base: Number(r.expected_base ?? 0),
+    counted_base: Number(r.counted_base ?? 0),
+    delta_base: Number(r.delta_base ?? 0),
+  }));
 
-  // Load ingredients for this recipe
-  const { data: ingRaw, error: iErr } = await supabase
-    .from("recipe_ingredients")
-    .select("id,recipe_id,item_id,sub_recipe_id,qty,unit")
-    .eq("recipe_id", id);
-
-  if (iErr) {
-    return (
-      <main className="max-w-5xl mx-auto p-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">Recipe</h1>
-          <Link
-            href="/recipes"
-            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-          >
-            Back to recipes
-          </Link>
-        </div>
-        <p className="text-red-400">
-          Couldn’t load ingredients. {iErr.message}
-        </p>
-      </main>
-    );
-  }
-
-  const lines: IngredientRow[] = (ingRaw ?? []) as IngredientRow[];
-
-  // Collect lookups we’ll need for names/units
-  const itemIds = Array.from(
-    new Set(lines.map((l) => l.item_id).filter(Boolean))
-  ) as string[];
-  const subIds = Array.from(
-    new Set(lines.map((l) => l.sub_recipe_id).filter(Boolean))
-  ) as string[];
-
-  // Items lookup
+  // 2) Item names/units lookup
+  const itemIds = Array.from(new Set(lines.map((l) => l.item_id)));
   const itemsById = new Map<string, ItemInfo>();
   if (itemIds.length) {
     const { data: items } = await supabase
@@ -147,93 +93,82 @@ export default async function RecipeDetailPage({
     );
   }
 
-  // Sub-recipes lookup
-  const subsById = new Map<string, SubRecipeInfo>();
-  if (subIds.length) {
-    const { data: subs } = await supabase
-      .from("recipes")
-      .select("id,name,batch_yield_unit")
-      .in("id", subIds);
-    (subs ?? []).forEach((sr: any) =>
-      subsById.set(sr.id, {
-        id: sr.id,
-        name: sr.name,
-        batch_yield_unit: sr.batch_yield_unit,
-      })
-    );
-  }
+  // 3) Try to get average cost per base (tolerant to column names)
+  const costsById = new Map<string, CostRow>();
+  if (itemIds.length) {
+    // We’ll try a few selections until one succeeds.
+    const selects = [
+      "item_id,avg_unit_cost",
+      "item_id,avg_cost_per_base",
+      "item_id,avg_per_base",
+      "item_id,unit_cost_base",
+    ];
+    let costData: any[] | null = null;
 
-  // Makeable (batches) — prefer the DB view, fall back to 0
-  let makeableBatches = 0;
-  if (tenantId) {
-    try {
-      const { data: mk } = await supabase
-        .from("v_recipe_makeable_simple")
-        .select("makeable")
-        .eq("tenant_id", tenantId)
-        .eq("recipe_id", id)
-        .maybeSingle();
-      if (mk && typeof mk.makeable === "number") {
-        makeableBatches = mk.makeable;
+    for (const sel of selects) {
+      const { data, error } = await supabase
+        .from("v_item_avg_costs")
+        .select(sel)
+        .in("item_id", itemIds);
+      if (!error && data) {
+        costData = data as any[];
+        break;
       }
-    } catch {
-      // ignore and leave 0
     }
+    (costData ?? []).forEach((r: any) => {
+      costsById.set(r.item_id as string, r);
+    });
   }
 
-  // Build rows for display. For now, “Base qty / Base unit” mirrors the
-  // item/sub base unit (no conversion math required yet).
+  // 4) Compose display rows + totals (never zero-out real data)
   const rows = lines.map((l) => {
-    if (l.item_id) {
-      const item = itemsById.get(l.item_id);
-      return {
-        name: item?.name ?? "(item)",
-        qty: Number(l.qty ?? 0),
-        unit: l.unit ?? "",
-        baseQty: Number(l.qty ?? 0),
-        baseUnit: item?.base_unit ?? (l.unit ?? ""),
-      };
-    } else if (l.sub_recipe_id) {
-      const sub = subsById.get(l.sub_recipe_id);
-      const baseUnit = sub?.batch_yield_unit ?? l.unit ?? "";
-      return {
-        name: sub?.name ?? "(sub-recipe)",
-        qty: Number(l.qty ?? 0),
-        unit: l.unit ?? "",
-        baseQty: Number(l.qty ?? 0),
-        baseUnit,
-      };
-    }
-    // Fallback (shouldn’t happen)
+    const info =
+      itemsById.get(l.item_id) ?? ({ id: l.item_id, name: "(item)", base_unit: "" } as ItemInfo);
+    const cost = pickCostPerBase(costsById.get(l.item_id) ?? null);
+
+    const qty = Number(l.counted_base ?? 0);
+    const delta = Number(l.delta_base ?? 0);
+    const lineValue = qty * cost;
+    const changeValue = delta * cost;
+
     return {
-      name: "(ingredient)",
-      qty: Number(l.qty ?? 0),
-      unit: l.unit ?? "",
-      baseQty: Number(l.qty ?? 0),
-      baseUnit: l.unit ?? "",
+      name: info.name ?? "(item)",
+      unit: info.base_unit ?? "",
+      qty,
+      delta,
+      price: cost,
+      lineValue,
+      changeValue,
     };
   });
 
-  // Stable sort by ingredient name
-  rows.sort((a, b) => a.name.localeCompare(b.name));
+  // Totals
+  const totals = rows.reduce(
+    (acc, r) => {
+      acc.countedValue += r.lineValue;
+      acc.deltaUnits += r.delta;
+      acc.deltaValue += r.changeValue;
+      return acc;
+    },
+    { countedValue: 0, deltaUnits: 0, deltaValue: 0 }
+  );
 
-  const displayYield = asPercent(recipe.yield_pct);
+  // Stable sort by item name
+  rows.sort((a, b) => a.name.localeCompare(b.name));
 
   return (
     <main className="max-w-6xl mx-auto p-6 space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">
-          {recipe.name ?? "Untitled"}
-        </h1>
+        <h1 className="text-2xl font-semibold">Inventory Count</h1>
         <div className="flex items-center gap-2">
           <Link
-            href="/recipes"
+            href="/inventory/counts"
             className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
           >
-            Back to recipes
+            Back to counts
           </Link>
           <Link
-            href={`/recipes/${id}/edit`}
+            href={`/inventory/counts/${id}/edit`}
             className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
           >
             Edit
@@ -243,63 +178,85 @@ export default async function RecipeDetailPage({
 
       <div className="grid md:grid-cols-3 gap-3">
         <div className="border rounded-lg p-3">
-          <div className="text-xs opacity-75">Batch yield</div>
-          <div className="text-xl font-semibold">
-            {fmtQty(recipe.batch_yield_qty ?? 1)}{" "}
-            {recipe.batch_yield_unit ?? ""}
-          </div>
+          <div className="text-xs opacity-75">TOTAL COUNTED VALUE</div>
+          <div className="text-xl font-semibold">{fmtUSD(totals.countedValue)}</div>
         </div>
         <div className="border rounded-lg p-3">
-          <div className="text-xs opacity-75">Yield %</div>
-          <div className="text-xl font-semibold">{displayYield}%</div>
-        </div>
-        <div className="border rounded-lg p-3">
-          <div className="text-xs opacity-75">Makeable (batches)</div>
+          <div className="text-xs opacity-75">TOTAL CHANGE (UNITS)</div>
           <div className="text-xl font-semibold tabular-nums">
-            {fmtQty(makeableBatches)}
+            {fmtQty(totals.deltaUnits)}
           </div>
+        </div>
+        <div className="border rounded-lg p-3">
+          <div className="text-xs opacity-75">TOTAL CHANGE ($)</div>
+          <div className="text-xl font-semibold">{fmtUSD(totals.deltaValue)}</div>
         </div>
       </div>
-
-      {recipe.description && (
-        <div className="border rounded-md p-3 text-sm">
-          {recipe.description}
-        </div>
-      )}
 
       <div className="border rounded-lg overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-neutral-900/60">
             <tr>
-              <th className="p-2 text-left">Ingredient</th>
+              <th className="p-2 text-left">Item</th>
               <th className="p-2 text-right">Qty</th>
               <th className="p-2 text-left">Unit</th>
-              <th className="p-2 text-right">Base qty</th>
-              <th className="p-2 text-left">Base unit</th>
+              <th className="p-2 text-right">$ / base</th>
+              <th className="p-2 text-right">Line value</th>
+              <th className="p-2 text-right">Change (units)</th>
+              <th className="p-2 text-right">Change value ($)</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r, i) => (
               <tr key={`${r.name}-${i}`} className="border-t">
                 <td className="p-2">{r.name}</td>
-                <td className="p-2 text-right tabular-nums">
-                  {fmtQty(r.qty)}
-                </td>
+                <td className="p-2 text-right tabular-nums">{fmtQty(r.qty)}</td>
                 <td className="p-2">{r.unit}</td>
                 <td className="p-2 text-right tabular-nums">
-                  {fmtQty(r.baseQty)}
+                  {r.price ? fmtUSD(r.price) : "$0.00"}
                 </td>
-                <td className="p-2">{r.baseUnit}</td>
+                <td className="p-2 text-right tabular-nums">{fmtUSD(r.lineValue)}</td>
+                <td
+                  className={`p-2 text-right tabular-nums ${
+                    r.delta < 0 ? "text-red-500" : r.delta > 0 ? "text-emerald-500" : ""
+                  }`}
+                >
+                  {fmtQty(r.delta)}
+                </td>
+                <td
+                  className={`p-2 text-right tabular-nums ${
+                    r.changeValue < 0
+                      ? "text-red-500"
+                      : r.changeValue > 0
+                      ? "text-emerald-500"
+                      : ""
+                  }`}
+                >
+                  {fmtUSD(r.changeValue)}
+                </td>
               </tr>
             ))}
             {rows.length === 0 && (
               <tr>
-                <td className="p-3 text-neutral-400" colSpan={5}>
-                  No ingredients yet.
+                <td className="p-3 text-neutral-400" colSpan={7}>
+                  No lines found for this count.
                 </td>
               </tr>
             )}
           </tbody>
+          <tfoot className="bg-neutral-900/40">
+            <tr>
+              <td className="p-2 font-medium">Totals</td>
+              <td className="p-2"></td>
+              <td className="p-2"></td>
+              <td className="p-2"></td>
+              <td className="p-2 text-right font-medium">{fmtUSD(totals.countedValue)}</td>
+              <td className="p-2 text-right font-medium tabular-nums">
+                {fmtQty(totals.deltaUnits)}
+              </td>
+              <td className="p-2 text-right font-medium">{fmtUSD(totals.deltaValue)}</td>
+            </tr>
+          </tfoot>
         </table>
       </div>
     </main>
