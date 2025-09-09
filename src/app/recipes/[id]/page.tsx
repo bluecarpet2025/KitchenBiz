@@ -16,34 +16,36 @@ type RawLine = {
 
 type ItemInfo = { id: string; name: string | null; base_unit: string | null };
 
-type CostRow = { item_id: string; [k: string]: number | string | null };
+type CostRow = {
+  item_id: string;
+  avg_unit_cost?: number | null; // current column name in v_item_avg_costs
+  // (compat fields if you later add aliases to the view—safe to keep here)
+  avg_cost_per_base?: number | null;
+  avg_per_base?: number | null;
+  unit_cost_base?: number | null;
+};
 
-function pickCostPerBase(row?: CostRow | null): number {
-  if (!row) return 0;
-  // Be tolerant to different column names in v_item_avg_costs
-  const candidates = [
-    "avg_unit_cost",
-    "avg_cost_per_base",
-    "avg_per_base",
-    "unit_cost_base",
-  ];
-  for (const key of candidates) {
-    const v = row[key];
-    const n = Number(v);
-    if (!Number.isNaN(n) && Number.isFinite(n) && n >= 0) return n;
-  }
-  return 0;
+function pickCostPerBase(cost?: CostRow | null): number {
+  if (!cost) return 0;
+  // Prefer today's column, then any future compat aliases if present
+  return Number(
+    cost.avg_unit_cost ??
+      cost.avg_cost_per_base ??
+      cost.avg_per_base ??
+      cost.unit_cost_base ??
+      0
+  );
 }
 
 export default async function CountDetailPage({
   params,
 }: {
-  params: Promise<{ id: string }>;
+  params: { id: string };
 }) {
-  const { id } = await params;
+  const { id } = params;
   const supabase = await createServerClient();
 
-  // 1) Load raw count lines (truth source)
+  // ---- 1) Raw lines (truth source)
   const { data: rawLines, error: rawErr } = await supabase
     .from("inventory_count_lines")
     .select("count_id,item_id,expected_base,counted_base,delta_base")
@@ -51,7 +53,7 @@ export default async function CountDetailPage({
 
   if (rawErr) {
     return (
-      <main className="max-w-6xl mx-auto p-6 space-y-4">
+      <main className="max-w-5xl mx-auto p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">Inventory Count</h1>
           <Link
@@ -76,55 +78,48 @@ export default async function CountDetailPage({
     delta_base: Number(r.delta_base ?? 0),
   }));
 
-  // 2) Item names/units lookup
+  // ---- 2) Item names/units for display
   const itemIds = Array.from(new Set(lines.map((l) => l.item_id)));
   const itemsById = new Map<string, ItemInfo>();
   if (itemIds.length) {
-    const { data: items } = await supabase
+    const { data: items, error: itemsErr } = await supabase
       .from("inventory_items")
       .select("id,name,base_unit")
       .in("id", itemIds);
-    (items ?? []).forEach((it: any) =>
-      itemsById.set(it.id, {
-        id: it.id,
-        name: it.name,
-        base_unit: it.base_unit,
-      })
-    );
-  }
 
-  // 3) Try to get average cost per base (tolerant to column names)
-  const costsById = new Map<string, CostRow>();
-  if (itemIds.length) {
-    // We’ll try a few selections until one succeeds.
-    const selects = [
-      "item_id,avg_unit_cost",
-      "item_id,avg_cost_per_base",
-      "item_id,avg_per_base",
-      "item_id,unit_cost_base",
-    ];
-    let costData: any[] | null = null;
-
-    for (const sel of selects) {
-      const { data, error } = await supabase
-        .from("v_item_avg_costs")
-        .select(sel)
-        .in("item_id", itemIds);
-      if (!error && data) {
-        costData = data as any[];
-        break;
-      }
+    if (!itemsErr) {
+      (items ?? []).forEach((it: any) =>
+        itemsById.set(it.id, {
+          id: it.id,
+          name: it.name,
+          base_unit: it.base_unit,
+        })
+      );
     }
-    (costData ?? []).forEach((r: any) => {
-      costsById.set(r.item_id as string, r);
-    });
   }
 
-  // 4) Compose display rows + totals (never zero-out real data)
+  // ---- 3) Cost per base — request only existing column(s)
+  const costById = new Map<string, CostRow>();
+  if (itemIds.length) {
+    const { data: costs, error: costErr } = await supabase
+      .from("v_item_avg_costs")
+      .select("item_id,avg_unit_cost"); // <- only columns guaranteed to exist
+
+    if (!costErr) {
+      (costs ?? []).forEach((r: any) =>
+        costById.set(r.item_id, {
+          item_id: r.item_id,
+          avg_unit_cost: r.avg_unit_cost,
+        })
+      );
+    }
+  }
+
+  // ---- 4) Build rows + totals
   const rows = lines.map((l) => {
     const info =
       itemsById.get(l.item_id) ?? ({ id: l.item_id, name: "(item)", base_unit: "" } as ItemInfo);
-    const cost = pickCostPerBase(costsById.get(l.item_id) ?? null);
+    const cost = pickCostPerBase(costById.get(l.item_id) ?? null);
 
     const qty = Number(l.counted_base ?? 0);
     const delta = Number(l.delta_base ?? 0);
@@ -142,7 +137,6 @@ export default async function CountDetailPage({
     };
   });
 
-  // Totals
   const totals = rows.reduce(
     (acc, r) => {
       acc.countedValue += r.lineValue;
@@ -153,7 +147,6 @@ export default async function CountDetailPage({
     { countedValue: 0, deltaUnits: 0, deltaValue: 0 }
   );
 
-  // Stable sort by item name
   rows.sort((a, b) => a.name.localeCompare(b.name));
 
   return (
@@ -183,9 +176,7 @@ export default async function CountDetailPage({
         </div>
         <div className="border rounded-lg p-3">
           <div className="text-xs opacity-75">TOTAL CHANGE (UNITS)</div>
-          <div className="text-xl font-semibold tabular-nums">
-            {fmtQty(totals.deltaUnits)}
-          </div>
+          <div className="text-xl font-semibold tabular-nums">{fmtQty(totals.deltaUnits)}</div>
         </div>
         <div className="border rounded-lg p-3">
           <div className="text-xs opacity-75">TOTAL CHANGE ($)</div>
@@ -251,9 +242,7 @@ export default async function CountDetailPage({
               <td className="p-2"></td>
               <td className="p-2"></td>
               <td className="p-2 text-right font-medium">{fmtUSD(totals.countedValue)}</td>
-              <td className="p-2 text-right font-medium tabular-nums">
-                {fmtQty(totals.deltaUnits)}
-              </td>
+              <td className="p-2 text-right font-medium tabular-nums">{fmtQty(totals.deltaUnits)}</td>
               <td className="p-2 text-right font-medium">{fmtUSD(totals.deltaValue)}</td>
             </tr>
           </tfoot>
