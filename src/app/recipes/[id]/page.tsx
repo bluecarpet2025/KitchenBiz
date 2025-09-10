@@ -62,17 +62,20 @@ function pick(
 function pickCost(c?: AvgCost | null): number {
   if (!c) return 0;
   return Number(
-    pick(c, "avg_unit_cost", "avg_cost_per_base", "avg_per_base", "unit_cost_base") ??
-      0
+    pick(c, "avg_unit_cost", "avg_cost_per_base", "avg_per_base", "unit_cost_base") ?? 0
   );
 }
 
-type PageProps = {
-  params: { id: string };
-};
+/** Next 15 sometimes makes `params` a Promise — normalize it safely */
+async function resolveParams(maybe: any) {
+  return maybe && typeof maybe.then === "function" ? await maybe : maybe;
+}
 
-export default async function RecipeDetailPage({ params }: PageProps) {
-  const { id } = params;
+export default async function RecipeDetailPage(props: any) {
+  const p = await resolveParams(props?.params);
+  const id = p?.id as string | undefined;
+  if (!id) notFound();
+
   const supabase = await createServerClient();
 
   // 1) Load the recipe row
@@ -83,8 +86,6 @@ export default async function RecipeDetailPage({ params }: PageProps) {
     .maybeSingle();
 
   if (recipeErr) {
-    // If the table exists but the row doesn’t, show 404; otherwise show a soft error.
-    // notFound() gives you the Next 404 page.
     // eslint-disable-next-line no-console
     console.error("recipes fetch error:", recipeErr);
   }
@@ -137,9 +138,7 @@ export default async function RecipeDetailPage({ params }: PageProps) {
     );
   }
 
-  // 4) Optional: cost lookup. Your v_item_avg_costs has (tenant_id, item_id, avg_unit_cost).
-  // We don’t assume tenant_id here to keep it portable. If RLS requires tenant_id,
-  // this will just return empty and costs will display as $0.00 (harmless).
+  // 4) Optional: cost lookup (v_item_avg_costs has avg_unit_cost)
   let costByItem = new Map<string, AvgCost>();
   if (itemIds.length) {
     const { data: costs } = await supabase
@@ -166,13 +165,7 @@ export default async function RecipeDetailPage({ params }: PageProps) {
       base_unit: "",
     };
 
-    const qty = Number(
-      ing.qty ??
-        // fallback to 0 if missing
-        0
-    );
-
-    // prefer the ingredient's explicit unit, else the item base_unit
+    const qty = Number(ing.qty ?? 0);
     const unit = (ing.unit ?? item.base_unit ?? "") as string;
 
     const cost = pickCost(costByItem.get(String(ing.item_id)));
@@ -220,7 +213,6 @@ export default async function RecipeDetailPage({ params }: PageProps) {
           >
             Back to recipes
           </Link>
-          {/* Put your edit route here when ready */}
           {/* <Link href={`/recipes/${id}/edit`} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Edit</Link> */}
         </div>
       </div>
