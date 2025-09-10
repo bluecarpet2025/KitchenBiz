@@ -52,7 +52,7 @@ type AvgCost = {
 function pick(obj: Record<string, any> | null | undefined, ...keys: string[]) {
   if (!obj) return undefined;
   for (const k of keys) {
-    const v = obj[k];
+    const v = (obj as any)[k];
     if (v !== undefined && v !== null) return v;
   }
   return undefined;
@@ -60,26 +60,20 @@ function pick(obj: Record<string, any> | null | undefined, ...keys: string[]) {
 function pickCost(c?: AvgCost | null): number {
   if (!c) return 0;
   return Number(
-    pick(c, "avg_unit_cost", "avg_cost_per_base", "avg_per_base", "unit_cost_base") ??
-      0
+    pick(c, "avg_unit_cost", "avg_cost_per_base", "avg_per_base", "unit_cost_base") ?? 0
   );
 }
 
 /**
- * Accept both current and generated Next.js PageProps shapes:
- * - { params: { id: string } }
- * - { params: Promise<{ id: string }> }
+ * IMPORTANT: Accept `any` so this function is always assignable
+ * to Next's generated PageProps type (which currently uses Promise params).
+ * We then normalize params to a plain object.
  */
-type Params = { id: string };
-type PagePropsCompat =
-  | { params: Params }
-  | { params: Promise<Params> };
-
-export default async function RecipeDetailPage(props: PagePropsCompat) {
-  // Normalize params in case Next's generated type makes it a Promise
-  const raw = (props as any)?.params;
-  const params: Params = raw && typeof raw.then === "function" ? await raw : raw;
-  const id = params?.id as string;
+export default async function RecipeDetailPage(props: any) {
+  const raw = props?.params;
+  const params: { id?: string } =
+    raw && typeof raw.then === "function" ? await raw : raw ?? {};
+  const id = params?.id as string | undefined;
 
   if (!id) {
     notFound();
@@ -91,7 +85,7 @@ export default async function RecipeDetailPage(props: PagePropsCompat) {
   const { data: recipeRow, error: recipeErr } = await supabase
     .from("recipes")
     .select("id,name,description,yield_qty,yield_unit,created_at,updated_at")
-    .eq("id", id)
+    .eq("id", id!)
     .maybeSingle();
 
   if (recipeErr) {
@@ -107,7 +101,7 @@ export default async function RecipeDetailPage(props: PagePropsCompat) {
   const { data: ri, error: ingErr } = await supabase
     .from("recipe_ingredients")
     .select("*")
-    .eq("recipe_id", id);
+    .eq("recipe_id", id!);
 
   if (ingErr) {
     // eslint-disable-next-line no-console
@@ -128,9 +122,7 @@ export default async function RecipeDetailPage(props: PagePropsCompat) {
 
   // 3) Item lookup (names & base units)
   const itemIds = Array.from(
-    new Set(
-      ingredients.map((x) => x.item_id).filter(Boolean).map(String)
-    )
+    new Set(ingredients.map((x) => x.item_id).filter(Boolean).map(String))
   );
 
   const itemsById = new Map<string, Item>();
@@ -218,9 +210,7 @@ export default async function RecipeDetailPage(props: PagePropsCompat) {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">
-            {recipe.name || "Recipe"}
-          </h1>
+          <h1 className="text-2xl font-semibold">{recipe.name || "Recipe"}</h1>
           <p className="text-sm text-neutral-400">
             {recipe.description ?? "No description."}
           </p>
@@ -233,7 +223,6 @@ export default async function RecipeDetailPage(props: PagePropsCompat) {
           >
             Back to recipes
           </Link>
-          {/* Keep your edit link ready for later */}
           {/* <Link href={`/recipes/${id}/edit`} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Edit</Link> */}
         </div>
       </div>
@@ -251,15 +240,11 @@ export default async function RecipeDetailPage(props: PagePropsCompat) {
         </div>
         <div className="border rounded-lg p-3">
           <div className="text-xs opacity-75">INGREDIENT LINES</div>
-          <div className="text-xl font-semibold tabular-nums">
-            {rows.length}
-          </div>
+          <div className="text-xl font-semibold tabular-nums">{rows.length}</div>
         </div>
         <div className="border rounded-lg p-3">
           <div className="text-xs opacity-75">EST. COST (SUM)</div>
-          <div className="text-xl font-semibold">
-            {fmtUSD(totals.totalCost)}
-          </div>
+          <div className="text-xl font-semibold">{fmtUSD(totals.totalCost)}</div>
         </div>
       </div>
 
@@ -284,9 +269,7 @@ export default async function RecipeDetailPage(props: PagePropsCompat) {
                 <td className="p-2 text-right tabular-nums">
                   {r.unitCost ? fmtUSD(r.unitCost) : "$0.00"}
                 </td>
-                <td className="p-2 text-right tabular-nums">
-                  {fmtUSD(r.lineCost)}
-                </td>
+                <td className="p-2 text-right tabular-nums">{fmtUSD(r.lineCost)}</td>
               </tr>
             ))}
             {rows.length === 0 && (
@@ -303,8 +286,8 @@ export default async function RecipeDetailPage(props: PagePropsCompat) {
               <td className="p-2 text-right font-medium tabular-nums">
                 {fmtQty(totals.totalQty)}
               </td>
-              <td className="p-2"></td>
-              <td className="p-2"></td>
+              <td className="p-2" />
+              <td className="p-2" />
               <td className="p-2 text-right font-medium tabular-nums">
                 {fmtUSD(totals.totalCost)}
               </td>
