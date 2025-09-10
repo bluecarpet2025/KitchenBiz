@@ -1,224 +1,298 @@
-// src/app/inventory/counts/[id]/page.tsx
+// src/app/recipes/[id]/page.tsx
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { createServerClient } from "@/lib/supabase/server";
 import { fmtUSD } from "@/lib/costing";
 import { fmtQty } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-/** Row shape coming from public.v_count_lines_detailed (as verified in SQL) */
-type ViewRow = {
-  count_id: string;
-  item_id: string;
-  name: string | null;
-  base_unit: string | null;
-  unit: string | null;
-
-  expected_base: number | null;
-  counted_base: number | null;
-  delta_base: number | null;
-
-  expected_qty: number | null;
-  counted_qty: number | null;
-  delta_qty: number | null;
-
-  counted_units: number | null;
-  change_units: number | null;
-
-  unit_cost: number | null;
-  unit_cost_base: number | null;
-
-  line_value_usd: number | null;     // explicit line value if present
-  counted_value_usd: number | null;  // explicit line value (legacy/alt)
-  change_value_usd: number | null;   // explicit delta value (alt)
-  delta_value_usd: number | null;    // explicit delta value (legacy/alt)
-
-  tenant_id: string | null;
+/**
+ * Types are intentionally tolerant so the page won't break
+ * if your DB view/table has slightly different optional fields.
+ */
+type Recipe = {
+  id: string;
+  name?: string | null;
+  description?: string | null;
+  yield_qty?: number | null;
+  yield_unit?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
-/** Small helper: coerce DB numerics/nulls/strings to a number (or 0) */
-function n(v: unknown): number {
-  if (v === null || v === undefined) return 0;
-  const num = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(num) ? num : 0;
+type RecipeIngredient = {
+  id?: string;
+  recipe_id?: string;
+  item_id?: string | null;
+  qty?: number | null;
+  unit?: string | null;
+  // possible alternates seen over time
+  quantity?: number | null;
+  measure_unit?: string | null;
+  qty_base?: number | null;
+  base_unit?: string | null;
+};
+
+type Item = {
+  id: string;
+  name?: string | null;
+  base_unit?: string | null;
+};
+
+type AvgCost = {
+  item_id: string;
+  avg_unit_cost?: number | null;
+  // tolerate a few alias names used historically
+  avg_cost_per_base?: number | null;
+  avg_per_base?: number | null;
+  unit_cost_base?: number | null;
+};
+
+function pick(obj: Record<string, any> | null | undefined, ...keys: string[]) {
+  if (!obj) return undefined;
+  for (const k of keys) {
+    const v = obj[k];
+    if (v !== undefined && v !== null) return v;
+  }
+  return undefined;
+}
+function pickCost(c?: AvgCost | null): number {
+  if (!c) return 0;
+  return Number(
+    pick(c, "avg_unit_cost", "avg_cost_per_base", "avg_per_base", "unit_cost_base") ??
+      0
+  );
 }
 
-export default async function CountDetailPage({
-  params: { id },
-}: {
-  params: { id: string };
-}) {
+/**
+ * Accept both current and generated Next.js PageProps shapes:
+ * - { params: { id: string } }
+ * - { params: Promise<{ id: string }> }
+ */
+type Params = { id: string };
+type PagePropsCompat =
+  | { params: Params }
+  | { params: Promise<Params> };
+
+export default async function RecipeDetailPage(props: PagePropsCompat) {
+  // Normalize params in case Next's generated type makes it a Promise
+  const raw = (props as any)?.params;
+  const params: Params = raw && typeof raw.then === "function" ? await raw : raw;
+  const id = params?.id as string;
+
+  if (!id) {
+    notFound();
+  }
+
   const supabase = await createServerClient();
 
-  // Fetch exactly the columns we render and type the response.
-  const { data, error } = await supabase
-    .from("v_count_lines_detailed")
-    .select(
-      `
-      count_id,
-      item_id,
-      name,
-      base_unit, unit,
-      expected_base, counted_base, delta_base,
-      expected_qty, counted_qty, delta_qty,
-      counted_units, change_units,
-      unit_cost, unit_cost_base,
-      line_value_usd, counted_value_usd,
-      change_value_usd, delta_value_usd,
-      tenant_id
-    `
-    )
-    .eq("count_id", id)
-    .order("name", { ascending: true })
-    .returns<ViewRow[]>();
+  // 1) Load the recipe row
+  const { data: recipeRow, error: recipeErr } = await supabase
+    .from("recipes")
+    .select("id,name,description,yield_qty,yield_unit,created_at,updated_at")
+    .eq("id", id)
+    .maybeSingle();
 
-  if (error) {
-    // Soft-error UI so user can navigate back without crashing the page
-    return (
-      <main className="max-w-6xl mx-auto p-6 space-y-6">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">Inventory Count</h1>
-          <Link
-            href="/inventory/counts"
-            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-          >
-            Back to counts
-          </Link>
-        </div>
-        <p className="text-red-400 text-sm">
-          Couldn&apos;t load count rows (id {id}). {error.message}
-        </p>
-      </main>
+  if (recipeErr) {
+    // eslint-disable-next-line no-console
+    console.error("recipes fetch error:", recipeErr);
+  }
+  if (!recipeRow) {
+    notFound();
+  }
+  const recipe: Recipe = recipeRow as Recipe;
+
+  // 2) Load ingredients for this recipe (tolerant to column aliases)
+  const { data: ri, error: ingErr } = await supabase
+    .from("recipe_ingredients")
+    .select("*")
+    .eq("recipe_id", id);
+
+  if (ingErr) {
+    // eslint-disable-next-line no-console
+    console.error("recipe_ingredients fetch error:", ingErr);
+  }
+
+  const ingredients: RecipeIngredient[] = (ri ?? []).map((r: any) => ({
+    id: r.id,
+    recipe_id: r.recipe_id,
+    item_id: r.item_id ?? r.inventory_item_id ?? r.ingredient_id ?? null,
+    qty:
+      r.qty ??
+      r.quantity ??
+      (typeof r.qty_base === "number" ? r.qty_base : null) ??
+      null,
+    unit: r.unit ?? r.measure_unit ?? r.base_unit ?? null,
+  }));
+
+  // 3) Item lookup (names & base units)
+  const itemIds = Array.from(
+    new Set(
+      ingredients.map((x) => x.item_id).filter(Boolean).map(String)
+    )
+  );
+
+  const itemsById = new Map<string, Item>();
+  if (itemIds.length) {
+    const { data: items, error: itemsErr } = await supabase
+      .from("inventory_items")
+      .select("id,name,base_unit")
+      .in("id", itemIds);
+
+    if (itemsErr) {
+      // eslint-disable-next-line no-console
+      console.error("inventory_items fetch error:", itemsErr);
+    }
+
+    (items ?? []).forEach((it: any) =>
+      itemsById.set(String(it.id), {
+        id: String(it.id),
+        name: it.name,
+        base_unit: it.base_unit,
+      })
     );
   }
 
-  const rows = (data ?? []).map((r) => {
-    // Prefer canonical *_units, then *_qty, then *_base
-    const qty =
-      n(r.counted_units) || n(r.counted_qty) || n(r.counted_base);
+  // 4) Optional average cost lookup (best-effort)
+  const costByItem = new Map<string, AvgCost>();
+  if (itemIds.length) {
+    const { data: costs, error: costsErr } = await supabase
+      .from("v_item_avg_costs")
+      .select("item_id,avg_unit_cost,avg_cost_per_base,avg_per_base,unit_cost_base")
+      .in("item_id", itemIds);
 
-    const deltaUnits =
-      n(r.change_units) || n(r.delta_qty) || n(r.delta_base);
+    if (costsErr) {
+      // eslint-disable-next-line no-console
+      console.error("v_item_avg_costs fetch error:", costsErr);
+    }
 
-    // Prefer explicit unit cost; tolerate alternate column
-    const unitCost = n(r.unit_cost) || n(r.unit_cost_base);
+    (costs ?? []).forEach((c: any) =>
+      costByItem.set(String(c.item_id), {
+        item_id: String(c.item_id),
+        avg_unit_cost: c.avg_unit_cost,
+        avg_cost_per_base: c.avg_cost_per_base,
+        avg_per_base: c.avg_per_base,
+        unit_cost_base: c.unit_cost_base,
+      })
+    );
+  }
 
-    // Prefer explicit value fields; otherwise compute
-    const lineValue =
-      n(r.line_value_usd) || n(r.counted_value_usd) || qty * unitCost;
+  // 5) Presentable rows with totals
+  const rows = ingredients.map((ing) => {
+    const item = itemsById.get(String(ing.item_id)) ?? {
+      id: String(ing.item_id ?? ""),
+      name: "(item)",
+      base_unit: "",
+    };
 
-    const changeValue =
-      n(r.delta_value_usd) || n(r.change_value_usd) || deltaUnits * unitCost;
+    const qty = Number(ing.qty ?? 0);
+    const unit = (ing.unit ?? item.base_unit ?? "") as string;
+
+    const cost = pickCost(costByItem.get(String(ing.item_id)));
+    const lineCost = qty * cost;
 
     return {
-      itemId: r.item_id,
-      itemName: r.name ?? "(item)",
-      unit: (r.unit ?? r.base_unit ?? "") as string,
+      itemName: item.name ?? "(item)",
+      unit,
       qty,
-      unitCost,
-      lineValue,
-      deltaUnits,
-      changeValue,
+      unitCost: cost,
+      lineCost,
+      itemId: String(ing.item_id ?? ""),
     };
   });
 
-  // Totals for footer cards
   const totals = rows.reduce(
     (acc, r) => {
       acc.totalQty += r.qty;
-      acc.totalLine += r.lineValue;
-      acc.totalDeltaUnits += r.deltaUnits;
-      acc.totalDeltaValue += r.changeValue;
+      acc.totalCost += r.lineCost;
       return acc;
     },
-    { totalQty: 0, totalLine: 0, totalDeltaUnits: 0, totalDeltaValue: 0 }
+    { totalQty: 0, totalCost: 0 }
   );
+
+  rows.sort((a, b) => a.itemName.localeCompare(b.itemName));
 
   return (
     <main className="max-w-6xl mx-auto p-6 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Inventory Count</h1>
-          <p className="text-xs text-neutral-500">
-            Count ID: <code className="select-all">{id}</code>
+          <h1 className="text-2xl font-semibold">
+            {recipe.name || "Recipe"}
+          </h1>
+          <p className="text-sm text-neutral-400">
+            {recipe.description ?? "No description."}
           </p>
         </div>
 
-        <Link
-          href="/inventory/counts"
-          className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-        >
-          Back to counts
-        </Link>
-      </div>
-
-      {/* Summary cards */}
-      <div className="grid md:grid-cols-4 gap-3">
-        <div className="border rounded-lg p-3">
-          <div className="text-xs opacity-75">LINES</div>
-          <div className="text-xl font-semibold tabular-nums">{rows.length}</div>
-        </div>
-        <div className="border rounded-lg p-3">
-          <div className="text-xs opacity-75">TOTAL QTY</div>
-          <div className="text-xl font-semibold tabular-nums">
-            {fmtQty(totals.totalQty)}
-          </div>
-        </div>
-        <div className="border rounded-lg p-3">
-          <div className="text-xs opacity-75">TOTAL LINE VALUE</div>
-          <div className="text-xl font-semibold tabular-nums">
-            {fmtUSD(totals.totalLine)}
-          </div>
-        </div>
-        <div className="border rounded-lg p-3">
-          <div className="text-xs opacity-75">TOTAL Δ VALUE</div>
-          <div className="text-xl font-semibold tabular-nums">
-            {fmtUSD(totals.totalDeltaValue)}
-          </div>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/recipes"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
+            Back to recipes
+          </Link>
+          {/* Keep your edit link ready for later */}
+          {/* <Link href={`/recipes/${id}/edit`} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Edit</Link> */}
         </div>
       </div>
 
-      {/* Table */}
+      {/* Meta cards */}
+      <div className="grid md:grid-cols-3 gap-3">
+        <div className="border rounded-lg p-3">
+          <div className="text-xs opacity-75">YIELD</div>
+          <div className="text-xl font-semibold tabular-nums">
+            {fmtQty(Number(recipe.yield_qty ?? 0))}{" "}
+            <span className="text-base opacity-80">
+              {recipe.yield_unit ?? ""}
+            </span>
+          </div>
+        </div>
+        <div className="border rounded-lg p-3">
+          <div className="text-xs opacity-75">INGREDIENT LINES</div>
+          <div className="text-xl font-semibold tabular-nums">
+            {rows.length}
+          </div>
+        </div>
+        <div className="border rounded-lg p-3">
+          <div className="text-xs opacity-75">EST. COST (SUM)</div>
+          <div className="text-xl font-semibold">
+            {fmtUSD(totals.totalCost)}
+          </div>
+        </div>
+      </div>
+
+      {/* Ingredients table */}
       <div className="border rounded-lg overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-neutral-900/60">
             <tr>
               <th className="p-2 text-left">Item</th>
-              <th className="p-2 text-left">Unit</th>
               <th className="p-2 text-right">Qty</th>
+              <th className="p-2 text-left">Unit</th>
               <th className="p-2 text-right">$ / unit</th>
-              <th className="p-2 text-right">Line value</th>
-              <th className="p-2 text-right">Δ units</th>
-              <th className="p-2 text-right">Δ value</th>
+              <th className="p-2 text-right">Line cost</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.itemId} className="border-t">
                 <td className="p-2">{r.itemName}</td>
+                <td className="p-2 text-right tabular-nums">{fmtQty(r.qty)}</td>
                 <td className="p-2">{r.unit}</td>
-                <td className="p-2 text-right tabular-nums">
-                  {fmtQty(r.qty)}
-                </td>
                 <td className="p-2 text-right tabular-nums">
                   {r.unitCost ? fmtUSD(r.unitCost) : "$0.00"}
                 </td>
                 <td className="p-2 text-right tabular-nums">
-                  {fmtUSD(r.lineValue)}
-                </td>
-                <td className="p-2 text-right tabular-nums">
-                  {fmtQty(r.deltaUnits)}
-                </td>
-                <td className="p-2 text-right tabular-nums">
-                  {fmtUSD(r.changeValue)}
+                  {fmtUSD(r.lineCost)}
                 </td>
               </tr>
             ))}
             {rows.length === 0 && (
               <tr>
-                <td className="p-3 text-neutral-400" colSpan={7}>
-                  No rows for this count.
+                <td className="p-3 text-neutral-400" colSpan={5}>
+                  No ingredients found for this recipe.
                 </td>
               </tr>
             )}
@@ -226,23 +300,36 @@ export default async function CountDetailPage({
           <tfoot className="bg-neutral-900/40">
             <tr>
               <td className="p-2 font-medium">Totals</td>
-              <td />
               <td className="p-2 text-right font-medium tabular-nums">
                 {fmtQty(totals.totalQty)}
               </td>
-              <td />
+              <td className="p-2"></td>
+              <td className="p-2"></td>
               <td className="p-2 text-right font-medium tabular-nums">
-                {fmtUSD(totals.totalLine)}
-              </td>
-              <td className="p-2 text-right font-medium tabular-nums">
-                {fmtQty(totals.totalDeltaUnits)}
-              </td>
-              <td className="p-2 text-right font-medium tabular-nums">
-                {fmtUSD(totals.totalDeltaValue)}
+                {fmtUSD(totals.totalCost)}
               </td>
             </tr>
           </tfoot>
         </table>
+      </div>
+
+      {/* Timestamps */}
+      <div className="text-xs text-neutral-500">
+        <div>
+          Created:{" "}
+          {recipe.created_at
+            ? new Date(recipe.created_at).toLocaleString()
+            : "—"}
+        </div>
+        <div>
+          Updated:{" "}
+          {recipe.updated_at
+            ? new Date(recipe.updated_at).toLocaleString()
+            : "—"}
+        </div>
+        <div className="mt-2">
+          Recipe ID: <code className="select-all">{recipe.id}</code>
+        </div>
       </div>
     </main>
   );
