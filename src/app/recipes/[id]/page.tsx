@@ -1,4 +1,3 @@
-// src/app/inventory/counts/[id]/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { fmtUSD } from "@/lib/costing";
@@ -6,18 +5,66 @@ import { fmtQty } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-// Keep props loose to withstand Next type drift
-export default async function CountDetailPage(props: any) {
-  const id: string =
-    (await props?.params?.id) ?? props?.params?.id ?? props?.params?.["id"];
+type ViewRow = {
+  // identifiers / display
+  count_id: string;
+  item_id: string;
+  name: string | null;
+  base_unit: string | null;
+  unit?: string | null;
 
+  // canonical base-qty fields
+  expected_base: number | null;
+  counted_base: number | null;
+  delta_base: number | null;
+
+  // legacy/alias qty fields
+  expected_qty?: number | null;
+  counted_qty?: number | null;
+  delta_qty?: number | null;
+
+  // cost per base (either name may exist)
+  unit_cost?: number | null;
+  unit_cost_base?: number | null;
+
+  // value fields (wrapper exposes these)
+  line_value_usd?: number | null;
+  counted_value_usd?: number | null;
+  change_value_usd?: number | null;
+  delta_value_usd?: number | null;
+};
+
+function num(x: unknown): number {
+  const v = Number(x);
+  return Number.isFinite(v) ? v : 0;
+}
+
+function pick<T extends object>(
+  obj: T | null | undefined,
+  ...keys: (keyof T)[]
+): any {
+  if (!obj) return undefined;
+  for (const k of keys) {
+    const v = (obj as any)[k];
+    if (v !== undefined && v !== null) return v;
+  }
+  return undefined;
+}
+
+export default async function CountDetailPage({
+  params,
+}: {
+  params: { id: string };
+}) {
+  const { id } = params;
   const supabase = await createServerClient();
 
-  // Query the wrapper view that includes a legacy alias: delta_value_usd
+  // Query the alias view that guarantees delta_value_usd exists.
   const { data, error } = await supabase
     .from("v_count_lines_detailed_plus")
     .select(
       [
+        "count_id",
         "item_id",
         "name",
         "base_unit",
@@ -28,23 +75,20 @@ export default async function CountDetailPage(props: any) {
         "expected_qty",
         "counted_qty",
         "delta_qty",
-        "counted_units",
-        "change_units",
         "unit_cost",
         "unit_cost_base",
         "line_value_usd",
         "counted_value_usd",
         "change_value_usd",
-        "delta_value_usd", // present on the wrapper for compatibility
+        "delta_value_usd",
       ].join(",")
     )
     .eq("count_id", id)
-    // Supabase JS: supports nullsFirst (not nullsLast)
-    .order("name", { ascending: true, nullsFirst: false });
+    .order("name", { ascending: true });
 
   if (error) {
     return (
-      <main className="max-w-6xl mx-auto p-6 space-y-4">
+      <main className="max-w-5xl mx-auto p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">Inventory Count</h1>
           <Link
@@ -61,35 +105,30 @@ export default async function CountDetailPage(props: any) {
     );
   }
 
-  const rows = (data ?? []).map((r: any) => {
-    const qty = Number(r.counted_units ?? r.counted_base ?? 0);
-    const deltaUnits = Number(r.change_units ?? r.delta_base ?? 0);
+  // Coerce to our row type to avoid TS generic mismatches across client versions.
+  const raw: ViewRow[] = ((data ?? []) as any) as ViewRow[];
 
-    const unitCost = Number(
-      r.unit_cost ?? (typeof r.unit_cost_base === "number" ? r.unit_cost_base : 0)
-    );
+  const rows = raw.map((r) => {
+    const unitCost = num(pick(r, "unit_cost", "unit_cost_base"));
 
-    // Use values provided by the view when present; compute as fallback
-    const lineValue =
-      typeof r.line_value_usd === "number" ? Number(r.line_value_usd) : qty * unitCost;
+    // Prefer canonical *_base, fall back to *_qty if present
+    const qty = num(r.counted_base ?? r.counted_qty);
+    const deltaUnits = num(r.delta_base ?? r.delta_qty);
 
+    // Prefer explicit values from the view; else derive from unit cost
+    const countedValue =
+      num(pick(r, "counted_value_usd", "line_value_usd")) || num(qty * unitCost);
     const changeValue =
-      typeof r.delta_value_usd === "number"
-        ? Number(r.delta_value_usd) // legacy alias, guaranteed by wrapper
-        : typeof r.change_value_usd === "number"
-        ? Number(r.change_value_usd)
-        : deltaUnits * unitCost;
-
-    const unit = (r.unit ?? r.base_unit ?? "") as string;
+      num(pick(r, "change_value_usd", "delta_value_usd")) ||
+      num(deltaUnits * unitCost);
 
     return {
-      itemId: String(r.item_id ?? ""),
-      name: r.name ?? "(item)",
-      unit,
+      item: r.name ?? "(item)",
+      unit: r.base_unit ?? r.unit ?? "",
       qty,
       price: unitCost,
-      lineValue,
-      delta: deltaUnits,
+      lineValue: countedValue,
+      deltaUnits,
       changeValue,
     };
   });
@@ -97,14 +136,12 @@ export default async function CountDetailPage(props: any) {
   const totals = rows.reduce(
     (acc, r) => {
       acc.countedValue += r.lineValue;
-      acc.deltaUnits += r.delta;
+      acc.deltaUnits += r.deltaUnits;
       acc.deltaValue += r.changeValue;
       return acc;
     },
     { countedValue: 0, deltaUnits: 0, deltaValue: 0 }
   );
-
-  rows.sort((a, b) => a.name.localeCompare(b.name));
 
   return (
     <main className="max-w-6xl mx-auto p-6 space-y-4">
@@ -157,9 +194,9 @@ export default async function CountDetailPage(props: any) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
-              <tr key={r.itemId} className="border-t">
-                <td className="p-2">{r.name}</td>
+            {rows.map((r, i) => (
+              <tr key={`${r.item}-${i}`} className="border-t">
+                <td className="p-2">{r.item}</td>
                 <td className="p-2 text-right tabular-nums">{fmtQty(r.qty)}</td>
                 <td className="p-2">{r.unit}</td>
                 <td className="p-2 text-right tabular-nums">
@@ -168,10 +205,14 @@ export default async function CountDetailPage(props: any) {
                 <td className="p-2 text-right tabular-nums">{fmtUSD(r.lineValue)}</td>
                 <td
                   className={`p-2 text-right tabular-nums ${
-                    r.delta < 0 ? "text-red-500" : r.delta > 0 ? "text-emerald-500" : ""
+                    r.deltaUnits < 0
+                      ? "text-red-500"
+                      : r.deltaUnits > 0
+                      ? "text-emerald-500"
+                      : ""
                   }`}
                 >
-                  {fmtQty(r.delta)}
+                  {fmtQty(r.deltaUnits)}
                 </td>
                 <td
                   className={`p-2 text-right tabular-nums ${
@@ -208,10 +249,6 @@ export default async function CountDetailPage(props: any) {
             </tr>
           </tfoot>
         </table>
-      </div>
-
-      <div className="text-xs text-neutral-500 mt-2">
-        Count ID: <code className="select-all">{id}</code>
       </div>
     </main>
   );
