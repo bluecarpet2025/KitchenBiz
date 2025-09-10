@@ -1,153 +1,256 @@
+// src/app/recipes/[id]/page.tsx
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { createServerClient } from "@/lib/supabase/server";
 import { fmtUSD } from "@/lib/costing";
 import { fmtQty } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-type Row = {
-  item_id: string;
-  name: string | null;
-  base_unit: string | null;
-  unit: string | null;
-  counted_base: number | null;
-  delta_base: number | null;
-  // both exist in the view now, but we’ll treat them as optional
-  unit_cost?: number | null;       // preferred alias
-  unit_cost_base?: number | null;  // fallback alias
+/**
+ * Types here are intentionally loose for resilience across schema variations.
+ * We only rely on fields we actually render, and everything else is optional.
+ */
+type Recipe = {
+  id: string;
+  name?: string | null;
+  description?: string | null;
+  yield_qty?: number | null;
+  yield_unit?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
-export default async function CountDetailPage({
-  params,
-}: {
+type RecipeIngredient = {
+  id?: string;
+  recipe_id?: string;
+  item_id?: string;
+  qty?: number | null;
+  unit?: string | null;
+  // common alternates we’ve seen in projects
+  quantity?: number | null;
+  measure_unit?: string | null;
+};
+
+type Item = {
+  id: string;
+  name?: string | null;
+  base_unit?: string | null;
+};
+
+type AvgCost = {
+  item_id: string;
+  avg_unit_cost?: number | null; // your v_item_avg_costs column
+  // tolerate a few alias names used historically
+  avg_cost_per_base?: number | null;
+  avg_per_base?: number | null;
+  unit_cost_base?: number | null;
+};
+
+function pick(
+  obj: Record<string, any> | null | undefined,
+  ...keys: string[]
+): any {
+  if (!obj) return undefined;
+  for (const k of keys) {
+    const v = obj[k];
+    if (v !== undefined && v !== null) return v;
+  }
+  return undefined;
+}
+
+function pickCost(c?: AvgCost | null): number {
+  if (!c) return 0;
+  return Number(
+    pick(c, "avg_unit_cost", "avg_cost_per_base", "avg_per_base", "unit_cost_base") ??
+      0
+  );
+}
+
+type PageProps = {
   params: { id: string };
-}) {
+};
+
+export default async function RecipeDetailPage({ params }: PageProps) {
   const { id } = params;
   const supabase = await createServerClient();
 
-  // Pull only stable inputs; avoid computed-dollar columns to dodge PostgREST cache issues.
-  const { data, error } = await supabase
-    .from("v_count_lines_detailed")
-    .select(
-      [
-        "item_id",
-        "name",
-        "base_unit",
-        "unit",
-        "counted_base",
-        "delta_base",
-        "unit_cost",
-        "unit_cost_base",
-      ].join(",")
-    )
-    .eq("count_id", id)
-    .order("name", { ascending: true, nullsLast: true });
+  // 1) Load the recipe row
+  const { data: recipeRow, error: recipeErr } = await supabase
+    .from("recipes")
+    .select("id,name,description,yield_qty,yield_unit,created_at,updated_at")
+    .eq("id", id)
+    .maybeSingle();
 
-  if (error) {
-    return (
-      <main className="max-w-5xl mx-auto p-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">Inventory Count</h1>
-          <Link
-            href="/inventory/counts"
-            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-          >
-            Back to counts
-          </Link>
-        </div>
-        <p className="text-red-400">
-          Couldn’t load count lines (id {id}). {error.message}
-        </p>
-      </main>
+  if (recipeErr) {
+    // If the table exists but the row doesn’t, show 404; otherwise show a soft error.
+    // notFound() gives you the Next 404 page.
+    // eslint-disable-next-line no-console
+    console.error("recipes fetch error:", recipeErr);
+  }
+  if (!recipeRow) {
+    notFound();
+  }
+  const recipe: Recipe = recipeRow as Recipe;
+
+  // 2) Load ingredients for this recipe (be tolerant with column names)
+  // Prefer: recipe_id, item_id, qty, unit
+  const { data: ri } = await supabase
+    .from("recipe_ingredients")
+    .select("*")
+    .eq("recipe_id", id);
+
+  const ingredients: RecipeIngredient[] = (ri ?? []).map((r: any) => ({
+    id: r.id,
+    recipe_id: r.recipe_id,
+    item_id: r.item_id ?? r.inventory_item_id ?? r.ingredient_id ?? null,
+    qty:
+      r.qty ??
+      r.quantity ??
+      (typeof r.qty_base === "number" ? r.qty_base : null) ??
+      null,
+    unit: r.unit ?? r.measure_unit ?? r.base_unit ?? null,
+  }));
+
+  // 3) Load item lookup (names & base units)
+  const itemIds = Array.from(
+    new Set(
+      ingredients
+        .map((x) => x.item_id)
+        .filter(Boolean)
+        .map((x) => String(x))
+    )
+  );
+  let itemsById = new Map<string, Item>();
+  if (itemIds.length) {
+    const { data: items } = await supabase
+      .from("inventory_items")
+      .select("id,name,base_unit")
+      .in("id", itemIds);
+
+    (items ?? []).forEach((it: any) =>
+      itemsById.set(String(it.id), {
+        id: String(it.id),
+        name: it.name,
+        base_unit: it.base_unit,
+      })
     );
   }
 
-  const rows: Row[] = (data ?? []).map((r: any) => ({
-    item_id: r.item_id,
-    name: r.name ?? "(item)",
-    base_unit: r.base_unit ?? "",
-    unit: r.unit ?? r.base_unit ?? "",
-    counted_base: Number(r.counted_base ?? 0),
-    delta_base: Number(r.delta_base ?? 0),
-    unit_cost: r.unit_cost ?? null,
-    unit_cost_base: r.unit_cost_base ?? null,
-  }));
+  // 4) Optional: cost lookup. Your v_item_avg_costs has (tenant_id, item_id, avg_unit_cost).
+  // We don’t assume tenant_id here to keep it portable. If RLS requires tenant_id,
+  // this will just return empty and costs will display as $0.00 (harmless).
+  let costByItem = new Map<string, AvgCost>();
+  if (itemIds.length) {
+    const { data: costs } = await supabase
+      .from("v_item_avg_costs")
+      .select("item_id,avg_unit_cost,avg_cost_per_base,avg_per_base,unit_cost_base")
+      .in("item_id", itemIds);
 
-  // Compute $ values in app to keep schema-agnostic
-  const display = rows.map((r) => {
-    const cost =
-      Number(
-        r.unit_cost ?? r.unit_cost_base ?? 0 // prefer unit_cost, fallback to unit_cost_base
-      ) || 0;
+    (costs ?? []).forEach((c: any) =>
+      costByItem.set(String(c.item_id), {
+        item_id: String(c.item_id),
+        avg_unit_cost: c.avg_unit_cost,
+        avg_cost_per_base: c.avg_cost_per_base,
+        avg_per_base: c.avg_per_base,
+        unit_cost_base: c.unit_cost_base,
+      })
+    );
+  }
 
-    const qty = r.counted_base || 0;
-    const delta = r.delta_base || 0;
+  // 5) Presentable rows with totals
+  const rows = ingredients.map((ing) => {
+    const item = itemsById.get(String(ing.item_id)) ?? {
+      id: String(ing.item_id ?? ""),
+      name: "(item)",
+      base_unit: "",
+    };
 
-    const lineValue = qty * cost;     // counted_value_usd
-    const changeValue = delta * cost; // change_value_usd
+    const qty = Number(
+      ing.qty ??
+        // fallback to 0 if missing
+        0
+    );
+
+    // prefer the ingredient's explicit unit, else the item base_unit
+    const unit = (ing.unit ?? item.base_unit ?? "") as string;
+
+    const cost = pickCost(costByItem.get(String(ing.item_id)));
+    const lineCost = qty * cost;
 
     return {
-      name: r.name ?? "(item)",
-      unit: r.base_unit ?? "",
+      itemName: item.name ?? "(item)",
+      unit,
       qty,
-      delta,
-      price: cost,
-      lineValue,
-      changeValue,
+      unitCost: cost,
+      lineCost,
+      itemId: String(ing.item_id ?? ""),
     };
   });
 
-  const totals = display.reduce(
+  const totals = rows.reduce(
     (acc, r) => {
-      acc.countedValue += r.lineValue;
-      acc.deltaUnits += r.delta;
-      acc.deltaValue += r.changeValue;
+      acc.totalQty += r.qty;
+      acc.totalCost += r.lineCost;
       return acc;
     },
-    { countedValue: 0, deltaUnits: 0, deltaValue: 0 }
+    { totalQty: 0, totalCost: 0 }
   );
 
+  // nice, stable ordering
+  rows.sort((a, b) => a.itemName.localeCompare(b.itemName));
+
   return (
-    <main className="max-w-6xl mx-auto p-6 space-y-4">
+    <main className="max-w-6xl mx-auto p-6 space-y-6">
+      {/* Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Inventory Count</h1>
+        <div>
+          <h1 className="text-2xl font-semibold">
+            {recipe.name || "Recipe"}
+          </h1>
+          <p className="text-sm text-neutral-400">
+            {recipe.description ?? "No description."}
+          </p>
+        </div>
+
         <div className="flex items-center gap-2">
           <Link
-            href="/inventory/counts"
+            href="/recipes"
             className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
           >
-            Back to counts
+            Back to recipes
           </Link>
-          <Link
-            href={`/inventory/counts/${id}/edit`}
-            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-          >
-            Edit
-          </Link>
+          {/* Put your edit route here when ready */}
+          {/* <Link href={`/recipes/${id}/edit`} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Edit</Link> */}
         </div>
       </div>
 
+      {/* Meta cards */}
       <div className="grid md:grid-cols-3 gap-3">
         <div className="border rounded-lg p-3">
-          <div className="text-xs opacity-75">TOTAL COUNTED VALUE</div>
-          <div className="text-xl font-semibold">
-            {fmtUSD(totals.countedValue)}
-          </div>
-        </div>
-        <div className="border rounded-lg p-3">
-          <div className="text-xs opacity-75">TOTAL CHANGE (UNITS)</div>
+          <div className="text-xs opacity-75">YIELD</div>
           <div className="text-xl font-semibold tabular-nums">
-            {fmtQty(totals.deltaUnits)}
+            {fmtQty(Number(recipe.yield_qty ?? 0))}{" "}
+            <span className="text-base opacity-80">
+              {recipe.yield_unit ?? ""}
+            </span>
           </div>
         </div>
         <div className="border rounded-lg p-3">
-          <div className="text-xs opacity-75">TOTAL CHANGE ($)</div>
+          <div className="text-xs opacity-75">INGREDIENT LINES</div>
+          <div className="text-xl font-semibold tabular-nums">
+            {rows.length}
+          </div>
+        </div>
+        <div className="border rounded-lg p-3">
+          <div className="text-xs opacity-75">EST. COST (SUM)</div>
           <div className="text-xl font-semibold">
-            {fmtUSD(totals.deltaValue)}
+            {fmtUSD(totals.totalCost)}
           </div>
         </div>
       </div>
 
+      {/* Ingredients table */}
       <div className="border rounded-lg overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-neutral-900/60">
@@ -155,52 +258,28 @@ export default async function CountDetailPage({
               <th className="p-2 text-left">Item</th>
               <th className="p-2 text-right">Qty</th>
               <th className="p-2 text-left">Unit</th>
-              <th className="p-2 text-right">$ / base</th>
-              <th className="p-2 text-right">Line value</th>
-              <th className="p-2 text-right">Change (units)</th>
-              <th className="p-2 text-right">Change value ($)</th>
+              <th className="p-2 text-right">$ / unit</th>
+              <th className="p-2 text-right">Line cost</th>
             </tr>
           </thead>
           <tbody>
-            {display.map((r, i) => (
-              <tr key={`${r.name}-${i}`} className="border-t">
-                <td className="p-2">{r.name}</td>
+            {rows.map((r) => (
+              <tr key={r.itemId} className="border-t">
+                <td className="p-2">{r.itemName}</td>
                 <td className="p-2 text-right tabular-nums">{fmtQty(r.qty)}</td>
                 <td className="p-2">{r.unit}</td>
                 <td className="p-2 text-right tabular-nums">
-                  {r.price ? fmtUSD(r.price) : "$0.00"}
+                  {r.unitCost ? fmtUSD(r.unitCost) : "$0.00"}
                 </td>
                 <td className="p-2 text-right tabular-nums">
-                  {fmtUSD(r.lineValue)}
-                </td>
-                <td
-                  className={`p-2 text-right tabular-nums ${
-                    r.delta < 0
-                      ? "text-red-500"
-                      : r.delta > 0
-                      ? "text-emerald-500"
-                      : ""
-                  }`}
-                >
-                  {fmtQty(r.delta)}
-                </td>
-                <td
-                  className={`p-2 text-right tabular-nums ${
-                    r.changeValue < 0
-                      ? "text-red-500"
-                      : r.changeValue > 0
-                      ? "text-emerald-500"
-                      : ""
-                  }`}
-                >
-                  {fmtUSD(r.changeValue)}
+                  {fmtUSD(r.lineCost)}
                 </td>
               </tr>
             ))}
-            {display.length === 0 && (
+            {rows.length === 0 && (
               <tr>
-                <td className="p-3 text-neutral-400" colSpan={7}>
-                  No lines found for this count.
+                <td className="p-3 text-neutral-400" colSpan={5}>
+                  No ingredients found for this recipe.
                 </td>
               </tr>
             )}
@@ -208,21 +287,36 @@ export default async function CountDetailPage({
           <tfoot className="bg-neutral-900/40">
             <tr>
               <td className="p-2 font-medium">Totals</td>
-              <td className="p-2" />
-              <td className="p-2" />
-              <td className="p-2" />
-              <td className="p-2 text-right font-medium">
-                {fmtUSD(totals.countedValue)}
-              </td>
               <td className="p-2 text-right font-medium tabular-nums">
-                {fmtQty(totals.deltaUnits)}
+                {fmtQty(totals.totalQty)}
               </td>
-              <td className="p-2 text-right font-medium">
-                {fmtUSD(totals.deltaValue)}
+              <td className="p-2"></td>
+              <td className="p-2"></td>
+              <td className="p-2 text-right font-medium tabular-nums">
+                {fmtUSD(totals.totalCost)}
               </td>
             </tr>
           </tfoot>
         </table>
+      </div>
+
+      {/* Timestamps */}
+      <div className="text-xs text-neutral-500">
+        <div>
+          Created:{" "}
+          {recipe.created_at
+            ? new Date(recipe.created_at).toLocaleString()
+            : "—"}
+        </div>
+        <div>
+          Updated:{" "}
+          {recipe.updated_at
+            ? new Date(recipe.updated_at).toLocaleString()
+            : "—"}
+        </div>
+        <div className="mt-2">
+          Recipe ID: <code className="select-all">{recipe.id}</code>
+        </div>
       </div>
     </main>
   );
