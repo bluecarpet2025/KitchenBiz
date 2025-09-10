@@ -6,25 +6,16 @@ import { fmtQty } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-// Keep props loose to avoid Next type drift across versions.
+// Keep props loose to withstand Next type drift
 export default async function CountDetailPage(props: any) {
   const id: string =
     (await props?.params?.id) ?? props?.params?.id ?? props?.params?.["id"];
 
   const supabase = await createServerClient();
 
-  // ────────────────────────────────────────────────────────────────────────────
-  // 1) Pull rows from the *existing* view. Do NOT request columns that don't
-  //    exist in your live view. Your current view columns (in order) are:
-  //    count_id, item_id, name, base_unit, unit,
-  //    expected_base, counted_base, delta_base,
-  //    expected_qty, counted_qty, delta_qty,
-  //    counted_units, change_units,
-  //    unit_cost, unit_cost_base,
-  //    line_value_usd, counted_value_usd, change_value_usd
-  // ────────────────────────────────────────────────────────────────────────────
+  // Query the wrapper view that includes a legacy alias: delta_value_usd
   const { data, error } = await supabase
-    .from("v_count_lines_detailed")
+    .from("v_count_lines_detailed_plus")
     .select(
       [
         "item_id",
@@ -44,14 +35,14 @@ export default async function CountDetailPage(props: any) {
         "line_value_usd",
         "counted_value_usd",
         "change_value_usd",
+        "delta_value_usd", // present on the wrapper for compatibility
       ].join(",")
     )
     .eq("count_id", id)
-    // NOTE: Supabase uses `nullsFirst?: boolean` (no `nullsLast`).
+    // Supabase JS: supports nullsFirst (not nullsLast)
     .order("name", { ascending: true, nullsFirst: false });
 
   if (error) {
-    // Render a soft error so users can still navigate back
     return (
       <main className="max-w-6xl mx-auto p-6 space-y-4">
         <div className="flex items-center justify-between">
@@ -74,21 +65,21 @@ export default async function CountDetailPage(props: any) {
     const qty = Number(r.counted_units ?? r.counted_base ?? 0);
     const deltaUnits = Number(r.change_units ?? r.delta_base ?? 0);
 
-    // Prefer unit_cost; fall back to unit_cost_base if needed
     const unitCost = Number(
       r.unit_cost ?? (typeof r.unit_cost_base === "number" ? r.unit_cost_base : 0)
     );
 
-    // If the view line totals are present, use them; else compute as a fallback
+    // Use values provided by the view when present; compute as fallback
     const lineValue =
       typeof r.line_value_usd === "number" ? Number(r.line_value_usd) : qty * unitCost;
 
     const changeValue =
-      typeof r.change_value_usd === "number"
+      typeof r.delta_value_usd === "number"
+        ? Number(r.delta_value_usd) // legacy alias, guaranteed by wrapper
+        : typeof r.change_value_usd === "number"
         ? Number(r.change_value_usd)
         : deltaUnits * unitCost;
 
-    // Stable display unit: explicit unit → base_unit → ""
     const unit = (r.unit ?? r.base_unit ?? "") as string;
 
     return {
@@ -103,7 +94,6 @@ export default async function CountDetailPage(props: any) {
     };
   });
 
-  // Totals from the rows we show
   const totals = rows.reduce(
     (acc, r) => {
       acc.countedValue += r.lineValue;
@@ -114,7 +104,6 @@ export default async function CountDetailPage(props: any) {
     { countedValue: 0, deltaUnits: 0, deltaValue: 0 }
   );
 
-  // Keep UI sort consistent
   rows.sort((a, b) => a.name.localeCompare(b.name));
 
   return (
@@ -137,7 +126,6 @@ export default async function CountDetailPage(props: any) {
         </div>
       </div>
 
-      {/* Header summary cards */}
       <div className="grid md:grid-cols-3 gap-3">
         <div className="border rounded-lg p-3">
           <div className="text-xs opacity-75">TOTAL COUNTED VALUE</div>
@@ -155,7 +143,6 @@ export default async function CountDetailPage(props: any) {
         </div>
       </div>
 
-      {/* Lines table */}
       <div className="border rounded-lg overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-neutral-900/60">
@@ -223,7 +210,6 @@ export default async function CountDetailPage(props: any) {
         </table>
       </div>
 
-      {/* ID footer */}
       <div className="text-xs text-neutral-500 mt-2">
         Count ID: <code className="select-all">{id}</code>
       </div>
