@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
-import { fmtUSD } from "@/lib/costing";
+import { fmtUSD, costPerBaseUnit } from "@/lib/costing";
 import { fmtQty } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -9,9 +9,8 @@ type Recipe = {
   id: string;
   name?: string | null;
   description?: string | null;
-  // aliased from batch_yield_* below
-  yield_qty?: number | null;
-  yield_unit?: string | null;
+  yield_qty?: number | null;   // aliased from batch_yield_qty
+  yield_unit?: string | null;  // aliased from batch_yield_unit
   yield_pct?: number | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -23,14 +22,19 @@ type RecipeIngredient = {
   item_id?: string | null;
   qty?: number | null;
   unit?: string | null;
-  // tolerate historical alias columns
   quantity?: number | null;
   measure_unit?: string | null;
   qty_base?: number | null;
   base_unit?: string | null;
 };
 
-type Item = { id: string; name?: string | null; base_unit?: string | null };
+type Item = {
+  id: string;
+  name?: string | null;
+  base_unit?: string | null;
+  last_price?: number | null;
+  pack_to_base_factor?: number | null;
+};
 
 type AvgCost = {
   item_id: string;
@@ -55,9 +59,9 @@ function pickCost(c?: AvgCost | null): number {
   );
 }
 
-/** Render a friendly message instead of a hard 404 so we can debug RLS/tenant issues. */
+/** Friendly panel instead of hard 404 so we can see layout even with RLS misses. */
 export default async function RecipeDetailPage(props: any) {
-  // Normalize params (Next can pass a thenable in some environments)
+  // Normalize params (can be a thenable in some envs)
   const raw = props?.params;
   const params: { id?: string } =
     raw && typeof raw.then === "function" ? await raw : raw ?? {};
@@ -65,7 +69,7 @@ export default async function RecipeDetailPage(props: any) {
 
   const supabase = await createServerClient();
 
-  // 1) Load recipe (alias batch_yield_* -> yield_*)
+  // 1) Recipe row (alias batch_yield_* -> yield_*)
   let recipe: Recipe | null = null;
   let recipeErrMsg: string | null = null;
 
@@ -93,7 +97,6 @@ export default async function RecipeDetailPage(props: any) {
       console.error("recipes fetch error:", recipeErr);
       recipeErrMsg = recipeErr.message ?? "Failed to fetch recipe.";
     }
-    // <-- Relax typing here to satisfy TS (the runtime shape is fine)
     recipe = (recipeRow as unknown as Recipe) ?? null;
 
     if (!recipe && !recipeErrMsg) {
@@ -146,7 +149,7 @@ export default async function RecipeDetailPage(props: any) {
     unit: r.unit ?? r.measure_unit ?? r.base_unit ?? null,
   }));
 
-  // 3) Item lookup
+  // 3) Items (include last_price + pack_to_base_factor for fallback cost)
   const itemIds = Array.from(
     new Set(ingredients.map((x) => x.item_id).filter(Boolean).map(String))
   );
@@ -154,26 +157,32 @@ export default async function RecipeDetailPage(props: any) {
   if (itemIds.length) {
     const { data: items, error: itemsErr } = await supabase
       .from("inventory_items")
-      .select("id,name,base_unit")
+      .select("id,name,base_unit,last_price,pack_to_base_factor")
       .in("id", itemIds);
+
     if (itemsErr) console.error("inventory_items fetch error:", itemsErr);
+
     (items ?? []).forEach((it: any) =>
       itemsById.set(String(it.id), {
         id: String(it.id),
         name: it.name,
         base_unit: it.base_unit,
+        last_price: it.last_price,
+        pack_to_base_factor: it.pack_to_base_factor,
       })
     );
   }
 
-  // 4) Avg cost lookup (optional)
+  // 4) Optional avg cost lookup
   const costByItem = new Map<string, AvgCost>();
   if (itemIds.length) {
     const { data: costs, error: costsErr } = await supabase
       .from("v_item_avg_costs")
       .select("item_id,avg_unit_cost,avg_cost_per_base,avg_per_base,unit_cost_base")
       .in("item_id", itemIds);
+
     if (costsErr) console.error("v_item_avg_costs fetch error:", costsErr);
+
     (costs ?? []).forEach((c: any) =>
       costByItem.set(String(c.item_id), {
         item_id: String(c.item_id),
@@ -185,22 +194,33 @@ export default async function RecipeDetailPage(props: any) {
     );
   }
 
-  // 5) Present rows
+  // 5) Present rows (avg cost with fallback to last_price/pack_to_base_factor)
   const rows = ingredients.map((ing) => {
     const item = itemsById.get(String(ing.item_id)) ?? {
       id: String(ing.item_id ?? ""),
       name: "(item)",
       base_unit: "",
+      last_price: 0,
+      pack_to_base_factor: 0,
     };
+
     const qty = Number(ing.qty ?? 0);
     const unit = (ing.unit ?? item.base_unit ?? "") as string;
-    const cost = pickCost(costByItem.get(String(ing.item_id)));
-    const lineCost = qty * cost;
+
+    const avg = pickCost(costByItem.get(String(ing.item_id)));
+    const fallback = costPerBaseUnit(
+      Number(item.last_price ?? 0),
+      Number(item.pack_to_base_factor ?? 0)
+    );
+    const unitCost = avg > 0 ? avg : fallback;
+
+    const lineCost = qty * (unitCost || 0);
+
     return {
       itemName: item.name ?? "(item)",
       unit,
       qty,
-      unitCost: cost,
+      unitCost,
       lineCost,
       itemId: String(ing.item_id ?? ""),
     };
@@ -234,17 +254,18 @@ export default async function RecipeDetailPage(props: any) {
           >
             Back to recipes
           </Link>
-          {/* <Link href={`/recipes/${recipe.id}/edit`} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Edit</Link> */}
         </div>
       </div>
 
-      {/* Meta */}
+      {/* Meta cards */}
       <div className="grid md:grid-cols-3 gap-3">
         <div className="border rounded-lg p-3">
           <div className="text-xs opacity-75">YIELD</div>
           <div className="text-xl font-semibold tabular-nums">
             {fmtQty(Number(recipe.yield_qty ?? 0))}{" "}
-            <span className="text-base opacity-80">{recipe.yield_unit ?? ""}</span>
+            <span className="text-base opacity-80">
+              {recipe.yield_unit ?? ""}
+            </span>
           </div>
         </div>
         <div className="border rounded-lg p-3">
@@ -257,7 +278,7 @@ export default async function RecipeDetailPage(props: any) {
         </div>
       </div>
 
-      {/* Ingredients */}
+      {/* Ingredients table */}
       <div className="border rounded-lg overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-neutral-900/60">
@@ -276,7 +297,7 @@ export default async function RecipeDetailPage(props: any) {
                 <td className="p-2 text-right tabular-nums">{fmtQty(r.qty)}</td>
                 <td className="p-2">{r.unit}</td>
                 <td className="p-2 text-right tabular-nums">
-                  {r.unitCost ? fmtUSD(r.unitCost) : "$0.00"}
+                  {fmtUSD(r.unitCost)}
                 </td>
                 <td className="p-2 text-right tabular-nums">{fmtUSD(r.lineCost)}</td>
               </tr>
@@ -307,9 +328,21 @@ export default async function RecipeDetailPage(props: any) {
 
       {/* Timestamps */}
       <div className="text-xs text-neutral-500">
-        <div>Created: {recipe.created_at ? new Date(recipe.created_at).toLocaleString() : "—"}</div>
-        <div>Updated: {recipe.updated_at ? new Date(recipe.updated_at).toLocaleString() : "—"}</div>
-        <div className="mt-2">Recipe ID: <code className="select-all">{recipe.id}</code></div>
+        <div>
+          Created:{" "}
+          {recipe.created_at
+            ? new Date(recipe.created_at).toLocaleString()
+            : "—"}
+        </div>
+        <div>
+          Updated:{" "}
+          {recipe.updated_at
+            ? new Date(recipe.updated_at).toLocaleString()
+            : "—"}
+        </div>
+        <div className="mt-2">
+          Recipe ID: <code className="select-all">{recipe.id}</code>
+        </div>
       </div>
     </main>
   );
