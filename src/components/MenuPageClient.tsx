@@ -1,5 +1,6 @@
 // src/components/MenuPageClient.tsx
 "use client";
+
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import {
@@ -23,18 +24,23 @@ function applyEnding(n: number, ending: RoundEnding) {
   const candidate = whole + cents / 100;
   return candidate < n ? candidate + 1 : candidate;
 }
+const nearlyEqual = (a: number, b: number, eps = 0.01) => Math.abs(a - b) <= eps;
 
 export default function MenuPageClient() {
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [menus, setMenus] = useState<MenuRow[]>([]);
   const [selectedMenuId, setSelectedMenuId] = useState<string | null>(null);
+
   const [recipes, setRecipes] = useState<RecipeRow[]>([]);
   const [ingredients, setIngredients] = useState<IngredientLine[]>([]);
   const [itemCostById, setItemCostById] = useState<ItemCostById>({});
+
   const [sel, setSel] = useState<Sel>({});
   const [overrides, setOverrides] = useState<Overrides>({});
+
   const [margin, setMargin] = useState(0.30);
   const [ending, setEnding] = useState<RoundEnding>(".99");
+
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -44,11 +50,13 @@ export default function MenuPageClient() {
       const { data: u } = await supabase.auth.getUser();
       const uid = u.user?.id;
       if (!uid) { setStatus("Sign in required."); return; }
+
       const { data: prof } = await supabase
         .from("profiles").select("tenant_id").eq("id", uid).maybeSingle();
       const tId = prof?.tenant_id ?? null;
       if (!tId) { setStatus("No tenant."); return; }
       setTenantId(tId);
+
       // Menus
       const { data: ms } = await supabase
         .from("menus")
@@ -58,6 +66,7 @@ export default function MenuPageClient() {
       const list = (ms ?? []) as MenuRow[];
       setMenus(list);
       setSelectedMenuId(list?.[0]?.id ?? null);
+
       // Recipes
       const { data: recs } = await supabase
         .from("recipes")
@@ -65,16 +74,19 @@ export default function MenuPageClient() {
         .eq("tenant_id", tId)
         .order("name");
       setRecipes((recs ?? []) as RecipeRow[]);
-      // Ingredients (now include sub_recipe_id & unit)
+
+      // Ingredients (include sub_recipe_id & unit)
       const { data: ing } = await supabase
         .from("recipe_ingredients")
         .select("id,recipe_id,item_id,sub_recipe_id,qty,unit");
       setIngredients((ing ?? []) as IngredientLine[]);
+
       // Inventory item costs
       const { data: items } = await supabase
         .from("inventory_items")
         .select("id,last_price,pack_to_base_factor")
         .eq("tenant_id", tId);
+
       const costMap: ItemCostById = {};
       (items ?? []).forEach((it: any) => {
         costMap[it.id] = costPerBaseUnit(
@@ -94,6 +106,7 @@ export default function MenuPageClient() {
         .from("menu_recipes")
         .select("recipe_id, servings, price")
         .eq("menu_id", selectedMenuId);
+
       const nextSel: Sel = {};
       const nextOv: Overrides = {};
       (rows ?? []).forEach((r: any) => {
@@ -122,6 +135,15 @@ export default function MenuPageClient() {
   function setOverride(id: string, n: number) {
     setOverrides(o => ({ ...o, [id]: Math.max(0, n) }));
   }
+  function resetOverride(id: string) {
+    // Remove manual override so the item follows slider/rounding again
+    setOverrides(o => {
+      const c = { ...o };
+      delete c[id];
+      return c;
+    });
+    setStatus("Reset to suggested.");
+  }
 
   // persistence (keeps per-portion overrides)
   async function saveCurrentMenu() {
@@ -132,7 +154,7 @@ export default function MenuPageClient() {
         menu_id: selectedMenuId!,
         recipe_id,
         servings: 1,
-        price: overrides[recipe_id] ?? 0,
+        price: overrides[recipe_id] ?? 0, // 0 = follow suggested
       }));
       if (rows.length) {
         const { error } = await supabase
@@ -181,12 +203,14 @@ export default function MenuPageClient() {
       const defaultName = `Menu ${new Date().toLocaleDateString()}`;
       const name = window.prompt("New menu name:", defaultName);
       if (!name) return;
+
       const { data: m, error: mErr } = await supabase
         .from("menus")
         .insert({ tenant_id: tenantId, name })
         .select("id,name,created_at")
         .single();
       if (mErr) throw mErr;
+
       const newId = m!.id as string;
       const rows = entries.map(recipe_id => ({
         menu_id: newId,
@@ -198,6 +222,7 @@ export default function MenuPageClient() {
         .from("menu_recipes")
         .upsert(rows, { onConflict: "menu_id,recipe_id" });
       if (rErr) throw rErr;
+
       setMenus(ms => [{ id: newId, name: m!.name, created_at: m!.created_at }, ...ms]);
       setSelectedMenuId(newId);
       setStatus("Menu saved.");
@@ -276,6 +301,7 @@ export default function MenuPageClient() {
           </select>
           <button className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Load</button>
         </form>
+
         <button disabled={busy} onClick={createNewMenu}
                 className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">New Menu</button>
         <button disabled={busy} onClick={saveCurrentMenu}
@@ -300,6 +326,7 @@ export default function MenuPageClient() {
         />
         <span className="text-sm">{Math.round(margin * 100)}%</span>
         <span className="text-xs opacity-70">(affects suggested selling price)</span>
+
         <div className="ml-6 flex items-center gap-2">
           <span className="text-sm">Round to:</span>
           <select
@@ -337,41 +364,65 @@ export default function MenuPageClient() {
           </div>
         </div>
 
-        {/* Menu items (suggested price only) */}
+        {/* Menu items */}
         <div className="border rounded p-4">
           <div className="font-semibold mb-2">Menu items</div>
-          <div className="grid grid-cols-[1fr_180px] gap-3 text-xs uppercase opacity-70 mb-2">
+          <div className="grid grid-cols-[1fr_200px] gap-3 text-xs uppercase opacity-70 mb-2">
             <div>Item</div>
             <div className="text-right">Suggested price</div>
           </div>
+
           {Object.keys(sel).length === 0 ? (
             <p className="text-sm text-neutral-400">Add recipes on the left.</p>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-4">
               {Object.keys(sel)
                 .map(id => ({ id, name: recipes.find(r => r.id === id)?.name || "Untitled" }))
                 .sort((a, b) => a.name.localeCompare(b.name))
                 .map(row => {
                   const costEach = costIndex[row.id] ?? 0;
-                  const suggestedBase = applyEnding(costEach / (margin || 0.3), ending);
-                  const ov = Number(overrides[row.id]);
-                  const unitPrice = ov > 0 ? ov : suggestedBase;
+                  const suggestedBase = margin > 0 ? costEach / margin : 0;
+                  const suggested = applyEnding(suggestedBase, ending);
+
+                  const ovRaw = overrides[row.id];
+                  const hasOverride = typeof ovRaw === "number" && ovRaw > 0;
+                  const isDifferent = hasOverride && !nearlyEqual(ovRaw, suggested, 0.01);
+                  const unitPrice = hasOverride ? ovRaw : suggested;
+
                   return (
-                    <div key={row.id} className="grid grid-cols-[1fr_180px] gap-3 items-center">
+                    <div key={row.id} className="grid grid-cols-[1fr_200px] gap-3 items-start">
                       <div>
                         <div className="font-medium text-sm">{row.name}</div>
                         <div className="text-xs opacity-70">{fmtUSD(costEach)} each (raw cost)</div>
                       </div>
-                      <div className="relative">
-                        <span className="absolute left-2 top-1.5 text-xs opacity-70">$</span>
-                        <input
-                          className="border rounded pl-4 pr-2 p-1 text-right w-[180px] tabular-nums"
-                          type="number"
-                          min={0}
-                          step="0.01"
-                          value={Number(unitPrice).toFixed(2)}
-                          onChange={(e) => setOverride(row.id, Number(e.target.value))}
-                        />
+
+                      <div>
+                        <div className="relative">
+                          <span className="absolute left-2 top-1.5 text-xs opacity-70">$</span>
+                          <input
+                            className="border rounded pl-4 pr-2 p-1 text-right w-[200px] tabular-nums"
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={Number(unitPrice).toFixed(2)}
+                            onChange={(e) => setOverride(row.id, Number(e.target.value))}
+                          />
+                        </div>
+
+                        <div className="flex items-center justify-between mt-1">
+                          <span className="text-[10px] opacity-70">
+                            Suggested: {fmtUSD(suggested)}
+                          </span>
+                          {isDifferent && (
+                            <button
+                              className="text-[10px] underline opacity-80 hover:opacity-100"
+                              onClick={() => resetOverride(row.id)}
+                              title="Use suggested price again"
+                            >
+                              Reset to suggested
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   );
