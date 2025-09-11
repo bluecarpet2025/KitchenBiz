@@ -9,8 +9,10 @@ type Recipe = {
   id: string;
   name?: string | null;
   description?: string | null;
+  // aliased from batch_yield_* below
   yield_qty?: number | null;
   yield_unit?: string | null;
+  yield_pct?: number | null;
   created_at?: string | null;
   updated_at?: string | null;
 };
@@ -28,11 +30,7 @@ type RecipeIngredient = {
   base_unit?: string | null;
 };
 
-type Item = {
-  id: string;
-  name?: string | null;
-  base_unit?: string | null;
-};
+type Item = { id: string; name?: string | null; base_unit?: string | null };
 
 type AvgCost = {
   item_id: string;
@@ -57,10 +55,7 @@ function pickCost(c?: AvgCost | null): number {
   );
 }
 
-/**
- * NOTE: We avoid next/navigation.notFound() so the layout still renders and users
- * see a helpful message when RLS hides the row or the id is invalid.
- */
+/** Render a friendly message instead of a hard 404 so we can debug RLS/tenant issues. */
 export default async function RecipeDetailPage(props: any) {
   // Normalize params (Next can pass a thenable in some environments)
   const raw = props?.params;
@@ -70,15 +65,27 @@ export default async function RecipeDetailPage(props: any) {
 
   const supabase = await createServerClient();
 
-  // 1) Load the recipe row
+  // 1) Load recipe (alias batch_yield_* -> yield_*)
   let recipe: Recipe | null = null;
   let recipeErrMsg: string | null = null;
+
   if (!id) {
     recipeErrMsg = "No recipe id in URL.";
   } else {
     const { data: recipeRow, error: recipeErr } = await supabase
       .from("recipes")
-      .select("id,name,description,yield_qty,yield_unit,created_at,updated_at")
+      .select(
+        [
+          "id",
+          "name",
+          "description",
+          "yield_qty:batch_yield_qty",
+          "yield_unit:batch_yield_unit",
+          "yield_pct",
+          "created_at",
+          "updated_at",
+        ].join(",")
+      )
       .eq("id", id)
       .maybeSingle();
 
@@ -86,14 +93,15 @@ export default async function RecipeDetailPage(props: any) {
       console.error("recipes fetch error:", recipeErr);
       recipeErrMsg = recipeErr.message ?? "Failed to fetch recipe.";
     }
-    recipe = (recipeRow as Recipe) ?? null;
+    // <-- Relax typing here to satisfy TS (the runtime shape is fine)
+    recipe = (recipeRow as unknown as Recipe) ?? null;
+
     if (!recipe && !recipeErrMsg) {
       recipeErrMsg =
         "Recipe not found or you don’t have access (tenant/RLS). It may also be deleted.";
     }
   }
 
-  // If we don't have the base row, render a helpful page and bail early.
   if (!recipe) {
     return (
       <main className="max-w-4xl mx-auto p-6">
@@ -118,15 +126,13 @@ export default async function RecipeDetailPage(props: any) {
     );
   }
 
-  // 2) Load ingredients
+  // 2) Ingredients
   const { data: ri, error: ingErr } = await supabase
     .from("recipe_ingredients")
     .select("*")
     .eq("recipe_id", recipe.id);
 
-  if (ingErr) {
-    console.error("recipe_ingredients fetch error:", ingErr);
-  }
+  if (ingErr) console.error("recipe_ingredients fetch error:", ingErr);
 
   const ingredients: RecipeIngredient[] = (ri ?? []).map((r: any) => ({
     id: r.id,
@@ -150,11 +156,7 @@ export default async function RecipeDetailPage(props: any) {
       .from("inventory_items")
       .select("id,name,base_unit")
       .in("id", itemIds);
-
-    if (itemsErr) {
-      console.error("inventory_items fetch error:", itemsErr);
-    }
-
+    if (itemsErr) console.error("inventory_items fetch error:", itemsErr);
     (items ?? []).forEach((it: any) =>
       itemsById.set(String(it.id), {
         id: String(it.id),
@@ -164,18 +166,14 @@ export default async function RecipeDetailPage(props: any) {
     );
   }
 
-  // 4) Optional avg cost lookup
+  // 4) Avg cost lookup (optional)
   const costByItem = new Map<string, AvgCost>();
   if (itemIds.length) {
     const { data: costs, error: costsErr } = await supabase
       .from("v_item_avg_costs")
       .select("item_id,avg_unit_cost,avg_cost_per_base,avg_per_base,unit_cost_base")
       .in("item_id", itemIds);
-
-    if (costsErr) {
-      console.error("v_item_avg_costs fetch error:", costsErr);
-    }
-
+    if (costsErr) console.error("v_item_avg_costs fetch error:", costsErr);
     (costs ?? []).forEach((c: any) =>
       costByItem.set(String(c.item_id), {
         item_id: String(c.item_id),
@@ -187,7 +185,7 @@ export default async function RecipeDetailPage(props: any) {
     );
   }
 
-  // 5) Presentable rows
+  // 5) Present rows
   const rows = ingredients.map((ing) => {
     const item = itemsById.get(String(ing.item_id)) ?? {
       id: String(ing.item_id ?? ""),
@@ -236,20 +234,17 @@ export default async function RecipeDetailPage(props: any) {
           >
             Back to recipes
           </Link>
-          {/* If/when edit is enabled: */}
           {/* <Link href={`/recipes/${recipe.id}/edit`} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Edit</Link> */}
         </div>
       </div>
 
-      {/* Meta cards */}
+      {/* Meta */}
       <div className="grid md:grid-cols-3 gap-3">
         <div className="border rounded-lg p-3">
           <div className="text-xs opacity-75">YIELD</div>
           <div className="text-xl font-semibold tabular-nums">
             {fmtQty(Number(recipe.yield_qty ?? 0))}{" "}
-            <span className="text-base opacity-80">
-              {recipe.yield_unit ?? ""}
-            </span>
+            <span className="text-base opacity-80">{recipe.yield_unit ?? ""}</span>
           </div>
         </div>
         <div className="border rounded-lg p-3">
@@ -262,7 +257,7 @@ export default async function RecipeDetailPage(props: any) {
         </div>
       </div>
 
-      {/* Ingredients table */}
+      {/* Ingredients */}
       <div className="border rounded-lg overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-neutral-900/60">
@@ -312,21 +307,9 @@ export default async function RecipeDetailPage(props: any) {
 
       {/* Timestamps */}
       <div className="text-xs text-neutral-500">
-        <div>
-          Created:{" "}
-          {recipe.created_at
-            ? new Date(recipe.created_at).toLocaleString()
-            : "—"}
-        </div>
-        <div>
-          Updated:{" "}
-          {recipe.updated_at
-            ? new Date(recipe.updated_at).toLocaleString()
-            : "—"}
-        </div>
-        <div className="mt-2">
-          Recipe ID: <code className="select-all">{recipe.id}</code>
-        </div>
+        <div>Created: {recipe.created_at ? new Date(recipe.created_at).toLocaleString() : "—"}</div>
+        <div>Updated: {recipe.updated_at ? new Date(recipe.updated_at).toLocaleString() : "—"}</div>
+        <div className="mt-2">Recipe ID: <code className="select-all">{recipe.id}</code></div>
       </div>
     </main>
   );
