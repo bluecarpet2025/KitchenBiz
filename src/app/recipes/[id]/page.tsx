@@ -1,16 +1,10 @@
-// src/app/recipes/[id]/page.tsx
 import Link from "next/link";
-import { notFound } from "next/navigation";
 import { createServerClient } from "@/lib/supabase/server";
 import { fmtUSD } from "@/lib/costing";
 import { fmtQty } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-/**
- * Types are intentionally tolerant so the page won't break
- * if your DB view/table has slightly different optional fields.
- */
 type Recipe = {
   id: string;
   name?: string | null;
@@ -27,7 +21,7 @@ type RecipeIngredient = {
   item_id?: string | null;
   qty?: number | null;
   unit?: string | null;
-  // possible alternates seen over time
+  // tolerate historical alias columns
   quantity?: number | null;
   measure_unit?: string | null;
   qty_base?: number | null;
@@ -43,7 +37,6 @@ type Item = {
 type AvgCost = {
   item_id: string;
   avg_unit_cost?: number | null;
-  // tolerate a few alias names used historically
   avg_cost_per_base?: number | null;
   avg_per_base?: number | null;
   unit_cost_base?: number | null;
@@ -65,46 +58,73 @@ function pickCost(c?: AvgCost | null): number {
 }
 
 /**
- * IMPORTANT: Accept `any` so this function is always assignable
- * to Next's generated PageProps type (which currently uses Promise params).
- * We then normalize params to a plain object.
+ * NOTE: We avoid next/navigation.notFound() so the layout still renders and users
+ * see a helpful message when RLS hides the row or the id is invalid.
  */
 export default async function RecipeDetailPage(props: any) {
+  // Normalize params (Next can pass a thenable in some environments)
   const raw = props?.params;
   const params: { id?: string } =
     raw && typeof raw.then === "function" ? await raw : raw ?? {};
   const id = params?.id as string | undefined;
 
-  if (!id) {
-    notFound();
-  }
-
   const supabase = await createServerClient();
 
   // 1) Load the recipe row
-  const { data: recipeRow, error: recipeErr } = await supabase
-    .from("recipes")
-    .select("id,name,description,yield_qty,yield_unit,created_at,updated_at")
-    .eq("id", id!)
-    .maybeSingle();
+  let recipe: Recipe | null = null;
+  let recipeErrMsg: string | null = null;
+  if (!id) {
+    recipeErrMsg = "No recipe id in URL.";
+  } else {
+    const { data: recipeRow, error: recipeErr } = await supabase
+      .from("recipes")
+      .select("id,name,description,yield_qty,yield_unit,created_at,updated_at")
+      .eq("id", id)
+      .maybeSingle();
 
-  if (recipeErr) {
-    // eslint-disable-next-line no-console
-    console.error("recipes fetch error:", recipeErr);
+    if (recipeErr) {
+      console.error("recipes fetch error:", recipeErr);
+      recipeErrMsg = recipeErr.message ?? "Failed to fetch recipe.";
+    }
+    recipe = (recipeRow as Recipe) ?? null;
+    if (!recipe && !recipeErrMsg) {
+      recipeErrMsg =
+        "Recipe not found or you don’t have access (tenant/RLS). It may also be deleted.";
+    }
   }
-  if (!recipeRow) {
-    notFound();
-  }
-  const recipe: Recipe = recipeRow as Recipe;
 
-  // 2) Load ingredients for this recipe (tolerant to column aliases)
+  // If we don't have the base row, render a helpful page and bail early.
+  if (!recipe) {
+    return (
+      <main className="max-w-4xl mx-auto p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h1 className="text-2xl font-semibold">Recipe</h1>
+          <Link
+            href="/recipes"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
+            Back to recipes
+          </Link>
+        </div>
+
+        <div className="border rounded-lg p-4 bg-neutral-950">
+          <div className="text-lg font-medium mb-1">Not available</div>
+          <p className="text-sm text-neutral-400">
+            {recipeErrMsg ??
+              "This recipe could not be loaded. If it should exist, check demo toggle and tenant access."}
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  // 2) Load ingredients
   const { data: ri, error: ingErr } = await supabase
     .from("recipe_ingredients")
     .select("*")
-    .eq("recipe_id", id!);
+    .eq("recipe_id", recipe.id);
 
   if (ingErr) {
-    // eslint-disable-next-line no-console
     console.error("recipe_ingredients fetch error:", ingErr);
   }
 
@@ -120,11 +140,10 @@ export default async function RecipeDetailPage(props: any) {
     unit: r.unit ?? r.measure_unit ?? r.base_unit ?? null,
   }));
 
-  // 3) Item lookup (names & base units)
+  // 3) Item lookup
   const itemIds = Array.from(
     new Set(ingredients.map((x) => x.item_id).filter(Boolean).map(String))
   );
-
   const itemsById = new Map<string, Item>();
   if (itemIds.length) {
     const { data: items, error: itemsErr } = await supabase
@@ -133,7 +152,6 @@ export default async function RecipeDetailPage(props: any) {
       .in("id", itemIds);
 
     if (itemsErr) {
-      // eslint-disable-next-line no-console
       console.error("inventory_items fetch error:", itemsErr);
     }
 
@@ -146,7 +164,7 @@ export default async function RecipeDetailPage(props: any) {
     );
   }
 
-  // 4) Optional average cost lookup (best-effort)
+  // 4) Optional avg cost lookup
   const costByItem = new Map<string, AvgCost>();
   if (itemIds.length) {
     const { data: costs, error: costsErr } = await supabase
@@ -155,7 +173,6 @@ export default async function RecipeDetailPage(props: any) {
       .in("item_id", itemIds);
 
     if (costsErr) {
-      // eslint-disable-next-line no-console
       console.error("v_item_avg_costs fetch error:", costsErr);
     }
 
@@ -170,20 +187,17 @@ export default async function RecipeDetailPage(props: any) {
     );
   }
 
-  // 5) Presentable rows with totals
+  // 5) Presentable rows
   const rows = ingredients.map((ing) => {
     const item = itemsById.get(String(ing.item_id)) ?? {
       id: String(ing.item_id ?? ""),
       name: "(item)",
       base_unit: "",
     };
-
     const qty = Number(ing.qty ?? 0);
     const unit = (ing.unit ?? item.base_unit ?? "") as string;
-
     const cost = pickCost(costByItem.get(String(ing.item_id)));
     const lineCost = qty * cost;
-
     return {
       itemName: item.name ?? "(item)",
       unit,
@@ -215,7 +229,6 @@ export default async function RecipeDetailPage(props: any) {
             {recipe.description ?? "No description."}
           </p>
         </div>
-
         <div className="flex items-center gap-2">
           <Link
             href="/recipes"
@@ -223,7 +236,8 @@ export default async function RecipeDetailPage(props: any) {
           >
             Back to recipes
           </Link>
-          {/* <Link href={`/recipes/${id}/edit`} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Edit</Link> */}
+          {/* If/when edit is enabled: */}
+          {/* <Link href={`/recipes/${recipe.id}/edit`} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Edit</Link> */}
         </div>
       </div>
 
