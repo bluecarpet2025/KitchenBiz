@@ -1,62 +1,62 @@
+// src/components/PrintCopyActions.tsx
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
-type Props = {
-  /** The menus.id to act on */
-  menuId: string;
-};
-
-/**
- * Buttons shown on /menu/share that:
- * - open the centered /menu/print view
- * - copy a public /share/{token} link (creates or reuses a token)
- */
-export default function PrintCopyActions({ menuId }: Props) {
+export default function PrintCopyActions({ menuId }: { menuId: string }) {
   const [busy, setBusy] = useState(false);
-  const margin = useMemo(() => {
-    const sp = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
-    const m = Number(sp.get("margin"));
-    const clamped = Number.isFinite(m) ? Math.max(0, Math.min(0.9, m)) : 0.3;
-    return clamped;
-  }, []);
+  const [msg, setMsg] = useState<string | null>(null);
 
-  const doPrint = () => {
-    window.open(`/menu/print?menu_id=${encodeURIComponent(menuId)}&margin=${margin}`, "_blank");
-  };
-
-  const copyPublicLink = async () => {
+  async function copyLink() {
     try {
       setBusy(true);
-      const res = await fetch("/api/menu/share", {
+      setMsg(null);
+
+      // Create or fetch a share token for this menu via your existing API route.
+      // (This matches the behavior you already had that fixed the duplicate-key issue.)
+      const res = await fetch(`/api/menu/share?menu_id=${encodeURIComponent(menuId)}`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ menu_id: menuId }),
       });
       if (!res.ok) throw new Error(await res.text());
       const { token } = await res.json();
-      const url = `${location.origin}/share/${encodeURIComponent(token)}?margin=${margin}`;
+
+      const params = new URLSearchParams(window.location.search);
+      const margin = params.get("margin") ?? "0.3";
+      const url = `${window.location.origin}/share/${token}?margin=${margin}`;
+
       await navigator.clipboard.writeText(url);
-      alert("Share link copied!");
+      setMsg("Link copied ✓");
+      setTimeout(() => setMsg(null), 3000);
     } catch (e: any) {
-      alert(e?.message || "Failed to copy link.");
+      setMsg(e?.message || "Failed to copy link.");
+      setTimeout(() => setMsg(null), 4000);
     } finally {
       setBusy(false);
     }
-  };
+  }
+
+  function doPrint() {
+    // ✅ No navigation, no new page—just open the native print dialog
+    window.print();
+  }
 
   return (
-    <div className="flex items-center gap-2">
-      <button onClick={doPrint} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
+    <div className="flex items-center gap-3">
+      <button
+        disabled={busy}
+        onClick={doPrint}
+        className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+      >
         Print
       </button>
       <button
-        onClick={copyPublicLink}
         disabled={busy}
-        className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900 disabled:opacity-50"
+        onClick={copyLink}
+        className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
       >
-        {busy ? "Copying…" : "Copy link"}
+        Copy link
       </button>
+      {msg && <span className="text-xs opacity-70">{msg}</span>}
     </div>
   );
 }

@@ -1,5 +1,7 @@
+// src/components/MenuPageClient.tsx
 "use client";
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import {
   fmtUSD,
@@ -12,9 +14,10 @@ import {
 
 type MenuRow = { id: string; name: string | null; created_at: string | null };
 type RecipeRow = RecipeLike;
-type Sel = Record<string, number>;
-type Overrides = Record<string, number>;
+type Sel = Record<string, number>;           // recipeId -> 1 (in menu)
+type Overrides = Record<string, number>;     // recipeId -> manual price override (per portion)
 type RoundEnding = ".00" | ".49" | ".79" | ".89" | ".95" | ".99";
+
 function applyEnding(n: number, ending: RoundEnding) {
   const whole = Math.floor(n);
   const cents = Number(ending.slice(1));
@@ -23,6 +26,8 @@ function applyEnding(n: number, ending: RoundEnding) {
 }
 
 export default function MenuPageClient() {
+  const router = useRouter();
+
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [menus, setMenus] = useState<MenuRow[]>([]);
   const [selectedMenuId, setSelectedMenuId] = useState<string | null>(null);
@@ -36,16 +41,19 @@ export default function MenuPageClient() {
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // boot: auth + lists
   useEffect(() => {
     (async () => {
       const { data: u } = await supabase.auth.getUser();
       const uid = u.user?.id;
       if (!uid) { setStatus("Sign in required."); return; }
-      const { data: prof } = await supabase.from("profiles").select("tenant_id").eq("id", uid).maybeSingle();
+      const { data: prof } = await supabase
+        .from("profiles").select("tenant_id").eq("id", uid).maybeSingle();
       const tId = prof?.tenant_id ?? null;
       if (!tId) { setStatus("No tenant."); return; }
       setTenantId(tId);
 
+      // Menus
       const { data: ms } = await supabase
         .from("menus")
         .select("id,name,created_at")
@@ -55,6 +63,7 @@ export default function MenuPageClient() {
       setMenus(list);
       setSelectedMenuId(list?.[0]?.id ?? null);
 
+      // Recipes
       const { data: recs } = await supabase
         .from("recipes")
         .select("id,name,batch_yield_qty,batch_yield_unit,yield_pct,menu_description")
@@ -62,23 +71,29 @@ export default function MenuPageClient() {
         .order("name");
       setRecipes((recs ?? []) as RecipeRow[]);
 
+      // Ingredients (now include sub_recipe_id & unit)
       const { data: ing } = await supabase
         .from("recipe_ingredients")
         .select("id,recipe_id,item_id,sub_recipe_id,qty,unit");
       setIngredients((ing ?? []) as IngredientLine[]);
 
+      // Inventory item costs
       const { data: items } = await supabase
         .from("inventory_items")
         .select("id,last_price,pack_to_base_factor")
         .eq("tenant_id", tId);
       const costMap: ItemCostById = {};
       (items ?? []).forEach((it: any) => {
-        costMap[it.id] = costPerBaseUnit(Number(it.last_price ?? 0), Number(it.pack_to_base_factor ?? 0));
+        costMap[it.id] = costPerBaseUnit(
+          Number(it.last_price ?? 0),
+          Number(it.pack_to_base_factor ?? 0)
+        );
       });
       setItemCostById(costMap);
     })();
   }, []);
 
+  // load lines for current menu
   useEffect(() => {
     (async () => {
       if (!selectedMenuId) { setSel({}); setOverrides({}); return; }
@@ -98,14 +113,13 @@ export default function MenuPageClient() {
     })();
   }, [selectedMenuId]);
 
+  // pricing helpers
   const costIndex = useMemo(
     () => buildRecipeCostIndex(recipes, ingredients, itemCostById),
     [recipes, ingredients, itemCostById]
   );
 
-  function addRecipe(id: string) {
-    setSel(s => ({ ...s, [id]: 1 }));
-  }
+  function addRecipe(id: string) { setSel(s => ({ ...s, [id]: 1 })); }
   function removeRecipe(id: string) {
     setSel(s => { const c = { ...s }; delete c[id]; return c; });
     setOverrides(o => { const c = { ...o }; delete c[id]; return c; });
@@ -114,6 +128,7 @@ export default function MenuPageClient() {
     setOverrides(o => ({ ...o, [id]: Math.max(0, n) }));
   }
 
+  // persistence (keeps per-portion overrides)
   async function saveCurrentMenu() {
     try {
       if (!selectedMenuId) { alert("No menu selected"); return; }
@@ -125,7 +140,9 @@ export default function MenuPageClient() {
         price: overrides[recipe_id] ?? 0,
       }));
       if (rows.length) {
-        const { error } = await supabase.from("menu_recipes").upsert(rows, { onConflict: "menu_id,recipe_id" });
+        const { error } = await supabase
+          .from("menu_recipes")
+          .upsert(rows, { onConflict: "menu_id,recipe_id" });
         if (error) throw error;
       } else {
         await supabase.from("menu_recipes").delete().eq("menu_id", selectedMenuId!);
@@ -133,9 +150,7 @@ export default function MenuPageClient() {
       setStatus("Menu saved.");
     } catch (e: any) {
       alert(e.message ?? "Error saving menu");
-    } finally {
-      setBusy(false);
-    }
+    } finally { setBusy(false); }
   }
 
   async function createNewMenu() {
@@ -182,7 +197,9 @@ export default function MenuPageClient() {
         servings: 1,
         price: overrides[recipe_id] ?? 0,
       }));
-      const { error: rErr } = await supabase.from("menu_recipes").upsert(rows, { onConflict: "menu_id,recipe_id" });
+      const { error: rErr } = await supabase
+        .from("menu_recipes")
+        .upsert(rows, { onConflict: "menu_id,recipe_id" });
       if (rErr) throw rErr;
       setMenus(ms => [{ id: newId, name: m!.name, created_at: m!.created_at }, ...ms]);
       setSelectedMenuId(newId);
@@ -207,13 +224,16 @@ export default function MenuPageClient() {
     } finally { setBusy(false); }
   }
 
+  // ✅ SAME TAB navigation to the share page
   function openShare() {
     if (!selectedMenuId) { alert("No menu selected"); return; }
-    const pct = Math.round(margin * 100) / 100;
-    // 👉 go to the SHARE page, not the print view
-    window.open(`/menu/share?menu_id=${encodeURIComponent(selectedMenuId)}&margin=${pct}`, "_blank");
+    const pct = Math.round(margin * 100);
+    router.push(
+      `/menu/share?menu_id=${encodeURIComponent(selectedMenuId)}&margin=${pct / 100}`
+    );
   }
 
+  // lookups
   const ingByRecipe = useMemo(() => {
     const map = new Map<string, IngredientLine[]>();
     for (const ing of ingredients) {
@@ -224,19 +244,12 @@ export default function MenuPageClient() {
     return map;
   }, [ingredients]);
 
-  const selectedList = useMemo(
-    () =>
-      Object.keys(sel)
-        .map(id => ({ id, name: recipes.find(r => r.id === id)?.name || "Untitled" }))
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    [sel, recipes]
-  );
-
   return (
     <main className="max-w-5xl mx-auto p-6 space-y-4">
       <h1 className="text-2xl font-semibold">Menu</h1>
       {status && <p className="text-xs text-emerald-400">{status}</p>}
 
+      {/* Top controls */}
       <div className="flex flex-wrap items-center gap-2">
         <form onSubmit={(e) => e.preventDefault()} className="flex items-center gap-2">
           <label className="text-sm">Saved menus:</label>
@@ -264,10 +277,13 @@ export default function MenuPageClient() {
                 className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Save as</button>
         <button disabled={busy} onClick={deleteCurrentMenu}
                 className="px-3 py-2 border rounded-md text-sm hover:bg-red-950">Delete</button>
+
+        {/* opens /menu/share in same tab */}
         <button onClick={openShare}
                 className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Share</button>
       </div>
 
+      {/* Margin + rounding */}
       <div className="flex items-center gap-3">
         <label className="text-sm">Margin:</label>
         <input
@@ -284,7 +300,7 @@ export default function MenuPageClient() {
           <select
             className="border rounded-md px-2 py-1 bg-neutral-950 text-neutral-100"
             value={ending}
-            onChange={(e) => setEnding(e.target.value as any)}
+            onChange={(e) => setEnding(e.target.value as RoundEnding)}
           >
             <option value=".00">.00</option>
             <option value=".49">.49</option>
@@ -296,7 +312,9 @@ export default function MenuPageClient() {
         </div>
       </div>
 
+      {/* Two panels */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Pick list */}
         <div className="border rounded p-4">
           <div className="font-semibold mb-2">Pick recipes</div>
           <div className="space-y-2 max-h-[60vh] overflow-auto pr-2">
@@ -314,12 +332,14 @@ export default function MenuPageClient() {
           </div>
         </div>
 
+        {/* Menu items (suggested price only) */}
         <div className="border rounded p-4">
           <div className="font-semibold mb-2">Menu items</div>
           <div className="grid grid-cols-[1fr_180px] gap-3 text-xs uppercase opacity-70 mb-2">
             <div>Item</div>
             <div className="text-right">Suggested price</div>
           </div>
+
           {Object.keys(sel).length === 0 ? (
             <p className="text-sm text-neutral-400">Add recipes on the left.</p>
           ) : (
@@ -329,7 +349,7 @@ export default function MenuPageClient() {
                 .sort((a, b) => a.name.localeCompare(b.name))
                 .map(row => {
                   const costEach = costIndex[row.id] ?? 0;
-                  const suggestedBase = applyEnding(costEach / (margin || 0.3), ".99");
+                  const suggestedBase = applyEnding(costEach / (margin || 0.3), ending);
                   const ov = Number(overrides[row.id]);
                   const unitPrice = ov > 0 ? ov : suggestedBase;
                   return (
