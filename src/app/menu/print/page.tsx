@@ -1,4 +1,3 @@
-// src/app/menu/print/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import {
@@ -28,7 +27,6 @@ type RecipeRow = RecipeLike & {
 export default async function Page({
   searchParams,
 }: {
-  // Next 15: searchParams is a Promise
   searchParams?: Promise<Record<string, string | string[]>>;
 }) {
   const sp = (await searchParams) ?? {};
@@ -159,14 +157,16 @@ export default async function Page({
 
   return (
     <main className="mx-auto p-8 max-w-4xl">
-      {/* Header (hidden when printing) */}
-      <div className="flex items-start justify-between gap-3 print:hidden">
-        <div>
+      {/* Header text prints; buttons hide in print */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="print:w-full print:text-center">
           <div className="text-xl font-semibold">{businessName}</div>
           <h1 className="text-2xl font-semibold">{menu.name || "Menu"}</h1>
           <p className="text-sm opacity-80">Created {dt(menu.created_at)}</p>
         </div>
-        <PrintCopyActions />
+        <div className="print:hidden">
+          <PrintCopyActions />
+        </div>
       </div>
 
       <section className="mt-6 border rounded-lg p-6">
@@ -194,7 +194,7 @@ export default async function Page({
         )}
       </section>
 
-      {/* Route-scoped CSS: hide global app header (top nav) on this page */}
+      {/* Hide global app top-nav header; keep our header visible */}
       <style>{`
         header { display: none !important; }
         @media print {

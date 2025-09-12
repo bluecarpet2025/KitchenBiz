@@ -29,15 +29,15 @@ export default async function ProfilePage() {
     .eq("id", user.id)
     .maybeSingle();
 
-  // Current business (tenant) name
+  // Current business (tenant) name (may be empty if RLS not configured)
   let businessName = "";
   if (profile?.tenant_id) {
-    const { data: t } = await supabase
+    const { data: t, error: tErr } = await supabase
       .from("tenants")
       .select("name")
       .eq("id", profile.tenant_id)
       .maybeSingle();
-    businessName = (t?.name ?? "").toString();
+    if (!tErr) businessName = (t?.name ?? "").toString();
   }
 
   return (

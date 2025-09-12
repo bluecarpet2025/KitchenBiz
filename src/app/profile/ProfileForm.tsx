@@ -45,11 +45,15 @@ export default function ProfileForm({
     let tenantErr: string | null = null;
     if (!useDemo && tenantId) {
       const cleanName = bizName.trim().slice(0, 120);
-      const { error } = await supabase
+      const { data: updated, error } = await supabase
         .from("tenants")
         .update({ name: cleanName || null })
-        .eq("id", tenantId);
+        .eq("id", tenantId)
+        .select("id,name")
+        .maybeSingle(); // verify the write happened
+
       if (error) tenantErr = error.message;
+      if (updated) setBizName(updated.name ?? "");
     }
 
     setBusy(false);
