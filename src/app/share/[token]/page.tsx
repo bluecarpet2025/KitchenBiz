@@ -7,6 +7,7 @@ import {
   type RecipeLike,
   type IngredientLine,
 } from "@/lib/costing";
+import SharePublicActions from "@/components/SharePublicActions";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +42,7 @@ export default async function PublicSharePage(
   if (!share) {
     return (
       <main className="max-w-3xl mx-auto p-6">
+        <style>{`header{display:none!important}`}</style>
         <h1 className="text-2xl font-semibold text-center">Shared Menu</h1>
         <p className="mt-4 text-center">This share link is invalid or has been revoked.</p>
       </main>
@@ -142,28 +144,14 @@ export default async function PublicSharePage(
 
   return (
     <main className="mx-auto p-8 max-w-4xl">
-      {/* Centered header for public view */}
+      {/* Hide global TopNav on public page and center header */}
+      <style>{`header{display:none!important}`}</style>
+
       <div className="mb-4 text-center">
         <div className="text-xl font-semibold">{bizName}</div>
         {bizBlurb && <div className="text-sm opacity-80">{bizBlurb}</div>}
         <h1 className="text-2xl font-semibold mt-2">{menu?.name || "Menu"}</h1>
-        <div className="mt-3 flex justify-center gap-3 print:hidden">
-          <button
-            onClick={() => window.print()}
-            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-          >
-            Print
-          </button>
-          <button
-            onClick={async () => {
-              const url = location.href;
-              await navigator.clipboard.writeText(url);
-            }}
-            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-          >
-            Copy link
-          </button>
-        </div>
+        <SharePublicActions />
       </div>
 
       <div className="border rounded-lg p-6">
