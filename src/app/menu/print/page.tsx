@@ -1,4 +1,3 @@
-// src/app/menu/print/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import {
@@ -63,7 +62,6 @@ export default async function Page({
     .eq("id", userId)
     .maybeSingle();
   const tenantId = prof?.tenant_id ?? null;
-
   if (!tenantId || !menuId) {
     return (
       <main className="max-w-4xl mx-auto p-6">
@@ -132,7 +130,6 @@ export default async function Page({
     .from("inventory_items")
     .select("id,last_price,pack_to_base_factor")
     .eq("tenant_id", tenantId);
-
   const itemCostById: Record<string, number> = {};
   (itemsRaw ?? []).forEach((it: any) => {
     itemCostById[String(it.id)] = costPerBaseUnit(
@@ -156,13 +153,9 @@ export default async function Page({
       const parts = ingByRecipe.get(String(rec.id)) ?? [];
       const costEach = costPerPortion(rec, parts, itemCostById);
       const price = priceFromCost(costEach, margin);
-
-      // Prefer explicit menu_description, then description, then placeholder.
       const descrRaw =
-        String(rec.menu_description ?? rec.description ?? "")
-          .trim() ||
+        String(rec.menu_description ?? rec.description ?? "").trim() ||
         `Classic ${String(rec.name ?? "item").toLowerCase()}.`;
-
       return {
         name: String(rec.name ?? "Untitled"),
         descr: descrRaw,
@@ -206,8 +199,11 @@ export default async function Page({
         )}
       </section>
 
+      {/* Route-scoped CSS: hide global app header on this page */}
       <style>{`
+        header { display: none !important; }
         @media print {
+          header { display: none !important; }
           .print\\:hidden { display: none !important; }
           main { padding: 0 !important; }
           section { border: none !important; }

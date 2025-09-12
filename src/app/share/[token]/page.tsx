@@ -1,4 +1,3 @@
-// src/app/share/[token]/page.tsx
 import { createServerClient } from "@/lib/supabase/server";
 import Link from "next/link";
 
@@ -16,8 +15,8 @@ export default async function PublicSharePage(
 ) {
   // In your project, params is a Promise — await it:
   const { token } = (await props.params) ?? { token: "" };
-
   const supabase = await createServerClient();
+
   const { data: share } = await supabase
     .from("menu_shares")
     .select("payload")
@@ -61,6 +60,11 @@ export default async function PublicSharePage(
           )}
         </ol>
       </div>
+
+      {/* Route-scoped CSS: hide global app header on this public share page */}
+      <style>{`
+        header { display: none !important; }
+      `}</style>
     </main>
   );
 }
