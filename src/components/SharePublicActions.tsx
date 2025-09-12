@@ -1,8 +1,12 @@
 "use client";
 
-export default function SharePublicActions() {
+export default function SharePublicActions({
+  className = "",
+}: {
+  className?: string;
+}) {
   return (
-    <div className="mt-3 flex justify-center gap-3 print:hidden">
+    <div className={className}>
       <button
         onClick={() => window.print()}
         className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
@@ -14,7 +18,7 @@ export default function SharePublicActions() {
           try {
             await navigator.clipboard.writeText(location.href);
           } catch {
-            // noop
+            // ignore
           }
         }}
         className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"

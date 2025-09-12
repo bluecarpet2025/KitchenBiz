@@ -32,7 +32,7 @@ export default async function PublicSharePage(
 
   const supabase = await createServerClient();
 
-  // Look up share → menu/tenant
+  // Share → menu/tenant
   const { data: share } = await supabase
     .from("menu_shares")
     .select("menu_id, tenant_id, payload")
@@ -43,8 +43,8 @@ export default async function PublicSharePage(
     return (
       <main className="max-w-3xl mx-auto p-6">
         <style>{`header{display:none!important}`}</style>
-        <h1 className="text-2xl font-semibold text-center">Shared Menu</h1>
-        <p className="mt-4 text-center">This share link is invalid or has been revoked.</p>
+        <h1 className="text-2xl font-semibold">Shared Menu</h1>
+        <p className="mt-4">This share link is invalid or has been revoked.</p>
       </main>
     );
   }
@@ -52,29 +52,14 @@ export default async function PublicSharePage(
   const menuId = String(share.menu_id);
   const tenantId = String(share.tenant_id);
 
-  // Tenant header (biz name & blurb if present)
-  let bizName = "";
-  let bizBlurb = "";
-  {
-    const { data: t1, error } = await supabase
-      .from("tenants")
-      .select("business_name,business_blurb,name")
-      .eq("id", tenantId)
-      .maybeSingle();
-
-    if (error) {
-      const { data: t2 } = await supabase
-        .from("tenants")
-        .select("name")
-        .eq("id", tenantId)
-        .maybeSingle();
-      bizName = String(t2?.name ?? "Kitchen Biz");
-      bizBlurb = "";
-    } else {
-      bizName = String(t1?.business_name ?? t1?.name ?? "Kitchen Biz");
-      bizBlurb = String(t1?.business_blurb ?? "");
-    }
-  }
+  // Tenant header
+  const { data: t } = await supabase
+    .from("tenants")
+    .select("business_name,business_blurb,name")
+    .eq("id", tenantId)
+    .maybeSingle();
+  const bizName = String(t?.business_name ?? t?.name ?? "Kitchen Biz");
+  const bizBlurb = String(t?.business_blurb ?? "");
 
   // Menu
   const { data: menu } = await supabase
@@ -96,7 +81,9 @@ export default async function PublicSharePage(
   if (rids.length) {
     const { data: recs } = await supabase
       .from("recipes")
-      .select("id,name,batch_yield_qty,batch_yield_unit,yield_pct,menu_description,description")
+      .select(
+        "id,name,batch_yield_qty,batch_yield_unit,yield_pct,menu_description,description"
+      )
       .in("id", rids);
     recipes = ((recs ?? []) as any[]).map((r) => ({ ...r, id: String(r.id) })) as RecipeRow[];
   }
@@ -111,7 +98,7 @@ export default async function PublicSharePage(
     ing = (data ?? []) as IngredientLine[];
   }
 
-  // Item costs
+  // Item costs (use share tenant)
   const { data: itemsRaw } = await supabase
     .from("inventory_items")
     .select("id,last_price,pack_to_base_factor")
@@ -144,17 +131,20 @@ export default async function PublicSharePage(
 
   return (
     <main className="mx-auto p-8 max-w-4xl">
-      {/* Hide global TopNav on public page and center header */}
+      {/* Public page: hide global site header */}
       <style>{`header{display:none!important}`}</style>
 
-      <div className="mb-4 text-center">
-        <div className="text-xl font-semibold">{bizName}</div>
-        {bizBlurb && <div className="text-sm opacity-80">{bizBlurb}</div>}
-        <h1 className="text-2xl font-semibold mt-2">{menu?.name || "Menu"}</h1>
-        <SharePublicActions />
+      {/* Left header + actions on the right */}
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-xl font-semibold">{bizName}</div>
+          {bizBlurb && <div className="text-sm opacity-80">{bizBlurb}</div>}
+          <h1 className="text-2xl font-semibold mt-2">{menu?.name || "Menu"}</h1>
+        </div>
+        <SharePublicActions className="print:hidden flex items-center gap-3" />
       </div>
 
-      <div className="border rounded-lg p-6">
+      <div className="mt-6 border rounded-lg p-6">
         {rows.length === 0 ? (
           <p className="text-neutral-400">No recipes in this menu.</p>
         ) : (
@@ -181,7 +171,6 @@ export default async function PublicSharePage(
 
       <style>{`
         @media print {
-          .print\\:hidden { display: none !important; }
           main { padding: 0 !important; }
           table { page-break-inside: avoid; }
         }
