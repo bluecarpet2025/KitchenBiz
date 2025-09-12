@@ -2,7 +2,7 @@ import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import {
   costPerBaseUnit,
-  costPerPortion,
+  buildRecipeCostIndex,
   priceFromCost,
   fmtUSD,
   type RecipeLike,
@@ -11,6 +11,15 @@ import {
 import PrintCopyActions from "@/components/PrintCopyActions";
 
 export const dynamic = "force-dynamic";
+
+function pick<T extends object>(obj: T | null | undefined, ...keys: (keyof T)[]) {
+  if (!obj) return undefined;
+  for (const k of keys) {
+    const v = obj[k];
+    if (v !== undefined && v !== null) return v as any;
+  }
+  return undefined;
+}
 
 type RecipeRow = RecipeLike & {
   id: string;
@@ -31,7 +40,6 @@ export default async function Page({
 
   const supabase = await createServerClient();
 
-  // Auth → tenant
   const { data: u } = await supabase.auth.getUser();
   const userId = u.user?.id ?? null;
   if (!userId) {
@@ -61,16 +69,6 @@ export default async function Page({
     );
   }
 
-  // Business info
-  const { data: tenantRow } = await supabase
-    .from("tenants")
-    .select("name, short_description")
-    .eq("id", tenantId)
-    .maybeSingle();
-  const businessName = (tenantRow?.name ?? "").trim() || "KitchenBiz";
-  const businessBlurb = (tenantRow?.short_description ?? "").trim();
-
-  // Menu
   const { data: menu } = await supabase
     .from("menus")
     .select("id,name,created_at,tenant_id")
@@ -87,14 +85,36 @@ export default async function Page({
     );
   }
 
-  // Lines → recipe ids
+  // Tenant header (business name/short description if available)
+  let bizName = "";
+  let bizBlurb = "";
+  {
+    const { data: t1, error } = await supabase
+      .from("tenants")
+      .select("business_name,business_blurb,name")
+      .eq("id", menu.tenant_id)
+      .maybeSingle();
+    if (error) {
+      const { data: t2 } = await supabase
+        .from("tenants")
+        .select("name")
+        .eq("id", menu.tenant_id)
+        .maybeSingle();
+      bizName = String(t2?.name ?? "Kitchen Biz");
+      bizBlurb = "";
+    } else {
+      bizName = String(pick(t1!, "business_name", "name") ?? "Kitchen Biz");
+      bizBlurb = String(t1?.business_blurb ?? "");
+    }
+  }
+
+  // Lines & recipes
   const { data: lines } = await supabase
     .from("menu_recipes")
-    .select("recipe_id,servings")
+    .select("recipe_id,servings,price")
     .eq("menu_id", menu.id);
-  const rids = (lines ?? []).map((l) => String(l.recipe_id));
 
-  // Recipes (include description fields)
+  const rids = (lines ?? []).map((l) => String(l.recipe_id));
   let recipes: RecipeRow[] = [];
   if (rids.length) {
     const { data: recs } = await supabase
@@ -104,17 +124,15 @@ export default async function Page({
     recipes = ((recs ?? []) as any[]).map((r) => ({ ...r, id: String(r.id) })) as RecipeRow[];
   }
 
-  // Ingredients
-  let ingredients: IngredientLine[] = [];
+  let ing: IngredientLine[] = [];
   if (rids.length) {
-    const { data: ing } = await supabase
+    const { data } = await supabase
       .from("recipe_ingredients")
-      .select("recipe_id,item_id,qty")
+      .select("recipe_id,item_id,sub_recipe_id,qty,unit")
       .in("recipe_id", rids);
-    ingredients = (ing ?? []) as IngredientLine[];
+    ing = (data ?? []) as IngredientLine[];
   }
 
-  // Item costs
   const { data: itemsRaw } = await supabase
     .from("inventory_items")
     .select("id,last_price,pack_to_base_factor")
@@ -127,45 +145,44 @@ export default async function Page({
     );
   });
 
-  // Group ingredients per recipe
-  const ingByRecipe = new Map<string, IngredientLine[]>();
-  (ingredients ?? []).forEach((ing) => {
-    const key = String((ing as any).recipe_id ?? "");
-    if (!key) return;
-    if (!ingByRecipe.has(key)) ingByRecipe.set(key, []);
-    ingByRecipe.get(key)!.push(ing);
-  });
-
-  // Build printable rows
+  const costIndex = buildRecipeCostIndex(recipes, ing, itemCostById);
   const rows = recipes
     .map((rec) => {
-      const parts = ingByRecipe.get(String(rec.id)) ?? [];
-      const costEach = costPerPortion(rec, parts, itemCostById);
-      const price = priceFromCost(costEach, margin);
+      const costEach = costIndex[rec.id] ?? 0;
+      const override = Number((lines ?? []).find((l) => String(l.recipe_id) === rec.id)?.price ?? 0);
+      const suggested = priceFromCost(costEach, margin);
+      const price = override > 0 ? override : suggested;
       const descrRaw =
         String(rec.menu_description ?? rec.description ?? "").trim() ||
         `Classic ${String(rec.name ?? "item").toLowerCase()}.`;
-      return { name: String(rec.name ?? "Untitled"), descr: descrRaw, price };
+      return {
+        name: String(rec.name ?? "Untitled"),
+        descr: descrRaw,
+        price,
+      };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
 
   return (
     <main className="mx-auto p-8 max-w-4xl">
-      {/* Header text prints; buttons hide in print */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="print:w-full print:text-center">
-          <div className="text-xl font-semibold">{businessName}</div>
-          {businessBlurb && (
-            <p className="text-sm opacity-80 mt-0.5">{businessBlurb}</p>
-          )}
-          <h1 className="text-2xl font-semibold mt-1">{menu.name || "Menu"}</h1>
+      {/* Centered header */}
+      <header className="print:hidden mb-4 text-center">
+        <div className="text-xl font-semibold">{bizName}</div>
+        {bizBlurb && <div className="text-sm opacity-80">{bizBlurb}</div>}
+        <h1 className="text-2xl font-semibold mt-2">{menu.name || "Menu"}</h1>
+        <div className="mt-3 flex justify-center">
+          <PrintCopyActions menuId={menu.id} />
         </div>
-        <div className="print:hidden">
-            <PrintCopyActions />
-        </div>
+      </header>
+
+      {/* Print header (also centered) */}
+      <div className="hidden print:block text-center mb-4">
+        <div className="text-xl font-semibold">{bizName}</div>
+        {bizBlurb && <div className="text-sm opacity-80">{bizBlurb}</div>}
+        <h1 className="text-2xl font-semibold mt-2">{menu.name || "Menu"}</h1>
       </div>
 
-      <section className="mt-6 border rounded-lg p-6">
+      <section className="mt-2 border rounded-lg p-6">
         {rows.length === 0 ? (
           <p className="text-neutral-400">No recipes in this menu.</p>
         ) : (
@@ -190,11 +207,8 @@ export default async function Page({
         )}
       </section>
 
-      {/* Hide global app header; keep our header visible */}
       <style>{`
-        header { display: none !important; }
         @media print {
-          header { display: none !important; }
           .print\\:hidden { display: none !important; }
           main { padding: 0 !important; }
           section { border: none !important; }
