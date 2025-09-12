@@ -5,15 +5,16 @@ export const dynamic = "force-dynamic";
 
 type PayloadItem = { name: string; servings: number };
 type SharePayload = {
-  name: string;
+  name: string;                 // menu name
   created_at?: string;
   items: PayloadItem[];
+  business_name?: string;       // NEW
+  business_blurb?: string;      // NEW
 };
 
 export default async function PublicSharePage(
   props: { params?: Promise<{ token: string }> }
 ) {
-  // In your project, params is a Promise — await it:
   const { token } = (await props.params) ?? { token: "" };
   const supabase = await createServerClient();
 
@@ -35,13 +36,19 @@ export default async function PublicSharePage(
     );
   }
 
+  const business = (payload.business_name ?? "").trim();
+  const blurb = (payload.business_blurb ?? "").trim();
+  const showCreated = !blurb && payload.created_at;
+
   return (
     <main className="mx-auto p-8 max-w-3xl">
       <div className="mb-4">
+        {business && <div className="text-xl font-semibold">{business}</div>}
+        {blurb && <p className="text-sm opacity-80 mt-0.5">{blurb}</p>}
         <h1 className="text-2xl font-semibold">{payload.name || "Menu"}</h1>
-        {payload.created_at && (
+        {showCreated && (
           <p className="text-sm opacity-80">
-            Created {new Date(payload.created_at).toLocaleString()}
+            Created {new Date(payload.created_at!).toLocaleString()}
           </p>
         )}
       </div>
@@ -60,11 +67,6 @@ export default async function PublicSharePage(
           )}
         </ol>
       </div>
-
-      {/* Route-scoped CSS: hide global app header on this public share page */}
-      <style>{`
-        header { display: none !important; }
-      `}</style>
     </main>
   );
 }

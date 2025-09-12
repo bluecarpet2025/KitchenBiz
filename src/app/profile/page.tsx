@@ -3,41 +3,32 @@ import ProfileForm from "./ProfileForm";
 
 export default async function ProfilePage() {
   const supabase = await createServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
-    // not signed in -> push to /login
     return (
       <main className="mx-auto max-w-3xl px-4 py-8">
-        <p>
-          Please{" "}
-          <a className="underline" href="/login">
-            log in
-          </a>
-          .
-        </p>
+        <p>Please <a className="underline" href="/login">log in</a>.</p>
       </main>
     );
   }
 
-  // Pull profile (need tenant_id to edit business name)
   const { data: profile } = await supabase
     .from("profiles")
     .select("display_name, use_demo, tenant_id")
     .eq("id", user.id)
     .maybeSingle();
 
-  // Current business (tenant) name (may be empty if RLS not configured)
   let businessName = "";
+  let businessBlurb = "";
   if (profile?.tenant_id) {
-    const { data: t, error: tErr } = await supabase
+    const { data: t } = await supabase
       .from("tenants")
-      .select("name")
+      .select("name, short_description")
       .eq("id", profile.tenant_id)
       .maybeSingle();
-    if (!tErr) businessName = (t?.name ?? "").toString();
+    businessName = (t?.name ?? "").toString();
+    businessBlurb = (t?.short_description ?? "").toString();
   }
 
   return (
@@ -47,12 +38,12 @@ export default async function ProfilePage() {
         initialName={profile?.display_name ?? ""}
         initialUseDemo={!!profile?.use_demo}
         initialBusinessName={businessName}
+        initialBusinessBlurb={businessBlurb}
         tenantId={(profile?.tenant_id as string) ?? null}
       />
       <p className="mt-6 text-sm text-neutral-400">
         When <strong>Use demo data</strong> is on, you’ll see the read-only
-        <em> Pizza Demo (Tester)</em> tenant everywhere. Business name editing is
-        disabled in demo mode.
+        <em> Pizza Demo (Tester)</em> tenant everywhere. Business settings are disabled in demo mode.
       </p>
     </main>
   );

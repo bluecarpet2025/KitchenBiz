@@ -12,11 +12,6 @@ import PrintCopyActions from "@/components/PrintCopyActions";
 
 export const dynamic = "force-dynamic";
 
-function dt(d?: string | null) {
-  if (!d) return "";
-  try { return new Date(d).toLocaleString(); } catch { return ""; }
-}
-
 type RecipeRow = RecipeLike & {
   id: string;
   name: string | null;
@@ -66,13 +61,14 @@ export default async function Page({
     );
   }
 
-  // Business name
+  // Business info
   const { data: tenantRow } = await supabase
     .from("tenants")
-    .select("name")
+    .select("name, short_description")
     .eq("id", tenantId)
     .maybeSingle();
   const businessName = (tenantRow?.name ?? "").trim() || "KitchenBiz";
+  const businessBlurb = (tenantRow?.short_description ?? "").trim();
 
   // Menu
   const { data: menu } = await supabase
@@ -103,9 +99,7 @@ export default async function Page({
   if (rids.length) {
     const { data: recs } = await supabase
       .from("recipes")
-      .select(
-        "id,name,batch_yield_qty,batch_yield_unit,yield_pct,menu_description,description"
-      )
+      .select("id,name,batch_yield_qty,batch_yield_unit,yield_pct,menu_description,description")
       .in("id", rids);
     recipes = ((recs ?? []) as any[]).map((r) => ({ ...r, id: String(r.id) })) as RecipeRow[];
   }
@@ -161,11 +155,13 @@ export default async function Page({
       <div className="flex items-start justify-between gap-3">
         <div className="print:w-full print:text-center">
           <div className="text-xl font-semibold">{businessName}</div>
-          <h1 className="text-2xl font-semibold">{menu.name || "Menu"}</h1>
-          <p className="text-sm opacity-80">Created {dt(menu.created_at)}</p>
+          {businessBlurb && (
+            <p className="text-sm opacity-80 mt-0.5">{businessBlurb}</p>
+          )}
+          <h1 className="text-2xl font-semibold mt-1">{menu.name || "Menu"}</h1>
         </div>
         <div className="print:hidden">
-          <PrintCopyActions />
+            <PrintCopyActions />
         </div>
       </div>
 
@@ -194,7 +190,7 @@ export default async function Page({
         )}
       </section>
 
-      {/* Hide global app top-nav header; keep our header visible */}
+      {/* Hide global app header; keep our header visible */}
       <style>{`
         header { display: none !important; }
         @media print {
