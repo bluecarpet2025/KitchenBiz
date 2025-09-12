@@ -1,8 +1,7 @@
-// src/app/layout.tsx
 import "./globals.css";
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
-import SignOutButton from "@/components/SignOutButton"; // <-- add this
+import SignOutButton from "@/components/SignOutButton";
 
 export const metadata = {
   title: "Kitchen Biz",
@@ -26,14 +25,14 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   return (
     <html lang="en">
       <body>
-        <header className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-neutral-800">
+        {/* Tag the header so specific routes can hide it cleanly */}
+        <header data-kb-topnav className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-neutral-800">
           <nav className="flex items-center gap-4">
             <Link href="/" className="font-semibold">Kitchen Biz</Link>
             <Link href="/inventory" className="hover:underline">Inventory</Link>
             <Link href="/recipes" className="hover:underline">Recipes</Link>
             <Link href="/menu" className="hover:underline">Menu</Link>
           </nav>
-
           {/* Right side: user, Sign out, then Help / FAQ */}
           <nav className="flex items-center gap-4">
             {user ? (
@@ -49,6 +48,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             <Link href="/help" className="text-sm hover:underline">Help / FAQ</Link>
           </nav>
         </header>
+
         {children}
       </body>
     </html>
