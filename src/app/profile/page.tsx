@@ -3,22 +3,42 @@ import ProfileForm from "./ProfileForm";
 
 export default async function ProfilePage() {
   const supabase = await createServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   if (!user) {
     // not signed in -> push to /login
     return (
       <main className="mx-auto max-w-3xl px-4 py-8">
-        <p>Please <a className="underline" href="/login">log in</a>.</p>
+        <p>
+          Please{" "}
+          <a className="underline" href="/login">
+            log in
+          </a>
+          .
+        </p>
       </main>
     );
   }
 
+  // Pull profile (need tenant_id to edit business name)
   const { data: profile } = await supabase
     .from("profiles")
-    .select("display_name, use_demo")
+    .select("display_name, use_demo, tenant_id")
     .eq("id", user.id)
-    .single();
+    .maybeSingle();
+
+  // Current business (tenant) name
+  let businessName = "";
+  if (profile?.tenant_id) {
+    const { data: t } = await supabase
+      .from("tenants")
+      .select("name")
+      .eq("id", profile.tenant_id)
+      .maybeSingle();
+    businessName = (t?.name ?? "").toString();
+  }
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-8">
@@ -26,10 +46,13 @@ export default async function ProfilePage() {
       <ProfileForm
         initialName={profile?.display_name ?? ""}
         initialUseDemo={!!profile?.use_demo}
+        initialBusinessName={businessName}
+        tenantId={(profile?.tenant_id as string) ?? null}
       />
       <p className="mt-6 text-sm text-neutral-400">
         When <strong>Use demo data</strong> is on, you’ll see the read-only
-        <em> Pizza Demo (Tester)</em> tenant everywhere.
+        <em> Pizza Demo (Tester)</em> tenant everywhere. Business name editing is
+        disabled in demo mode.
       </p>
     </main>
   );
