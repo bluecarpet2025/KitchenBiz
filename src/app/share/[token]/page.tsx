@@ -17,19 +17,16 @@ type RecipeRow = RecipeLike & {
   description?: string | null;
 };
 
-function getParam(sp: Record<string, string | string[]>, key: string) {
-  const v = sp[key];
-  return Array.isArray(v) ? v[0] : v;
-}
-
 export default async function PublicSharePage(
   props: { params?: Promise<{ token: string }>, searchParams?: Promise<Record<string, string | string[]>> }
 ) {
   const { token } = (await props.params) ?? { token: "" };
   const sp = (await props.searchParams) ?? {};
-  const margin = Math.min(0.9, Math.max(0, Number(getParam(sp, "margin") ?? 0.3)));
+  const margin = Math.min(0.9, Math.max(0, Number(Array.isArray(sp.margin) ? sp.margin[0] : sp.margin ?? 0.3)));
 
   const supabase = await createServerClient();
+
+  // Look up share → menu + tenant
   const { data: share } = await supabase
     .from("menu_shares")
     .select("menu_id, tenant_id")
@@ -39,38 +36,50 @@ export default async function PublicSharePage(
   if (!share) {
     return (
       <main className="max-w-3xl mx-auto p-6">
+        <style>{`header{display:none !important;}`}</style>
         <h1 className="text-2xl font-semibold text-center">Shared Menu</h1>
         <p className="mt-4 text-center">This share link is invalid or has been revoked.</p>
       </main>
     );
   }
 
-  // tenant header
+  const menuId = String(share.menu_id);
+  const tenantId = String(share.tenant_id);
+
+  // Tenant header
   const { data: tenant } = await supabase
     .from("tenants")
     .select("name, short_description")
-    .eq("id", share.tenant_id)
+    .eq("id", tenantId)
     .maybeSingle();
-
   const bizName = String(tenant?.name ?? "Kitchen Biz");
   const bizBlurb = String(tenant?.short_description ?? "");
 
-  // menu
+  // Menu
   const { data: menu } = await supabase
     .from("menus")
-    .select("id,name,tenant_id")
-    .eq("id", share.menu_id)
+    .select("id,name")
+    .eq("id", menuId)
     .maybeSingle();
+  if (!menu) {
+    return (
+      <main className="max-w-3xl mx-auto p-6">
+        <style>{`header{display:none !important;}`}</style>
+        <h1 className="text-2xl font-semibold text-center">Shared Menu</h1>
+        <p className="mt-4 text-center">Menu not found.</p>
+      </main>
+    );
+  }
 
-  // lines
+  // Lines (optional overrides)
   const { data: lines } = await supabase
     .from("menu_recipes")
     .select("recipe_id,price")
-    .eq("menu_id", share.menu_id);
+    .eq("menu_id", menu.id);
 
   const rids = (lines ?? []).map((l) => String(l.recipe_id));
 
-  // recipes
+  // Recipes (include descriptions)
   let recipes: RecipeRow[] = [];
   if (rids.length) {
     const { data: recs } = await supabase
@@ -80,7 +89,7 @@ export default async function PublicSharePage(
     recipes = ((recs ?? []) as any[]).map((r) => ({ ...r, id: String(r.id) })) as RecipeRow[];
   }
 
-  // ingredients & item costs
+  // Ingredients
   let ing: IngredientLine[] = [];
   if (rids.length) {
     const { data } = await supabase
@@ -90,11 +99,11 @@ export default async function PublicSharePage(
     ing = (data ?? []) as IngredientLine[];
   }
 
+  // Inventory unit costs
   const { data: itemsRaw } = await supabase
     .from("inventory_items")
     .select("id,last_price,pack_to_base_factor")
-    .eq("tenant_id", share.tenant_id);
-
+    .eq("tenant_id", tenantId);
   const itemCostById: Record<string, number> = {};
   (itemsRaw ?? []).forEach((it: any) => {
     itemCostById[String(it.id)] = costPerBaseUnit(
@@ -103,36 +112,41 @@ export default async function PublicSharePage(
     );
   });
 
+  // Cost index (supports sub-recipes)
   const costIndex = buildRecipeCostIndex(recipes, ing, itemCostById);
+
   const rows = recipes
     .map((rec) => {
       const costEach = costIndex[rec.id] ?? 0;
       const override = Number((lines ?? []).find((l) => String(l.recipe_id) === rec.id)?.price ?? 0);
-      const suggested = priceFromCost(costEach, margin);
-      const price = override > 0 ? override : suggested;
+      const price = override > 0 ? override : priceFromCost(costEach, margin);
       const descrRaw =
         String(rec.menu_description ?? rec.description ?? "").trim() ||
         `Classic ${String(rec.name ?? "item").toLowerCase()}.`;
-      return {
-        name: String(rec.name ?? "Untitled"),
-        descr: descrRaw,
-        price,
-      };
+      return { name: String(rec.name ?? "Untitled"), descr: descrRaw, price };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
 
   return (
-    <main className="mx-auto p-8 max-w-5xl">
-      {/* Centered header */}
-      <div className="mb-4 text-center">
+    <main className="mx-auto p-8 max-w-4xl">
+      {/* Remove global header, center the page. No buttons here. */}
+      <style>{`
+        header { display: none !important; }
+        @media print {
+          main { padding: 0 !important; }
+          table { page-break-inside: avoid; }
+        }
+      `}</style>
+
+      <div className="text-center mb-4">
         <div className="text-xl font-semibold">{bizName}</div>
         {bizBlurb && <div className="text-sm opacity-80">{bizBlurb}</div>}
-        <h1 className="text-2xl font-semibold mt-2">{menu?.name || "Menu"}</h1>
+        <h1 className="text-2xl font-semibold mt-2">{menu.name || "Menu"}</h1>
       </div>
 
-      <div className="border rounded-lg p-6">
+      <section className="border rounded-lg p-6">
         {rows.length === 0 ? (
-          <p className="text-neutral-400">No recipes in this menu.</p>
+          <p className="text-neutral-400 text-center">No recipes in this menu.</p>
         ) : (
           <table className="w-full text-sm">
             <thead className="print:table-header-group bg-neutral-900/60">
@@ -153,14 +167,7 @@ export default async function PublicSharePage(
             </tbody>
           </table>
         )}
-      </div>
-
-      <style>{`
-        @media print {
-          main { padding: 0 !important; }
-          table { page-break-inside: avoid; }
-        }
-      `}</style>
+      </section>
     </main>
   );
 }

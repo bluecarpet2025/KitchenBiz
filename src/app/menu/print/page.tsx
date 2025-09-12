@@ -1,49 +1,48 @@
 import { createServerClient } from "@/lib/supabase/server";
 import {
-  fmtUSD,
   costPerBaseUnit,
   buildRecipeCostIndex,
   priceFromCost,
+  fmtUSD,
   type RecipeLike,
   type IngredientLine,
 } from "@/lib/costing";
 
 export const dynamic = "force-dynamic";
 
+type RecipeRow = RecipeLike & {
+  id: string;
+  name: string | null;
+  menu_description: string | null;
+  description?: string | null;
+};
+
 function getParam(sp: Record<string, string | string[]>, key: string) {
   const v = sp[key];
   return Array.isArray(v) ? v[0] : v;
 }
 
-function AutoPrint() {
-  // tiny client island to trigger print
-  return (
-    <script
-      dangerouslySetInnerHTML={{
-        __html: "window.addEventListener('load',()=>{setTimeout(()=>window.print(),50)});",
-      }}
-    />
-  );
-}
-
 export default async function Page({
   searchParams,
 }: {
+  // Next 15: searchParams is a Promise
   searchParams?: Promise<Record<string, string | string[]>>;
 }) {
   const sp = (await searchParams) ?? {};
-  const menuId = getParam(sp, "menu_id") || "";
-  const margin = Math.min(0.95, Math.max(0.05, Number(getParam(sp, "margin") ?? 0.3)));
+  const menuId = String(getParam(sp, "menu_id") ?? "");
+  const margin = Math.min(0.9, Math.max(0, Number(getParam(sp, "margin") ?? 0.3)));
 
   const supabase = await createServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+
+  // Auth → tenant
+  const { data: u } = await supabase.auth.getUser();
+  const userId = u.user?.id ?? null;
+  if (!userId || !menuId) {
     return (
       <main className="max-w-4xl mx-auto p-6">
-        <h1 className="text-2xl font-semibold">Menu</h1>
-        <p className="mt-4">You need to sign in to view this menu.</p>
+        <h1 className="text-2xl font-semibold text-center">Menu</h1>
+        <p className="mt-4 text-center">Missing menu or not signed in.</p>
+        <a className="underline block text-center mt-2" href="/menu">Back to Menu</a>
       </main>
     );
   }
@@ -51,60 +50,46 @@ export default async function Page({
   const { data: prof } = await supabase
     .from("profiles")
     .select("tenant_id")
-    .eq("id", user.id)
+    .eq("id", userId)
     .maybeSingle();
-  const tenantId = prof?.tenant_id as string | null;
+  const tenantId = String(prof?.tenant_id ?? "");
 
-  if (!tenantId || !menuId) {
-    return (
-      <main className="max-w-4xl mx-auto p-6">
-        <h1 className="text-2xl font-semibold">Menu</h1>
-        <p className="mt-4">Missing menu or tenant.</p>
-      </main>
-    );
-  }
+  // Tenant header (business name + blurb)
+  const { data: tenant } = await supabase
+    .from("tenants")
+    .select("name, short_description")
+    .eq("id", tenantId)
+    .maybeSingle();
+  const bizName = String(tenant?.name ?? "Kitchen Biz");
+  const bizBlurb = String(tenant?.short_description ?? "");
 
-  let bizName = "Kitchen Biz";
-  let bizBlurb = "";
-  {
-    const { data: t } = await supabase
-      .from("tenants")
-      .select("business_name,name,short_description")
-      .eq("id", tenantId)
-      .maybeSingle();
-    bizName = String(t?.business_name ?? t?.name ?? "Kitchen Biz");
-    bizBlurb = String(t?.short_description ?? "");
-  }
-
+  // Menu
   const { data: menu } = await supabase
     .from("menus")
-    .select("id,name,tenant_id")
+    .select("id,name")
     .eq("id", menuId)
     .eq("tenant_id", tenantId)
     .maybeSingle();
   if (!menu) {
     return (
       <main className="max-w-4xl mx-auto p-6">
-        <h1 className="text-2xl font-semibold">Menu</h1>
-        <p className="mt-4">Menu not found.</p>
+        <h1 className="text-2xl font-semibold text-center">Menu</h1>
+        <p className="mt-4 text-center">Menu not found.</p>
+        <a className="underline block text-center mt-2" href="/menu">Back to Menu</a>
       </main>
     );
   }
 
+  // Lines with optional per-portion price overrides
   const { data: lines } = await supabase
     .from("menu_recipes")
-    .select("recipe_id, price")
+    .select("recipe_id,servings,price")
     .eq("menu_id", menu.id);
 
   const rids = (lines ?? []).map((l) => String(l.recipe_id));
 
-  let recipes: (RecipeLike & {
-    id: string;
-    name: string | null;
-    menu_description: string | null;
-    description?: string | null;
-  })[] = [];
-
+  // Recipes (include descriptions)
+  let recipes: RecipeRow[] = [];
   if (rids.length) {
     const { data: recs } = await supabase
       .from("recipes")
@@ -112,9 +97,10 @@ export default async function Page({
         "id,name,batch_yield_qty,batch_yield_unit,yield_pct,menu_description,description"
       )
       .in("id", rids);
-    recipes = ((recs ?? []) as any[]).map((r) => ({ ...r, id: String(r.id) }));
+    recipes = ((recs ?? []) as any[]).map((r) => ({ ...r, id: String(r.id) })) as RecipeRow[];
   }
 
+  // Ingredients
   let ing: IngredientLine[] = [];
   if (rids.length) {
     const { data } = await supabase
@@ -124,11 +110,11 @@ export default async function Page({
     ing = (data ?? []) as IngredientLine[];
   }
 
+  // Inventory unit costs
   const { data: itemsRaw } = await supabase
     .from("inventory_items")
     .select("id,last_price,pack_to_base_factor")
     .eq("tenant_id", tenantId);
-
   const itemCostById: Record<string, number> = {};
   (itemsRaw ?? []).forEach((it: any) => {
     itemCostById[String(it.id)] = costPerBaseUnit(
@@ -137,7 +123,9 @@ export default async function Page({
     );
   });
 
+  // Cost index (supports sub-recipes)
   const costIndex = buildRecipeCostIndex(recipes, ing, itemCostById);
+
   const rows = recipes
     .map((rec) => {
       const costEach = costIndex[rec.id] ?? 0;
@@ -146,26 +134,31 @@ export default async function Page({
       const descrRaw =
         String(rec.menu_description ?? rec.description ?? "").trim() ||
         `Classic ${String(rec.name ?? "item").toLowerCase()}.`;
-      return {
-        name: String(rec.name ?? "Untitled"),
-        descr: descrRaw,
-        price,
-      };
+      return { name: String(rec.name ?? "Untitled"), descr: descrRaw, price };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
 
   return (
     <main className="mx-auto p-8 max-w-4xl">
-      <AutoPrint />
-      <div className="text-center">
+      {/* Hide the app's global header on this page (both screen + print) */}
+      <style>{`
+        header { display: none !important; }
+        @media print {
+          main { padding: 0 !important; }
+          table { page-break-inside: avoid; }
+        }
+      `}</style>
+
+      {/* Centered header */}
+      <div className="text-center mb-4">
         <div className="text-xl font-semibold">{bizName}</div>
         {bizBlurb && <div className="text-sm opacity-80">{bizBlurb}</div>}
-        <h1 className="text-2xl font-semibold mt-2">{menu?.name || "Menu"}</h1>
+        <h1 className="text-2xl font-semibold mt-2">{menu.name || "Menu"}</h1>
       </div>
 
-      <section className="mt-6 border rounded-lg p-6">
+      <section className="border rounded-lg p-6">
         {rows.length === 0 ? (
-          <p className="text-neutral-400">No recipes in this menu.</p>
+          <p className="text-neutral-400 text-center">No recipes in this menu.</p>
         ) : (
           <table className="w-full text-sm">
             <thead className="print:table-header-group bg-neutral-900/60">
@@ -187,14 +180,6 @@ export default async function Page({
           </table>
         )}
       </section>
-
-      <style>{`
-        @media print {
-          main { padding: 0 !important; }
-          section { border: none !important; }
-          table { page-break-inside: avoid; }
-        }
-      `}</style>
     </main>
   );
 }
