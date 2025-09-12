@@ -1,54 +1,53 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
-type Props = {
-  menuId: string;
-  margin: number; // 0..1
-};
+type Props = { menuId: string };
 
-export default function PrintCopyActions({ menuId, margin }: Props) {
+export default function PrintCopyActions({ menuId }: Props) {
   const [msg, setMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
 
-  async function doCopyLink() {
+  const currentMargin = () => {
     try {
-      setBusy(true);
-      setMsg(null);
+      const u = new URL(window.location.href);
+      const m = Number(u.searchParams.get("margin") ?? "0.3");
+      return isFinite(m) ? Math.max(0, Math.min(0.95, m)) : 0.3;
+    } catch {
+      return 0.3;
+    }
+  };
 
-      const res = await fetch(`/api/menu/shares?menu_id=${encodeURIComponent(menuId)}`, {
+  const onPrint = useCallback(() => {
+    window.print();
+  }, []);
+
+  const onCopyLink = useCallback(async () => {
+    try {
+      setMsg(null);
+      const res = await fetch(`/api/menu/share`, {
         method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ menu_id: menuId }),
       });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || "Share failed");
-      }
-      const { token } = (await res.json()) as { token: string };
-      const url = `${location.origin}/share/${encodeURIComponent(token)}?margin=${margin}`;
+      if (!res.ok) throw new Error(await res.text());
+      const { token } = await res.json();
+      const url = `${location.origin}/share/${token}?margin=${currentMargin()}`;
       await navigator.clipboard.writeText(url);
       setMsg("Link copied ✓");
-    } catch (e: any) {
-      setMsg(e?.message || "Copy failed");
-    } finally {
-      setBusy(false);
-      setTimeout(() => setMsg(null), 3000);
+      setTimeout(() => setMsg(null), 2500);
+    } catch (err: any) {
+      setMsg(err?.message || "Failed to copy link");
+      setTimeout(() => setMsg(null), 4000);
     }
-  }
+  }, [menuId]);
 
   return (
-    <div className="flex items-center gap-2">
-      <button
-        onClick={() => window.print()}
-        className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-      >
+    <div className="print:hidden flex items-center gap-3">
+      <button onClick={onPrint} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
         Print
       </button>
-      <button
-        disabled={busy}
-        onClick={doCopyLink}
-        className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900 disabled:opacity-60"
-      >
-        {busy ? "…" : "Copy link"}
+      <button onClick={onCopyLink} className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
+        Copy link
       </button>
       {msg && <span className="text-xs opacity-70">{msg}</span>}
     </div>

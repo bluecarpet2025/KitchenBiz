@@ -1,52 +1,38 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
 
+function makeToken() {
+  return crypto.randomUUID().replace(/-/g, "");
+}
+
 export async function POST(req: Request) {
-  try {
-    const url = new URL(req.url);
-    const menuId = url.searchParams.get("menu_id");
-    if (!menuId) return new NextResponse("menu_id required", { status: 400 });
+  const supabase = await createServerClient();
+  const body = await req.json().catch(() => ({}));
+  const menu_id = String(body?.menu_id ?? "");
 
-    const supabase = await createServerClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return new NextResponse("Unauthorized", { status: 401 });
+  if (!menu_id) return new NextResponse("menu_id required", { status: 400 });
 
-    // Tenant from profile
-    const { data: prof, error: pErr } = await supabase
-      .from("profiles")
-      .select("tenant_id")
-      .eq("id", user.id)
-      .maybeSingle();
+  // auth → tenant
+  const { data: u } = await supabase.auth.getUser();
+  const userId = u.user?.id;
+  if (!userId) return new NextResponse("Unauthorized", { status: 401 });
 
-    if (pErr) return new NextResponse(pErr.message, { status: 400 });
-    const tenantId = prof?.tenant_id as string | null;
-    if (!tenantId) return new NextResponse("No tenant", { status: 400 });
+  const { data: prof, error: pErr } = await supabase
+    .from("profiles")
+    .select("tenant_id")
+    .eq("id", userId)
+    .maybeSingle();
 
-    // If a row already exists for (menu_id, tenant_id), return its token; otherwise create one.
-    const { data: existing, error: sErr } = await supabase
-      .from("menu_shares")
-      .select("token")
-      .eq("menu_id", menuId)
-      .eq("tenant_id", tenantId)
-      .maybeSingle();
+  if (pErr || !prof?.tenant_id) return new NextResponse("Tenant not found", { status: 400 });
 
-    if (sErr) return new NextResponse(sErr.message, { status: 400 });
+  const tenant_id = String(prof.tenant_id);
+  const token = makeToken();
 
-    if (existing?.token) {
-      return NextResponse.json({ token: existing.token });
-    }
+  // Unique on menu_id: upsert avoids duplicate key errors.
+  const { error } = await supabase
+    .from("menu_shares")
+    .upsert({ menu_id, tenant_id, token }, { onConflict: "menu_id" });
 
-    const token = crypto.randomUUID().replace(/-/g, "");
-    const { error: insErr } = await supabase
-      .from("menu_shares")
-      .insert({ menu_id: menuId, tenant_id: tenantId, token });
-
-    if (insErr) return new NextResponse(insErr.message, { status: 400 });
-
-    return NextResponse.json({ token });
-  } catch (e: any) {
-    return new NextResponse(e?.message || "Share failed", { status: 500 });
-  }
+  if (error) return new NextResponse(error.message, { status: 400 });
+  return NextResponse.json({ token });
 }

@@ -25,15 +25,14 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   return (
     <html lang="en">
       <body>
-        {/* Tag the header so specific routes can hide it cleanly */}
-        <header data-kb-topnav className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-neutral-800">
+        {/* Hides on print */}
+        <header className="print:hidden flex items-center justify-between px-4 sm:px-6 py-3 border-b border-neutral-800">
           <nav className="flex items-center gap-4">
             <Link href="/" className="font-semibold">Kitchen Biz</Link>
             <Link href="/inventory" className="hover:underline">Inventory</Link>
             <Link href="/recipes" className="hover:underline">Recipes</Link>
             <Link href="/menu" className="hover:underline">Menu</Link>
           </nav>
-          {/* Right side: user, Sign out, then Help / FAQ */}
           <nav className="flex items-center gap-4">
             {user ? (
               <>
@@ -48,7 +47,6 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             <Link href="/help" className="text-sm hover:underline">Help / FAQ</Link>
           </nav>
         </header>
-
         {children}
       </body>
     </html>
