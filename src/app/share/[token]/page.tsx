@@ -1,17 +1,14 @@
-export const dynamic = "force-dynamic";
-
-import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import {
+  fmtUSD,
   costPerBaseUnit,
   buildRecipeCostIndex,
   priceFromCost,
-  fmtUSD,
   type RecipeLike,
   type IngredientLine,
-  type ItemCostById,
 } from "@/lib/costing";
-import { fetchTenantHeader } from "@/lib/tenant";
+
+export const dynamic = "force-dynamic";
 
 type RecipeRow = RecipeLike & {
   id: string;
@@ -31,14 +28,14 @@ export default async function PublicSharePage(props: {
 }) {
   const { token } = (await props.params) ?? { token: "" };
   const sp = (await props.searchParams) ?? {};
-  const margin = Math.min(0.9, Math.max(0, Number(getParam(sp, "margin") ?? 0.3)));
+  const margin = Math.min(0.95, Math.max(0.05, Number(getParam(sp, "margin") ?? 0.3)));
 
   const supabase = await createServerClient();
 
-  // Look up share → menu + tenant
+  // Look up share → menu/tenant
   const { data: share } = await supabase
     .from("menu_shares")
-    .select("menu_id,tenant_id")
+    .select("menu_id, tenant_id")
     .eq("token", token)
     .maybeSingle();
 
@@ -47,30 +44,37 @@ export default async function PublicSharePage(props: {
       <main className="max-w-3xl mx-auto p-6">
         <h1 className="text-2xl font-semibold text-center">Shared Menu</h1>
         <p className="mt-4 text-center">This share link is invalid or has been revoked.</p>
-        <div className="text-center mt-2">
-          <Link className="underline" href="/">
-            Home
-          </Link>
-        </div>
       </main>
     );
   }
 
   const menuId = String(share.menu_id);
   const tenantId = String(share.tenant_id);
-  const { bizName, bizBlurb } = await fetchTenantHeader(supabase, tenantId);
+
+  // Header: business + short description
+  let bizName = "Kitchen Biz";
+  let bizBlurb = "";
+  {
+    const { data: t } = await supabase
+      .from("tenants")
+      .select("business_name,name,short_description")
+      .eq("id", tenantId)
+      .maybeSingle();
+    bizName = String(t?.business_name ?? t?.name ?? "Kitchen Biz");
+    bizBlurb = String(t?.short_description ?? "");
+  }
 
   // Menu
   const { data: menu } = await supabase
     .from("menus")
-    .select("id,name,created_at,tenant_id")
+    .select("id,name")
     .eq("id", menuId)
     .maybeSingle();
 
   // Lines
   const { data: lines } = await supabase
     .from("menu_recipes")
-    .select("recipe_id,servings,price")
+    .select("recipe_id, price")
     .eq("menu_id", menuId);
 
   const rids = (lines ?? []).map((l) => String(l.recipe_id));
@@ -102,7 +106,8 @@ export default async function PublicSharePage(props: {
     .from("inventory_items")
     .select("id,last_price,pack_to_base_factor")
     .eq("tenant_id", tenantId);
-  const itemCostById: ItemCostById = {};
+
+  const itemCostById: Record<string, number> = {};
   (itemsRaw ?? []).forEach((it: any) => {
     itemCostById[String(it.id)] = costPerBaseUnit(
       Number(it.last_price ?? 0),
@@ -111,14 +116,12 @@ export default async function PublicSharePage(props: {
   });
 
   const costIndex = buildRecipeCostIndex(recipes, ing, itemCostById);
+
   const rows = recipes
     .map((rec) => {
       const costEach = costIndex[rec.id] ?? 0;
-      const override = Number(
-        (lines ?? []).find((l) => String(l.recipe_id) === rec.id)?.price ?? 0
-      );
-      const suggested = priceFromCost(costEach, margin);
-      const price = override > 0 ? override : suggested;
+      const override = Number((lines ?? []).find((l) => String(l.recipe_id) === rec.id)?.price ?? 0);
+      const price = override > 0 ? override : priceFromCost(costEach, margin);
       const descrRaw =
         String(rec.menu_description ?? rec.description ?? "").trim() ||
         `Classic ${String(rec.name ?? "item").toLowerCase()}.`;
@@ -132,16 +135,13 @@ export default async function PublicSharePage(props: {
 
   return (
     <main className="mx-auto p-8 max-w-4xl">
-      {/* No global top-nav on the public link */}
-      <style>{`header{display:none!important}`}</style>
-
-      <div className="mb-4 text-center">
+      <div className="text-center">
         <div className="text-xl font-semibold">{bizName}</div>
         {bizBlurb && <div className="text-sm opacity-80">{bizBlurb}</div>}
         <h1 className="text-2xl font-semibold mt-2">{menu?.name || "Menu"}</h1>
       </div>
 
-      <section className="mt-6 border rounded-lg p-6">
+      <div className="border rounded-lg p-6 mt-6">
         {rows.length === 0 ? (
           <p className="text-neutral-400">No recipes in this menu.</p>
         ) : (
@@ -164,11 +164,10 @@ export default async function PublicSharePage(props: {
             </tbody>
           </table>
         )}
-      </section>
+      </div>
 
       <style>{`
         @media print {
-          .print\\:hidden { display: none !important; }
           main { padding: 0 !important; }
           table { page-break-inside: avoid; }
         }
