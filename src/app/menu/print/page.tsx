@@ -1,3 +1,4 @@
+// src/app/menu/print/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import {
@@ -14,11 +15,7 @@ export const dynamic = "force-dynamic";
 
 function dt(d?: string | null) {
   if (!d) return "";
-  try {
-    return new Date(d).toLocaleString();
-  } catch {
-    return "";
-  }
+  try { return new Date(d).toLocaleString(); } catch { return ""; }
 }
 
 type RecipeRow = RecipeLike & {
@@ -49,9 +46,7 @@ export default async function Page({
       <main className="max-w-4xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Menu</h1>
         <p className="mt-4">You need to sign in to view this menu.</p>
-        <Link className="underline" href="/login?redirect=/menu">
-          Go to login
-        </Link>
+        <Link className="underline" href="/login?redirect=/menu">Go to login</Link>
       </main>
     );
   }
@@ -62,17 +57,24 @@ export default async function Page({
     .eq("id", userId)
     .maybeSingle();
   const tenantId = prof?.tenant_id ?? null;
+
   if (!tenantId || !menuId) {
     return (
       <main className="max-w-4xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Menu</h1>
         <p className="mt-4">Missing menu or tenant.</p>
-        <Link className="underline" href="/menu">
-          Back to Menu
-        </Link>
+        <Link className="underline" href="/menu">Back to Menu</Link>
       </main>
     );
   }
+
+  // Business name
+  const { data: tenantRow } = await supabase
+    .from("tenants")
+    .select("name")
+    .eq("id", tenantId)
+    .maybeSingle();
+  const businessName = (tenantRow?.name ?? "").trim() || "KitchenBiz";
 
   // Menu
   const { data: menu } = await supabase
@@ -86,14 +88,12 @@ export default async function Page({
       <main className="max-w-4xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Menu</h1>
         <p className="mt-4">Menu not found.</p>
-        <Link className="underline" href="/menu">
-          Back to Menu
-        </Link>
+        <Link className="underline" href="/menu">Back to Menu</Link>
       </main>
     );
   }
 
-  // Lines
+  // Lines → recipe ids
   const { data: lines } = await supabase
     .from("menu_recipes")
     .select("recipe_id,servings")
@@ -109,10 +109,7 @@ export default async function Page({
         "id,name,batch_yield_qty,batch_yield_unit,yield_pct,menu_description,description"
       )
       .in("id", rids);
-    recipes = ((recs ?? []) as any[]).map((r) => ({
-      ...r,
-      id: String(r.id),
-    })) as RecipeRow[];
+    recipes = ((recs ?? []) as any[]).map((r) => ({ ...r, id: String(r.id) })) as RecipeRow[];
   }
 
   // Ingredients
@@ -138,7 +135,7 @@ export default async function Page({
     );
   });
 
-  // Group ingredients per recipe (skip malformed keys)
+  // Group ingredients per recipe
   const ingByRecipe = new Map<string, IngredientLine[]>();
   (ingredients ?? []).forEach((ing) => {
     const key = String((ing as any).recipe_id ?? "");
@@ -156,18 +153,16 @@ export default async function Page({
       const descrRaw =
         String(rec.menu_description ?? rec.description ?? "").trim() ||
         `Classic ${String(rec.name ?? "item").toLowerCase()}.`;
-      return {
-        name: String(rec.name ?? "Untitled"),
-        descr: descrRaw,
-        price,
-      };
+      return { name: String(rec.name ?? "Untitled"), descr: descrRaw, price };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
 
   return (
     <main className="mx-auto p-8 max-w-4xl">
+      {/* Header (hidden when printing) */}
       <div className="flex items-start justify-between gap-3 print:hidden">
         <div>
+          <div className="text-xl font-semibold">{businessName}</div>
           <h1 className="text-2xl font-semibold">{menu.name || "Menu"}</h1>
           <p className="text-sm opacity-80">Created {dt(menu.created_at)}</p>
         </div>
@@ -199,7 +194,7 @@ export default async function Page({
         )}
       </section>
 
-      {/* Route-scoped CSS: hide global app header on this page */}
+      {/* Route-scoped CSS: hide global app header (top nav) on this page */}
       <style>{`
         header { display: none !important; }
         @media print {
