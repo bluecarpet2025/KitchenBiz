@@ -1,8 +1,7 @@
-import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import {
   costPerBaseUnit,
-  buildRecipeCostIndex,
+  costPerPortion,
   priceFromCost,
   fmtUSD,
   type RecipeLike,
@@ -18,76 +17,87 @@ type RecipeRow = RecipeLike & {
   description?: string | null;
 };
 
+function getParam(sp: Record<string, string | string[]>, key: string) {
+  const v = sp[key];
+  return Array.isArray(v) ? v[0] : v;
+}
+
 export default async function Page({
   searchParams,
 }: {
   searchParams?: Promise<Record<string, string | string[]>>;
 }) {
   const sp = (await searchParams) ?? {};
-  const menuId = Array.isArray(sp.menu_id) ? sp.menu_id[0] : sp.menu_id;
-  const marginParam = Array.isArray(sp.margin) ? sp.margin[0] : sp.margin;
-  const margin = Math.min(0.9, Math.max(0, marginParam ? Number(marginParam) : 0.3));
+  const menuId = String(getParam(sp, "menu_id") ?? "");
+  const margin = Math.min(0.9, Math.max(0, Number(getParam(sp, "margin") ?? 0.3)));
 
   const supabase = await createServerClient();
-
-  // Auth gate (keep this so private print requires login)
   const { data: u } = await supabase.auth.getUser();
   const userId = u.user?.id ?? null;
-  if (!userId) {
+
+  if (!userId || !menuId) {
     return (
       <main className="max-w-4xl mx-auto p-6">
-        <style>{`header{display:none!important}`}</style>
         <h1 className="text-2xl font-semibold">Menu</h1>
-        <p className="mt-4">You need to sign in to view this menu.</p>
-        <Link className="underline" href="/login?redirect=/menu">Go to login</Link>
+        <p className="mt-4">Missing menu or tenant.</p>
       </main>
     );
   }
 
-  // Get profile (nice to have, but don’t fail if null)
   const { data: prof } = await supabase
     .from("profiles")
     .select("tenant_id")
     .eq("id", userId)
     .maybeSingle();
-
-  // Fetch menu by id; rely on RLS for tenant scoping instead of hard eq filter
-  const { data: menu } = await supabase
-    .from("menus")
-    .select("id,name,tenant_id,created_at")
-    .eq("id", String(menuId ?? ""))
-    .maybeSingle();
-
-  if (!menu) {
+  const tenantId = prof?.tenant_id ?? null;
+  if (!tenantId) {
     return (
       <main className="max-w-4xl mx-auto p-6">
-        <style>{`header{display:none!important}`}</style>
         <h1 className="text-2xl font-semibold">Menu</h1>
-        <p className="mt-4">Missing menu or tenant.</p>
-        <Link className="underline" href="/menu">Back to Menu</Link>
+        <p className="mt-4">Missing tenant.</p>
       </main>
     );
   }
 
-  // Tenant header (business name + blurb)
-  const { data: t } = await supabase
-    .from("tenants")
-    .select("business_name,business_blurb,name")
-    .eq("id", menu.tenant_id)
-    .maybeSingle();
-  const bizName = String(t?.business_name ?? t?.name ?? "Kitchen Biz");
-  const bizBlurb = String(t?.business_blurb ?? "");
+  // Business header
+  let bizName = "Kitchen Biz";
+  let bizBlurb = "";
+  {
+    const { data: t } = await supabase
+      .from("tenants")
+      .select("business_name,business_blurb,name")
+      .eq("id", tenantId)
+      .maybeSingle();
+    if (t) {
+      bizName = String(t.business_name ?? t.name ?? "Kitchen Biz");
+      bizBlurb = String(t.business_blurb ?? "");
+    }
+  }
 
-  // Lines
+  // Menu
+  const { data: menu } = await supabase
+    .from("menus")
+    .select("id,name,created_at,tenant_id")
+    .eq("id", menuId)
+    .eq("tenant_id", tenantId)
+    .maybeSingle();
+  if (!menu) {
+    return (
+      <main className="max-w-4xl mx-auto p-6">
+        <h1 className="text-2xl font-semibold">Menu</h1>
+        <p className="mt-4">Menu not found.</p>
+      </main>
+    );
+  }
+
   const { data: lines } = await supabase
     .from("menu_recipes")
-    .select("recipe_id,servings,price")
+    .select("recipe_id,servings")
     .eq("menu_id", menu.id);
-
   const rids = (lines ?? []).map((l) => String(l.recipe_id));
 
-  // Recipes
   let recipes: RecipeRow[] = [];
+  let ingredients: IngredientLine[] = [];
   if (rids.length) {
     const { data: recs } = await supabase
       .from("recipes")
@@ -96,23 +106,18 @@ export default async function Page({
       )
       .in("id", rids);
     recipes = ((recs ?? []) as any[]).map((r) => ({ ...r, id: String(r.id) })) as RecipeRow[];
-  }
 
-  // Ingredients (include sub-recipe support)
-  let ingredients: IngredientLine[] = [];
-  if (rids.length) {
     const { data: ing } = await supabase
       .from("recipe_ingredients")
-      .select("recipe_id,item_id,sub_recipe_id,qty,unit")
+      .select("recipe_id,item_id,qty")
       .in("recipe_id", rids);
     ingredients = (ing ?? []) as IngredientLine[];
   }
 
-  // Item costs
   const { data: itemsRaw } = await supabase
     .from("inventory_items")
     .select("id,last_price,pack_to_base_factor")
-    .eq("tenant_id", menu.tenant_id); // menu’s tenant, not profile’s (covers any profile fetch hiccup)
+    .eq("tenant_id", tenantId);
   const itemCostById: Record<string, number> = {};
   (itemsRaw ?? []).forEach((it: any) => {
     itemCostById[String(it.id)] = costPerBaseUnit(
@@ -121,37 +126,40 @@ export default async function Page({
     );
   });
 
-  // Price rows
-  const costIndex = buildRecipeCostIndex(recipes, ingredients, itemCostById);
+  // Build printable rows
+  const ingByRecipe = new Map<string, IngredientLine[]>();
+  (ingredients ?? []).forEach((ing) => {
+    const key = String((ing as any).recipe_id ?? "");
+    if (!key) return;
+    if (!ingByRecipe.has(key)) ingByRecipe.set(key, []);
+    ingByRecipe.get(key)!.push(ing);
+  });
+
   const rows = recipes
     .map((rec) => {
-      const costEach = costIndex[rec.id] ?? 0;
-      const override = Number((lines ?? []).find((l) => String(l.recipe_id) === rec.id)?.price ?? 0);
-      const suggested = priceFromCost(costEach, margin);
-      const price = override > 0 ? override : suggested;
+      const parts = ingByRecipe.get(String(rec.id)) ?? [];
+      const costEach = costPerPortion(rec, parts, itemCostById);
+      const price = priceFromCost(costEach, margin);
       const descrRaw =
         String(rec.menu_description ?? rec.description ?? "").trim() ||
         `Classic ${String(rec.name ?? "item").toLowerCase()}.`;
-      return {
-        name: String(rec.name ?? "Untitled"),
-        descr: descrRaw,
-        price,
-      };
+      return { name: String(rec.name ?? "Untitled"), descr: descrRaw, price };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
 
   return (
     <main className="mx-auto p-8 max-w-4xl">
-      {/* Hide global top-nav in print view */}
-      <style>{`header{display:none!important}`}</style>
+      {/* Hide the global top-nav from the layout on this page */}
+      <style>{`header{display:none !important}`}</style>
 
-      <div className="mb-4 text-center">
+      {/* Centered header */}
+      <div className="text-center mb-4">
         <div className="text-xl font-semibold">{bizName}</div>
         {bizBlurb && <div className="text-sm opacity-80">{bizBlurb}</div>}
-        <h1 className="text-2xl font-semibold mt-2">{menu.name || "Menu"}</h1>
+        <h1 className="text-2xl font-semibold mt-2">{menu?.name || "Menu"}</h1>
       </div>
 
-      <section className="border rounded-lg p-6">
+      <section className="mt-2 border rounded-lg p-6">
         {rows.length === 0 ? (
           <p className="text-neutral-400">No recipes in this menu.</p>
         ) : (

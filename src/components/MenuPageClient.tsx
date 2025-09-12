@@ -15,7 +15,6 @@ type RecipeRow = RecipeLike;
 type Sel = Record<string, number>;
 type Overrides = Record<string, number>;
 type RoundEnding = ".00" | ".49" | ".79" | ".89" | ".95" | ".99";
-
 function applyEnding(n: number, ending: RoundEnding) {
   const whole = Math.floor(n);
   const cents = Number(ending.slice(1));
@@ -42,15 +41,16 @@ export default function MenuPageClient() {
       const { data: u } = await supabase.auth.getUser();
       const uid = u.user?.id;
       if (!uid) { setStatus("Sign in required."); return; }
-      const { data: prof } = await supabase
-        .from("profiles").select("tenant_id").eq("id", uid).maybeSingle();
+      const { data: prof } = await supabase.from("profiles").select("tenant_id").eq("id", uid).maybeSingle();
       const tId = prof?.tenant_id ?? null;
       if (!tId) { setStatus("No tenant."); return; }
       setTenantId(tId);
 
       const { data: ms } = await supabase
-        .from("menus").select("id,name,created_at")
-        .eq("tenant_id", tId).order("created_at", { ascending: false });
+        .from("menus")
+        .select("id,name,created_at")
+        .eq("tenant_id", tId)
+        .order("created_at", { ascending: false });
       const list = (ms ?? []) as MenuRow[];
       setMenus(list);
       setSelectedMenuId(list?.[0]?.id ?? null);
@@ -73,10 +73,7 @@ export default function MenuPageClient() {
         .eq("tenant_id", tId);
       const costMap: ItemCostById = {};
       (items ?? []).forEach((it: any) => {
-        costMap[it.id] = costPerBaseUnit(
-          Number(it.last_price ?? 0),
-          Number(it.pack_to_base_factor ?? 0)
-        );
+        costMap[it.id] = costPerBaseUnit(Number(it.last_price ?? 0), Number(it.pack_to_base_factor ?? 0));
       });
       setItemCostById(costMap);
     })();
@@ -106,23 +103,29 @@ export default function MenuPageClient() {
     [recipes, ingredients, itemCostById]
   );
 
-  function addRecipe(id: string) { setSel(s => ({ ...s, [id]: 1 })); }
+  function addRecipe(id: string) {
+    setSel(s => ({ ...s, [id]: 1 }));
+  }
   function removeRecipe(id: string) {
     setSel(s => { const c = { ...s }; delete c[id]; return c; });
     setOverrides(o => { const c = { ...o }; delete c[id]; return c; });
   }
-  function setOverride(id: string, n: number) { setOverrides(o => ({ ...o, [id]: Math.max(0, n) })); }
+  function setOverride(id: string, n: number) {
+    setOverrides(o => ({ ...o, [id]: Math.max(0, n) }));
+  }
 
   async function saveCurrentMenu() {
     try {
       if (!selectedMenuId) { alert("No menu selected"); return; }
       setBusy(true);
       const rows = Object.keys(sel).map(recipe_id => ({
-        menu_id: selectedMenuId!, recipe_id, servings: 1, price: overrides[recipe_id] ?? 0,
+        menu_id: selectedMenuId!,
+        recipe_id,
+        servings: 1,
+        price: overrides[recipe_id] ?? 0,
       }));
       if (rows.length) {
-        const { error } = await supabase
-          .from("menu_recipes").upsert(rows, { onConflict: "menu_id,recipe_id" });
+        const { error } = await supabase.from("menu_recipes").upsert(rows, { onConflict: "menu_id,recipe_id" });
         if (error) throw error;
       } else {
         await supabase.from("menu_recipes").delete().eq("menu_id", selectedMenuId!);
@@ -130,7 +133,9 @@ export default function MenuPageClient() {
       setStatus("Menu saved.");
     } catch (e: any) {
       alert(e.message ?? "Error saving menu");
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function createNewMenu() {
@@ -140,14 +145,19 @@ export default function MenuPageClient() {
       const name = window.prompt("Menu name:", "New Menu");
       if (!name) return;
       const { data: ins, error } = await supabase
-        .from("menus").insert({ tenant_id: tenantId, name })
-        .select("id,name,created_at").single();
+        .from("menus")
+        .insert({ tenant_id: tenantId, name })
+        .select("id,name,created_at")
+        .single();
       if (error) throw error;
       setMenus(m => [{ id: ins!.id, name: ins!.name, created_at: ins!.created_at }, ...m]);
       setSelectedMenuId(ins!.id);
-      setSel({}); setOverrides({}); setStatus("Menu created.");
-    } catch (e: any) { alert(e.message ?? "Error creating menu"); }
-    finally { setBusy(false); }
+      setSel({});
+      setOverrides({});
+      setStatus("Menu created.");
+    } catch (e: any) {
+      alert(e.message ?? "Error creating menu");
+    } finally { setBusy(false); }
   }
 
   async function saveAsMenu() {
@@ -160,21 +170,26 @@ export default function MenuPageClient() {
       const name = window.prompt("New menu name:", defaultName);
       if (!name) return;
       const { data: m, error: mErr } = await supabase
-        .from("menus").insert({ tenant_id: tenantId, name })
-        .select("id,name,created_at").single();
+        .from("menus")
+        .insert({ tenant_id: tenantId, name })
+        .select("id,name,created_at")
+        .single();
       if (mErr) throw mErr;
       const newId = m!.id as string;
       const rows = entries.map(recipe_id => ({
-        menu_id: newId, recipe_id, servings: 1, price: overrides[recipe_id] ?? 0,
+        menu_id: newId,
+        recipe_id,
+        servings: 1,
+        price: overrides[recipe_id] ?? 0,
       }));
-      const { error: rErr } = await supabase
-        .from("menu_recipes").upsert(rows, { onConflict: "menu_id,recipe_id" });
+      const { error: rErr } = await supabase.from("menu_recipes").upsert(rows, { onConflict: "menu_id,recipe_id" });
       if (rErr) throw rErr;
       setMenus(ms => [{ id: newId, name: m!.name, created_at: m!.created_at }, ...ms]);
       setSelectedMenuId(newId);
       setStatus("Menu saved.");
-    } catch (e: any) { alert(e.message ?? "Error saving as new menu"); }
-    finally { setBusy(false); }
+    } catch (e: any) {
+      alert(e.message ?? "Error saving as new menu");
+    } finally { setBusy(false); }
   }
 
   async function deleteCurrentMenu() {
@@ -183,19 +198,20 @@ export default function MenuPageClient() {
       setBusy(true);
       await supabase.from("menus").delete().eq("id", selectedMenuId);
       setMenus(ms => ms.filter(m => m.id !== selectedMenuId));
-      setSelectedMenuId(null); setSel({}); setOverrides({});
+      setSelectedMenuId(null);
+      setSel({});
+      setOverrides({});
       setStatus("Menu deleted.");
-    } catch (e: any) { alert(e.message ?? "Error deleting menu"); }
-    finally { setBusy(false); }
+    } catch (e: any) {
+      alert(e.message ?? "Error deleting menu");
+    } finally { setBusy(false); }
   }
 
   function openShare() {
     if (!selectedMenuId) { alert("No menu selected"); return; }
-    const pct = Math.round(margin * 100);
-    window.open(
-      `/menu/share?menu_id=${encodeURIComponent(selectedMenuId)}&margin=${pct / 100}`,
-      "_blank"
-    );
+    const pct = Math.round(margin * 100) / 100;
+    // 👉 go to the SHARE page, not the print view
+    window.open(`/menu/share?menu_id=${encodeURIComponent(selectedMenuId)}&margin=${pct}`, "_blank");
   }
 
   const ingByRecipe = useMemo(() => {
@@ -221,7 +237,6 @@ export default function MenuPageClient() {
       <h1 className="text-2xl font-semibold">Menu</h1>
       {status && <p className="text-xs text-emerald-400">{status}</p>}
 
-      {/* Top controls */}
       <div className="flex flex-wrap items-center gap-2">
         <form onSubmit={(e) => e.preventDefault()} className="flex items-center gap-2">
           <label className="text-sm">Saved menus:</label>
@@ -253,7 +268,6 @@ export default function MenuPageClient() {
                 className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Share</button>
       </div>
 
-      {/* Margin + rounding */}
       <div className="flex items-center gap-3">
         <label className="text-sm">Margin:</label>
         <input
@@ -282,11 +296,65 @@ export default function MenuPageClient() {
         </div>
       </div>
 
-      {/* Two panels (unchanged UI for pick + items) */}
-      {/* ... existing pick list and items UI unchanged ... */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Left panel omitted here for brevity – keep your existing content */}
-        {/* Right panel omitted here for brevity – keep your existing content */}
+        <div className="border rounded p-4">
+          <div className="font-semibold mb-2">Pick recipes</div>
+          <div className="space-y-2 max-h-[60vh] overflow-auto pr-2">
+            {recipes.map(r => (
+              <div key={r.id} className="flex items-center justify-between gap-2 text-sm">
+                <span>{r.name}</span>
+                {sel[r.id] ? (
+                  <button className="text-xs underline" onClick={() => removeRecipe(r.id)}>Remove</button>
+                ) : (
+                  <button className="text-xs underline" onClick={() => addRecipe(r.id)}>Add</button>
+                )}
+              </div>
+            ))}
+            {recipes.length === 0 && <div className="text-sm text-neutral-400">No recipes yet.</div>}
+          </div>
+        </div>
+
+        <div className="border rounded p-4">
+          <div className="font-semibold mb-2">Menu items</div>
+          <div className="grid grid-cols-[1fr_180px] gap-3 text-xs uppercase opacity-70 mb-2">
+            <div>Item</div>
+            <div className="text-right">Suggested price</div>
+          </div>
+          {Object.keys(sel).length === 0 ? (
+            <p className="text-sm text-neutral-400">Add recipes on the left.</p>
+          ) : (
+            <div className="space-y-3">
+              {Object.keys(sel)
+                .map(id => ({ id, name: recipes.find(r => r.id === id)?.name || "Untitled" }))
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map(row => {
+                  const costEach = costIndex[row.id] ?? 0;
+                  const suggestedBase = applyEnding(costEach / (margin || 0.3), ".99");
+                  const ov = Number(overrides[row.id]);
+                  const unitPrice = ov > 0 ? ov : suggestedBase;
+                  return (
+                    <div key={row.id} className="grid grid-cols-[1fr_180px] gap-3 items-center">
+                      <div>
+                        <div className="font-medium text-sm">{row.name}</div>
+                        <div className="text-xs opacity-70">{fmtUSD(costEach)} each (raw cost)</div>
+                      </div>
+                      <div className="relative">
+                        <span className="absolute left-2 top-1.5 text-xs opacity-70">$</span>
+                        <input
+                          className="border rounded pl-4 pr-2 p-1 text-right w-[180px] tabular-nums"
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={Number(unitPrice).toFixed(2)}
+                          onChange={(e) => setOverride(row.id, Number(e.target.value))}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          )}
+        </div>
       </div>
     </main>
   );
