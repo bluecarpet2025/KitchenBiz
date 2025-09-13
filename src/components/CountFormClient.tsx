@@ -1,5 +1,4 @@
 "use client";
-
 import { useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
@@ -20,9 +19,8 @@ export default function CountFormClient({
   expected: Record<string, number>;
   tenantId: string;
 }) {
-  // Keep a local copy so newly created items show up in selects immediately.
+  // Keep a local copy so newly created items show immediately.
   const [itemOptions, setItemOptions] = useState<Item[]>(items);
-
   const [note, setNote] = useState("");
   const [rows, setRows] = useState<FormItem[]>(
     items.map((it) => ({
@@ -38,12 +36,10 @@ export default function CountFormClient({
     () => rows.map((r) => toNum(r.counted) - (r.expected ?? 0)),
     [rows]
   );
-
   const hasNegativeCounts = useMemo(
     () => rows.some((r) => toNum(r.counted) < 0),
     [rows]
   );
-
   const allZero = useMemo(
     () => rows.every((r) => toNum(r.counted) === (r.expected ?? 0)),
     [rows]
@@ -52,7 +48,6 @@ export default function CountFormClient({
   async function quickAddNewItem(atIndex: number) {
     const name = window.prompt("New item name:");
     if (!name) return;
-
     const { data, error } = await supabase
       .from("inventory_items")
       .insert({
@@ -65,15 +60,12 @@ export default function CountFormClient({
       })
       .select("id,name,base_unit")
       .single();
-
     if (error || !data) {
       alert(error?.message ?? "Failed to create item");
       return;
     }
-
     // New item is immediately selectable.
     setItemOptions((prev) => [...prev, data]);
-
     const row: FormItem = {
       id: data.id,
       name: data.name,
@@ -81,19 +73,18 @@ export default function CountFormClient({
       expected: 0,
       counted: "",
     };
-
     setRows((prev) => {
       const copy = prev.slice();
       copy.splice(atIndex, 0, row);
       return copy;
     });
-
     setStatus(`Created "${data.name}".`);
   }
 
   async function commit() {
     try {
       // Guards
+      if (busy) return;
       if (hasNegativeCounts) {
         alert("You have one or more negative counts. Please fix before committing.");
         return;
@@ -112,7 +103,6 @@ export default function CountFormClient({
           delta: deltas[i],
         }))
         .filter((x) => Math.abs(x.delta) > 0);
-
       const totalChanged = previewLines.length;
       const sample = previewLines.slice(0, 5);
       const sampleText = sample
@@ -130,7 +120,6 @@ export default function CountFormClient({
           : `You are about to commit this count.\n\nLines that will change: ${totalChanged}\n\nPreview:\n${sampleText}${
               totalChanged > sample.length ? `\n…and ${totalChanged - sample.length} more` : ""
             }\n\nProceed?`;
-
       if (!window.confirm(msg)) return;
 
       setBusy(true);
@@ -145,7 +134,7 @@ export default function CountFormClient({
       if (cErr) throw cErr;
       const countId = c!.id as string;
 
-      // 2) lines + adjustments
+      // 2) lines (+ adjustments)
       const lines = rows.map((r) => {
         const exp = Number(r.expected || 0);
         const cnt = toNum(r.counted);
@@ -162,9 +151,7 @@ export default function CountFormClient({
         counted_base: l.counted,
         delta_base: l.delta,
       }));
-      const { error: lErr } = await supabase
-        .from("inventory_count_lines")
-        .insert(lineRows);
+      const { error: lErr } = await supabase.from("inventory_count_lines").insert(lineRows);
       if (lErr) throw lErr;
 
       // 4) adjustments for non-zero deltas
@@ -179,13 +166,11 @@ export default function CountFormClient({
           note,
         }));
       if (adjRows.length) {
-        const { error: aErr } = await supabase
-          .from("inventory_adjustments")
-          .insert(adjRows);
+        const { error: aErr } = await supabase.from("inventory_adjustments").insert(adjRows);
         if (aErr) throw aErr;
       }
 
-      // ✅ Success: force an acknowledgment, then redirect to the detail page.
+      // ✅ Success: acknowledge, then redirect to detail page.
       alert("Count committed. Adjustments posted.");
       window.location.href = `/inventory/counts/${countId}`;
     } catch (err: any) {
@@ -222,7 +207,6 @@ export default function CountFormClient({
             {rows.map((r, idx) => {
               const countedNum = toNum(r.counted);
               const isNegative = countedNum < 0;
-
               return (
                 <tr key={`${r.id}-${idx}`} className="border-t">
                   <td className="p-2">
@@ -263,11 +247,9 @@ export default function CountFormClient({
                       </button>
                     </div>
                   </td>
-
                   <td className="p-2 text-right tabular-nums">
                     {(r.expected ?? 0).toFixed(3)}
                   </td>
-
                   <td className="p-2">
                     <input
                       className={`w-full border rounded px-2 py-1 text-right ${
@@ -282,6 +264,7 @@ export default function CountFormClient({
                           prev.map((x, i) => (i === idx ? { ...x, counted: v } : x))
                         );
                       }}
+                      disabled={busy}
                     />
                     {isNegative && (
                       <div className="mt-1 text-xs text-red-400">
@@ -289,7 +272,6 @@ export default function CountFormClient({
                       </div>
                     )}
                   </td>
-
                   <td
                     className={`p-2 text-right tabular-nums ${
                       deltas[idx] < 0
@@ -299,19 +281,14 @@ export default function CountFormClient({
                         : ""
                     }`}
                   >
-                    {Number.isFinite(deltas[idx])
-                      ? deltas[idx].toFixed(3)
-                      : "0.000"}
+                    {Number.isFinite(deltas[idx]) ? deltas[idx].toFixed(3) : "0.000"}
                   </td>
-
                   <td className="p-2">{r.base_unit ?? ""}</td>
-
                   <td className="p-2">
                     <button
                       className="text-xs underline"
-                      onClick={() =>
-                        setRows((prev) => prev.filter((_, i) => i !== idx))
-                      }
+                      onClick={() => setRows((prev) => prev.filter((_, i) => i !== idx))}
+                      disabled={busy}
                     >
                       Remove
                     </button>
@@ -327,7 +304,7 @@ export default function CountFormClient({
         <button
           className="px-3 py-2 border rounded-md hover:bg-neutral-900"
           onClick={() => {
-            if (!itemOptions.length) return;
+            if (!itemOptions.length || busy) return;
             const first = itemOptions[0];
             setRows((prev) => [
               ...prev,
@@ -338,16 +315,16 @@ export default function CountFormClient({
               } as FormItem,
             ]);
           }}
+          disabled={busy}
         >
           + Add line
         </button>
-
         <button
           disabled={busy}
           onClick={commit}
           className="px-4 py-2 bg-white text-black rounded font-medium disabled:opacity-50"
         >
-          Commit Count
+          {busy ? "Saving…" : "Commit Count"}
         </button>
       </div>
 

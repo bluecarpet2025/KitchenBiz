@@ -1,5 +1,5 @@
-// src/components/MenuPageClient.tsx
 "use client";
+
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -25,10 +25,10 @@ function applyEnding(n: number, ending: RoundEnding) {
   return candidate < n ? candidate + 1 : candidate;
 }
 
-export default function MenuPageClient() {
+export default function MenuPageClient({ initialTenantId }: { initialTenantId: string | null }) {
   const router = useRouter();
 
-  const [tenantId, setTenantId] = useState<string | null>(null);
+  const [tenantId, setTenantId] = useState<string | null>(initialTenantId);
   const [menus, setMenus] = useState<MenuRow[]>([]);
   const [selectedMenuId, setSelectedMenuId] = useState<string | null>(null);
   const [recipes, setRecipes] = useState<RecipeRow[]>([]);
@@ -41,23 +41,18 @@ export default function MenuPageClient() {
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // boot: auth + lists
+  // boot: confirm auth, then hydrate lists using the server-passed tenant
   useEffect(() => {
     (async () => {
       const { data: u } = await supabase.auth.getUser();
-      const uid = u.user?.id;
-      if (!uid) { setStatus("Sign in required."); return; }
-      const { data: prof } = await supabase
-        .from("profiles").select("tenant_id").eq("id", uid).maybeSingle();
-      const tId = prof?.tenant_id ?? null;
-      if (!tId) { setStatus("No tenant."); return; }
-      setTenantId(tId);
+      if (!u.user?.id) { setStatus("Sign in required."); return; }
+      if (!tenantId) { setStatus("No tenant."); return; }
 
       // Menus
       const { data: ms } = await supabase
         .from("menus")
         .select("id,name,created_at")
-        .eq("tenant_id", tId)
+        .eq("tenant_id", tenantId)
         .order("created_at", { ascending: false });
       const list = (ms ?? []) as MenuRow[];
       setMenus(list);
@@ -67,11 +62,11 @@ export default function MenuPageClient() {
       const { data: recs } = await supabase
         .from("recipes")
         .select("id,name,batch_yield_qty,batch_yield_unit,yield_pct,menu_description")
-        .eq("tenant_id", tId)
+        .eq("tenant_id", tenantId)
         .order("name");
       setRecipes((recs ?? []) as RecipeRow[]);
 
-      // Ingredients (now include sub_recipe_id & unit)
+      // Ingredients (include sub_recipe_id & unit)
       const { data: ing } = await supabase
         .from("recipe_ingredients")
         .select("id,recipe_id,item_id,sub_recipe_id,qty,unit");
@@ -81,7 +76,7 @@ export default function MenuPageClient() {
       const { data: items } = await supabase
         .from("inventory_items")
         .select("id,last_price,pack_to_base_factor")
-        .eq("tenant_id", tId);
+        .eq("tenant_id", tenantId);
       const costMap: ItemCostById = {};
       (items ?? []).forEach((it: any) => {
         costMap[it.id] = costPerBaseUnit(
@@ -91,7 +86,7 @@ export default function MenuPageClient() {
       });
       setItemCostById(costMap);
     })();
-  }, []);
+  }, [tenantId]);
 
   // load lines for current menu
   useEffect(() => {
@@ -295,6 +290,7 @@ export default function MenuPageClient() {
         />
         <span className="text-sm">{Math.round(margin * 100)}%</span>
         <span className="text-xs opacity-70">(affects suggested selling price)</span>
+
         <div className="ml-6 flex items-center gap-2">
           <span className="text-sm">Round to:</span>
           <select
@@ -339,7 +335,6 @@ export default function MenuPageClient() {
             <div>Item</div>
             <div className="text-right">Suggested price</div>
           </div>
-
           {Object.keys(sel).length === 0 ? (
             <p className="text-sm text-neutral-400">Add recipes on the left.</p>
           ) : (
