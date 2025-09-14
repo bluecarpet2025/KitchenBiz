@@ -1,60 +1,51 @@
 "use client";
+
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase";
 
 export default function DeleteRecipeButton({
-  recipeId,
-  redirectTo = "/recipes",
+  id,
+  redirectTo,
+  label = "Delete",
 }: {
-  recipeId: string;
-  redirectTo?: string;
+  id: string;
+  redirectTo?: string; // e.g. "/recipes"
+  label?: string;
 }) {
   const [busy, setBusy] = useState(false);
-  const router = useRouter();
 
-  async function onClick() {
-    if (busy) return;
-    const ok = window.confirm("Delete this recipe? This cannot be undone.");
+  async function onDelete() {
+    if (!id) return;
+    const ok = window.confirm(
+      "This will permanently delete the recipe and its ingredient lines and remove it from any menus. This cannot be undone.\n\nProceed?"
+    );
     if (!ok) return;
 
     try {
       setBusy(true);
-      const res = await fetch(`/recipes/${recipeId}/delete`, {
-        method: "POST",
-        // ensure cookies are sent (default for same-origin, but explicit is fine)
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-      });
+      const { error } = await supabase.from("recipes").delete().eq("id", id);
+      if (error) throw error;
 
-      let msg = "";
-      try {
-        const j = await res.json();
-        if (!res.ok || j?.ok === false) {
-          msg = j?.error || "Delete failed";
-          throw new Error(msg);
-        }
-      } catch (jsonErr: any) {
-        // If parsing failed, show status text
-        if (!res.ok && !msg) {
-          throw new Error(res.statusText || "Delete failed");
-        }
+      if (redirectTo) {
+        window.location.assign(redirectTo);
+      } else {
+        window.location.reload();
       }
-
-      router.push(redirectTo);
     } catch (e: any) {
-      alert(e?.message || "Delete failed");
+      alert(e?.message ?? "Failed to delete recipe");
+    } finally {
       setBusy(false);
     }
   }
 
   return (
     <button
-      onClick={onClick}
+      onClick={onDelete}
       disabled={busy}
-      className="px-3 py-1.5 border rounded-md text-sm hover:bg-red-950 text-red-300 disabled:opacity-50"
+      className="px-3 py-2 border rounded-md text-sm hover:bg-red-900/20 disabled:opacity-50"
       title="Delete recipe"
     >
-      {busy ? "Deleting…" : "Delete"}
+      {busy ? "Deleting…" : label}
     </button>
   );
 }

@@ -1,8 +1,8 @@
-// src/app/recipes/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { getEffectiveTenant } from "@/lib/effective-tenant";
 import { normYieldFraction } from "@/lib/format";
+import DeleteRecipeButton from "@/components/DeleteRecipeButton";
 
 export const dynamic = "force-dynamic";
 
@@ -14,12 +14,13 @@ type RecipeRow = {
   batch_yield_unit: string | null;
   yield_pct: number | null;
 };
+
 type IngredientRow = {
   id: string;
   recipe_id: string;
   item_id: string | null;
   sub_recipe_id: string | null;
-  qty: number | null;   // quantity per ONE portion of the parent recipe
+  qty: number | null;
   unit: string | null;
 };
 
@@ -37,13 +38,13 @@ function buildRequirementsIndex(
   recipes: RecipeRow[],
   linesByRecipe: Map<string, IngredientRow[]>
 ): Record<string, Record<string, number>> {
-  const recipeById = new Map(recipes.map(r => [r.id, r]));
+  const recipeById = new Map(recipes.map((r) => [r.id, r]));
   const memo = new Map<string, Record<string, number>>();
   const visiting = new Set<string>();
   const MAX_DEPTH = 32;
 
-  function addInto(dst: Record<string, number>, src: Record<string, number>, multiplier = 1) {
-    for (const [k, v] of Object.entries(src)) dst[k] = (dst[k] ?? 0) + v * multiplier;
+  function addInto(dst: Record<string, number>, src: Record<string, number>, m = 1) {
+    for (const [k, v] of Object.entries(src)) dst[k] = (dst[k] ?? 0) + v * m;
   }
 
   function dfs(recipeId: string, depth = 0): Record<string, number> {
@@ -54,7 +55,6 @@ function buildRequirementsIndex(
       return zero;
     }
     visiting.add(recipeId);
-
     const out: Record<string, number> = {};
     const parts = linesByRecipe.get(recipeId) ?? [];
     for (const line of parts) {
@@ -69,14 +69,10 @@ function buildRequirementsIndex(
         addInto(out, subReq, qty);
       }
     }
-
-    // Normalize yield to 0..1 before using it
     const rawYield = recipeById.get(recipeId)?.yield_pct ?? 1;
     const y = normYieldFraction(rawYield);
     const scale = y > 0 ? 1 / y : 1;
-    if (scale !== 1) {
-      for (const k of Object.keys(out)) out[k] *= scale;
-    }
+    if (scale !== 1) for (const k of Object.keys(out)) out[k] *= scale;
 
     memo.set(recipeId, out);
     visiting.delete(recipeId);
@@ -89,18 +85,22 @@ function buildRequirementsIndex(
 
 export default async function RecipesPage() {
   const supabase = await createServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
   if (!user) {
     return (
       <main className="max-w-5xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Recipes</h1>
         <p className="mt-4">Sign in required.</p>
-        <Link href="/login?redirect=/recipes" className="underline">Go to login</Link>
+        <Link href="/login?redirect=/recipes" className="underline">
+          Go to login
+        </Link>
       </main>
     );
   }
 
-  // ✅ Use demo tenant when opted-in
   const tenantId = await getEffectiveTenant(supabase);
   if (!tenantId) {
     return (
@@ -119,7 +119,7 @@ export default async function RecipesPage() {
   if (rErr) throw rErr;
   const recipes = (recipesRaw ?? []) as RecipeRow[];
 
-  const recipeIds = recipes.map(r => r.id);
+  const recipeIds = recipes.map((r) => r.id);
   let ingredients: IngredientRow[] = [];
   if (recipeIds.length) {
     const { data: ingRaw, error: iErr } = await supabase
@@ -153,7 +153,6 @@ export default async function RecipesPage() {
     });
     onHandRows = (ohOld ?? []).length;
   }
-
   const onHandEmpty = onHandRows === 0;
 
   const linesByRecipe = indexIngredients(ingredients);
@@ -163,12 +162,7 @@ export default async function RecipesPage() {
     const req = reqIndex[rec.id] ?? {};
     const itemIds = Object.keys(req);
     if (itemIds.length === 0) {
-      return {
-        id: rec.id,
-        name: rec.name ?? "Untitled",
-        created_at: rec.created_at,
-        makeable: 0,
-      };
+      return { id: rec.id, name: rec.name ?? "Untitled", created_at: rec.created_at, makeable: 0 };
     }
     let minPossible = Infinity;
     for (const itId of itemIds) {
@@ -179,22 +173,14 @@ export default async function RecipesPage() {
       if (possible < minPossible) minPossible = possible;
     }
     const makeable = Number.isFinite(minPossible) ? minPossible : 0;
-    return {
-      id: rec.id,
-      name: rec.name ?? "Untitled",
-      created_at: rec.created_at,
-      makeable,
-    };
+    return { id: rec.id, name: rec.name ?? "Untitled", created_at: rec.created_at, makeable };
   });
 
   return (
     <main className="max-w-5xl mx-auto p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Recipes</h1>
-        <Link
-          href="/recipes/new"
-          className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-        >
+        <Link href="/recipes/new" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
           New Recipe
         </Link>
       </div>
@@ -210,7 +196,7 @@ export default async function RecipesPage() {
             </tr>
           </thead>
           <tbody>
-            {rows.map(r => (
+            {rows.map((r) => (
               <tr key={r.id} className="border-t">
                 <td className="p-2">
                   <Link href={`/recipes/${r.id}`} className="underline">
@@ -221,8 +207,11 @@ export default async function RecipesPage() {
                 <td className="p-2">
                   {r.created_at ? new Date(r.created_at).toLocaleDateString() : "-"}
                 </td>
-                <td className="p-2">
-                  <Link href={`/recipes/${r.id}?dup=1`} className="underline">Duplicate</Link>
+                <td className="p-2 flex gap-3">
+                  <Link href={`/recipes/${r.id}?dup=1`} className="underline">
+                    Duplicate
+                  </Link>
+                  <DeleteRecipeButton id={r.id} />
                 </td>
               </tr>
             ))}
@@ -238,13 +227,20 @@ export default async function RecipesPage() {
       </div>
 
       <p className="text-xs mt-3 opacity-70">
-        <strong>Makeable</strong> expands sub-recipes into base items and uses your current on-hand (base units) to estimate how many portions you can prep now.
+        <strong>Makeable</strong> expands sub-recipes into base items and uses your
+        current on-hand (base units) to estimate how many portions you can prep now.
       </p>
       {onHandEmpty && (
         <p className="text-xs mt-1 text-amber-300">
           No on-hand data found for your items. Add stock in{" "}
-          <Link href="/inventory/counts/new" className="underline">Inventory → Counts</Link> or{" "}
-          <Link href="/inventory/purchase" className="underline">Inventory → Purchase</Link>.
+          <Link href="/inventory/counts/new" className="underline">
+            Inventory → Counts
+          </Link>{" "}
+          or{" "}
+          <Link href="/inventory/purchase" className="underline">
+            Inventory → Purchase
+          </Link>
+          .
         </p>
       )}
     </main>

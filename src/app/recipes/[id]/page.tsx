@@ -2,6 +2,7 @@ import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { fmtUSD, costPerBaseUnit } from "@/lib/costing";
 import { fmtQty } from "@/lib/format";
+import DeleteRecipeButton from "@/components/DeleteRecipeButton";
 
 export const dynamic = "force-dynamic";
 
@@ -52,6 +53,7 @@ function pick(obj: Record<string, any> | null | undefined, ...keys: string[]) {
   }
   return undefined;
 }
+
 function pickCost(c?: AvgCost | null): number {
   if (!c) return 0;
   return Number(
@@ -97,6 +99,7 @@ export default async function RecipeDetailPage(props: any) {
       console.error("recipes fetch error:", recipeErr);
       recipeErrMsg = recipeErr.message ?? "Failed to fetch recipe.";
     }
+
     recipe = (recipeRow as unknown as Recipe) ?? null;
 
     if (!recipe && !recipeErrMsg) {
@@ -188,37 +191,7 @@ export default async function RecipeDetailPage(props: any) {
     );
   }
 
-  // 5) On-hand map (try new view, fall back to old)
-  const onhandMap = new Map<string, number>();
-  if (itemIds.length) {
-    let loaded = false;
-    try {
-      const { data: ohNew, error: ohErr } = await supabase
-        .from("v_inventory_on_hand")
-        .select("item_id,qty_on_hand_base")
-        .in("item_id", itemIds);
-      if (ohErr) throw ohErr;
-      (ohNew ?? []).forEach((r: any) =>
-        onhandMap.set(String(r.item_id), Number(r.qty_on_hand_base ?? 0))
-      );
-      loaded = true;
-    } catch (_e) {
-      // fall through
-    }
-    if (!loaded) {
-      const { data: ohOld, error: ohOldErr } = await supabase
-        .from("v_item_on_hand")
-        .select("item_id,on_hand_base")
-        .in("item_id", itemIds);
-      if (ohOldErr) console.error("on-hand fallback error:", ohOldErr);
-      (ohOld ?? []).forEach((r: any) =>
-        onhandMap.set(String(r.item_id), Number(r.on_hand_base ?? 0))
-      );
-    }
-  }
-
-  // 6) Present rows (+ on-hand + per-line cap)
-  let recipeCap = Infinity;
+  // 5) Present rows (avg cost with fallback to last_price/pack_to_base_factor)
   const rows = ingredients.map((ing) => {
     const item = itemsById.get(String(ing.item_id)) ?? {
       id: String(ing.item_id ?? ""),
@@ -227,7 +200,7 @@ export default async function RecipeDetailPage(props: any) {
       last_price: 0,
       pack_to_base_factor: 0,
     };
-    const qty = Number(ing.qty ?? 0); // assumed base units
+    const qty = Number(ing.qty ?? 0);
     const unit = (ing.unit ?? item.base_unit ?? "") as string;
 
     const avg = pickCost(costByItem.get(String(ing.item_id)));
@@ -238,10 +211,6 @@ export default async function RecipeDetailPage(props: any) {
     const unitCost = avg > 0 ? avg : fallback;
     const lineCost = qty * (unitCost || 0);
 
-    const onHand = onhandMap.get(String(ing.item_id)) ?? 0;
-    const cap = qty > 0 ? Math.floor(onHand / qty) : Infinity;
-    if (Number.isFinite(cap)) recipeCap = Math.min(recipeCap, cap);
-
     return {
       itemName: item.name ?? "(item)",
       unit,
@@ -249,9 +218,6 @@ export default async function RecipeDetailPage(props: any) {
       unitCost,
       lineCost,
       itemId: String(ing.item_id ?? ""),
-      onHand,
-      baseUnit: item.base_unit ?? "",
-      cap,
     };
   });
 
@@ -265,13 +231,6 @@ export default async function RecipeDetailPage(props: any) {
   );
 
   rows.sort((a, b) => a.itemName.localeCompare(b.itemName));
-
-  const makeableNow =
-    rows.length === 0
-      ? 0
-      : Number.isFinite(recipeCap)
-      ? Math.max(0, recipeCap)
-      : 0;
 
   return (
     <main className="max-w-6xl mx-auto p-6 space-y-6">
@@ -290,11 +249,12 @@ export default async function RecipeDetailPage(props: any) {
           >
             Back to recipes
           </Link>
+          <DeleteRecipeButton id={recipe.id} redirectTo="/recipes" />
         </div>
       </div>
 
       {/* Meta cards */}
-      <div className="grid md:grid-cols-4 gap-3">
+      <div className="grid md:grid-cols-3 gap-3">
         <div className="border rounded-lg p-3">
           <div className="text-xs opacity-75">YIELD</div>
           <div className="text-xl font-semibold tabular-nums">
@@ -312,10 +272,6 @@ export default async function RecipeDetailPage(props: any) {
           <div className="text-xs opacity-75">EST. COST (SUM)</div>
           <div className="text-xl font-semibold">{fmtUSD(totals.totalCost)}</div>
         </div>
-        <div className="border rounded-lg p-3">
-          <div className="text-xs opacity-75">MAKEABLE NOW</div>
-          <div className="text-xl font-semibold tabular-nums">{makeableNow}</div>
-        </div>
       </div>
 
       {/* Ingredients table */}
@@ -326,7 +282,6 @@ export default async function RecipeDetailPage(props: any) {
               <th className="p-2 text-left">Item</th>
               <th className="p-2 text-right">Qty</th>
               <th className="p-2 text-left">Unit</th>
-              <th className="p-2 text-right">On hand</th>
               <th className="p-2 text-right">$ / unit</th>
               <th className="p-2 text-right">Line cost</th>
             </tr>
@@ -338,9 +293,6 @@ export default async function RecipeDetailPage(props: any) {
                 <td className="p-2 text-right tabular-nums">{fmtQty(r.qty)}</td>
                 <td className="p-2">{r.unit}</td>
                 <td className="p-2 text-right tabular-nums">
-                  {fmtQty(r.onHand)} {r.baseUnit}
-                </td>
-                <td className="p-2 text-right tabular-nums">
                   {fmtUSD(r.unitCost)}
                 </td>
                 <td className="p-2 text-right tabular-nums">{fmtUSD(r.lineCost)}</td>
@@ -348,7 +300,7 @@ export default async function RecipeDetailPage(props: any) {
             ))}
             {rows.length === 0 && (
               <tr>
-                <td className="p-3 text-neutral-400" colSpan={6}>
+                <td className="p-3 text-neutral-400" colSpan={5}>
                   No ingredients found for this recipe.
                 </td>
               </tr>
@@ -360,7 +312,6 @@ export default async function RecipeDetailPage(props: any) {
               <td className="p-2 text-right font-medium tabular-nums">
                 {fmtQty(totals.totalQty)}
               </td>
-              <td className="p-2" />
               <td className="p-2" />
               <td className="p-2" />
               <td className="p-2 text-right font-medium tabular-nums">
