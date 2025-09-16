@@ -1,97 +1,172 @@
-import Link from 'next/link';
-import { createServerClient } from '@/lib/supabase/server';
+import Link from "next/link";
+import { createServerClient } from "@/lib/supabase/server";
+import { getEffectiveTenant } from "@/lib/effective-tenant";
+import { fmtUSD } from "@/lib/costing";
 
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic";
 
-export default async function ReceiptDetail({ params }: { params: { id: string } }) {
+type Receipt = {
+  id: string;
+  tenant_id: string;
+  item_id: string;
+  qty_base: number | null;
+  total_cost_usd: number | null;
+  created_at: string | null;
+  note: string | null;
+  photo_path: string | null;
+  expires_on: string | null;
+};
+
+type Item = { id: string; name: string | null; base_unit: string | null };
+
+export default async function ReceiptDetailPage(props: any) {
+  // Normalize params to support both Promise and plain object forms
+  const raw = props?.params;
+  const params: { id?: string } =
+    raw && typeof raw.then === "function" ? await raw : raw ?? {};
+  const id = params?.id;
+
   const supabase = await createServerClient();
 
-  const { data: doc } = await supabase
-    .from('inventory_receipt_docs')
-    .select('*')
-    .eq('id', params.id)
-    .maybeSingle();
-
-  // Lines: either doc-linked or legacy “single-line receipt” with r.id = params.id
-  const { data: linesDoc } = await supabase
-    .from('inventory_receipts')
-    .select('id,item_id,qty_base,total_cost_usd,note,created_at,purchased_at,photo_path')
-    .eq('receipt_doc_id', params.id)
-    .order('created_at');
-
-  let lines = linesDoc ?? [];
-  if (!doc) {
-    const { data: legacy } = await supabase
-      .from('inventory_receipts')
-      .select('id,item_id,qty_base,total_cost_usd,note,created_at,purchased_at,photo_path')
-      .eq('id', params.id)
-      .limit(1);
-    lines = legacy ?? [];
+  // Auth guard (keeps layout visible instead of hard 404)
+  const { data: au } = await supabase.auth.getUser();
+  const user = au.user ?? null;
+  if (!user) {
+    return (
+      <main className="max-w-5xl mx-auto p-6">
+        <h1 className="text-2xl font-semibold">Receipt</h1>
+        <p className="mt-4">Sign in required.</p>
+        <Link className="underline" href="/login?redirect=/inventory/receipts">
+          Go to login
+        </Link>
+      </main>
+    );
   }
 
-  const itemIds = Array.from(new Set(lines.map(l => l.item_id)));
-  const { data: items } = await supabase
-    .from('inventory_items')
-    .select('id,name,base_unit')
-    .in('id', itemIds.length ? itemIds : ['00000000-0000-0000-0000-000000000000']);
-  const nameMap = new Map((items ?? []).map(i => [i.id, i.name as string]));
+  const tenantId = await getEffectiveTenant(supabase);
+  if (!tenantId) {
+    return (
+      <main className="max-w-5xl mx-auto p-6">
+        <h1 className="text-2xl font-semibold">Receipt</h1>
+        <p className="mt-4">Profile missing tenant.</p>
+      </main>
+    );
+  }
 
-  const total = (lines ?? []).reduce((s, l:any) => s + Number(l.total_cost_usd ?? 0), 0);
-  const purchasedAt = doc?.purchased_at ?? lines[0]?.purchased_at ?? lines[0]?.created_at ?? null;
+  if (!id) {
+    return (
+      <main className="max-w-5xl mx-auto p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h1 className="text-2xl font-semibold">Receipt</h1>
+          <Link href="/inventory/receipts" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
+            Back to receipts
+          </Link>
+        </div>
+        <div className="border rounded-lg p-4 bg-neutral-950">
+          Missing receipt id.
+        </div>
+      </main>
+    );
+  }
+
+  // Fetch receipt (scoped to tenant)
+  const { data: rec, error: recErr } = await supabase
+    .from("inventory_receipts")
+    .select(
+      "id,tenant_id,item_id,qty_base,total_cost_usd,created_at,note,photo_path,expires_on"
+    )
+    .eq("tenant_id", tenantId)
+    .eq("id", id)
+    .maybeSingle();
+
+  if (recErr || !rec) {
+    return (
+      <main className="max-w-5xl mx-auto p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h1 className="text-2xl font-semibold">Receipt</h1>
+          <Link href="/inventory/receipts" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
+            Back to receipts
+          </Link>
+        </div>
+        <div className="border rounded-lg p-4 bg-neutral-950">
+          {recErr?.message ?? "Receipt not found or you don’t have access."}
+        </div>
+      </main>
+    );
+  }
+
+  // Get item name
+  let item: Item | null = null;
+  if (rec.item_id) {
+    const { data: it } = await supabase
+      .from("inventory_items")
+      .select("id,name,base_unit")
+      .eq("id", rec.item_id)
+      .maybeSingle();
+    item = (it as Item) ?? null;
+  }
+
+  const purchased = rec.created_at
+    ? new Date(rec.created_at).toLocaleDateString()
+    : "—";
+  const photoUrl = rec.photo_path
+    ? `/api/receipt-photo?path=${encodeURIComponent(rec.photo_path)}`
+    : null;
 
   return (
     <main className="max-w-5xl mx-auto p-6 space-y-4">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Receipt</h1>
-          <div className="text-sm opacity-80">
-            {purchasedAt ? new Date(purchasedAt).toLocaleString() : '—'}
-            {doc?.vendor ? ` • ${doc.vendor}` : ''}
-          </div>
-          {(doc?.note) && <div className="text-sm opacity-80">{doc.note}</div>}
-        </div>
-        <Link href="/inventory/receipts" className="px-3 py-2 border rounded text-sm hover:bg-neutral-900">Back</Link>
+        <h1 className="text-2xl font-semibold">Receipt</h1>
+        <Link
+          href="/inventory/receipts"
+          className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+        >
+          Back to receipts
+        </Link>
       </div>
 
-      <div className="grid md:grid-cols-3 gap-3">
-        <div className="border rounded p-3">
-          <div className="text-xs opacity-75">LINES</div>
-          <div className="text-xl font-semibold">{(lines ?? []).length}</div>
+      <div className="grid md:grid-cols-2 gap-4">
+        <div className="border rounded-lg p-4">
+          <div className="text-sm opacity-75">Item</div>
+          <div className="text-lg font-medium">{item?.name ?? rec.item_id}</div>
         </div>
-        <div className="border rounded p-3">
-          <div className="text-xs opacity-75">TOTAL</div>
-          <div className="text-xl font-semibold">${total.toFixed(2)}</div>
+        <div className="border rounded-lg p-4">
+          <div className="text-sm opacity-75">Purchased</div>
+          <div className="text-lg font-medium">{purchased}</div>
         </div>
-        <div className="border rounded p-3">
-          <div className="text-xs opacity-75">PHOTO</div>
-          <div className="mt-2">
-            {doc?.photo_url ? <a className="underline" href={doc.photo_url}>Open</a> : '—'}
+        <div className="border rounded-lg p-4">
+          <div className="text-sm opacity-75">Qty (base)</div>
+          <div className="text-lg font-medium tabular-nums">
+            {Number(rec.qty_base ?? 0).toLocaleString()}
           </div>
+        </div>
+        <div className="border rounded-lg p-4">
+          <div className="text-sm opacity-75">Cost (total)</div>
+          <div className="text-lg font-medium tabular-nums">
+            {fmtUSD(Number(rec.total_cost_usd ?? 0))}
+          </div>
+        </div>
+        <div className="border rounded-lg p-4">
+          <div className="text-sm opacity-75">Expires on</div>
+          <div className="text-lg font-medium">
+            {rec.expires_on ? new Date(rec.expires_on).toLocaleDateString() : "—"}
+          </div>
+        </div>
+        <div className="border rounded-lg p-4">
+          <div className="text-sm opacity-75">Note</div>
+          <div className="text-lg">{rec.note ?? "—"}</div>
         </div>
       </div>
 
-      <div className="border rounded overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-neutral-900/60">
-            <tr>
-              <th className="p-2 text-left">Item</th>
-              <th className="p-2 text-right">Qty (base)</th>
-              <th className="p-2 text-right">Total $</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(lines ?? []).map((l:any) => (
-              <tr key={l.id} className="border-t">
-                <td className="p-2">{nameMap.get(l.item_id) ?? l.item_id}</td>
-                <td className="p-2 text-right tabular-nums">{Number(l.qty_base ?? 0).toFixed(3)}</td>
-                <td className="p-2 text-right tabular-nums">${Number(l.total_cost_usd ?? 0).toFixed(2)}</td>
-              </tr>
-            ))}
-            {(lines ?? []).length === 0 && (
-              <tr><td colSpan={3} className="p-3 text-neutral-400">No lines.</td></tr>
-            )}
-          </tbody>
-        </table>
+      <div className="border rounded-lg p-4">
+        <div className="text-sm opacity-75 mb-2">Photo</div>
+        {photoUrl ? (
+          <a className="underline" href={photoUrl} target="_blank">
+            View photo
+          </a>
+        ) : (
+          <div className="text-neutral-400">—</div>
+        )}
       </div>
     </main>
   );
