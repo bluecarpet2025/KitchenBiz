@@ -25,14 +25,11 @@ export default async function TopNav() {
         <div className="flex items-center gap-6">
           <Link href="/" className="font-semibold">Kitchen Biz</Link>
 
+          {/* ORDER: Inventory | Recipes | Menu | Financials | Staff | Dashboard */}
           <Link href="/inventory" className="hover:underline">Inventory</Link>
           <Link href="/recipes" className="hover:underline">Recipes</Link>
           <Link href="/menu" className="hover:underline">Menu</Link>
-
-          {/* New: Financials (replaces Sales/Expenses at top-level) */}
           <Link href="/financial" className="hover:underline">Financials</Link>
-
-          {/* Planned sections */}
           <Link href="/staff" className="hover:underline">Staff</Link>
           <Link href="/dashboard" className="hover:underline">Dashboard</Link>
         </div>
