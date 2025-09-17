@@ -5,24 +5,11 @@ import { fmtUSD } from "@/lib/costing";
 
 export const dynamic = "force-dynamic";
 
-type SalesDay = {
-  day: string;          // ISO date
-  orders: number | null;
-  qty: number | null;
-  revenue: number | null;
-};
+type SalesDay = { day: string; orders: number | null; qty: number | null; revenue: number | null; };
+type ExpenseRow = { occurred_at: string | null; amount_usd: number | null; };
 
-type ExpenseRow = {
-  occurred_at: string | null; // ISO date/time
-  amount_usd: number | null;
-};
-
-function startOfMonth(d = new Date()) {
-  return new Date(d.getFullYear(), d.getMonth(), 1);
-}
-function startOfYear(d = new Date()) {
-  return new Date(d.getFullYear(), 0, 1);
-}
+function startOfMonth(d = new Date()) { return new Date(d.getFullYear(), d.getMonth(), 1); }
+function startOfYear(d = new Date()) { return new Date(d.getFullYear(), 0, 1); }
 function isOnOrAfter(a: Date, b: Date) { return a.getTime() >= b.getTime(); }
 
 export default async function FinancialPage() {
@@ -48,7 +35,7 @@ export default async function FinancialPage() {
     );
   }
 
-  // --- SALES (v_sales_totals gives daily aggregates) ---
+  // SALES: daily rollups from v_sales_totals
   let sales: SalesDay[] = [];
   {
     const { data } = await supabase
@@ -68,7 +55,6 @@ export default async function FinancialPage() {
   for (const r of sales) {
     const d = r.day ? new Date(r.day) : null;
     if (!d) continue;
-
     if (isOnOrAfter(d, m0)) {
       monthOrders += Number(r.orders ?? 0);
       monthQty += Number(r.qty ?? 0);
@@ -81,8 +67,7 @@ export default async function FinancialPage() {
     }
   }
 
-  // --- EXPENSES (optional; if table not present, totals = 0) ---
-  // Expected future schema: public.expenses(tenant_id, occurred_at, amount_usd, note, category, ...)
+  // EXPENSES (optional until we build the page/table)
   let monthExpenses = 0, ytdExpenses = 0;
   let expensesAvailable = true;
   {
@@ -112,66 +97,45 @@ export default async function FinancialPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Financials</h1>
         <div className="flex gap-2">
-          <Link
-            href="/sales"
-            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-          >
+          <Link href="/sales" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
             Sales details
           </Link>
-          <Link
-            href="/expenses"
-            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-          >
+          <Link href="/expenses" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
             Expenses details
           </Link>
         </div>
       </div>
 
-      {/* Summary cards */}
+      {/* Month summary */}
       <div className="grid md:grid-cols-3 gap-3">
         <div className="border rounded-lg p-3">
           <div className="text-xs opacity-75">THIS MONTH — SALES</div>
           <div className="text-xl font-semibold">{fmtUSD(monthRevenue)}</div>
-          <div className="text-xs opacity-70 mt-1">
-            Orders {monthOrders} • Qty {monthQty}
-          </div>
+          <div className="text-xs opacity-70 mt-1">Orders {monthOrders} • Qty {monthQty}</div>
         </div>
-
         <div className="border rounded-lg p-3">
           <div className="text-xs opacity-75">THIS MONTH — EXPENSES</div>
           <div className="text-xl font-semibold">{fmtUSD(monthExpenses)}</div>
-          {!expensesAvailable && (
-            <div className="text-xs text-amber-300 mt-1">
-              Expenses table not set up yet.
-            </div>
-          )}
+          {!expensesAvailable && <div className="text-xs text-amber-300 mt-1">Expenses table not set up yet.</div>}
         </div>
-
         <div className="border rounded-lg p-3">
           <div className="text-xs opacity-75">THIS MONTH — PROFIT / LOSS</div>
           <div className="text-xl font-semibold">{fmtUSD(monthPL)}</div>
         </div>
       </div>
 
+      {/* YTD summary */}
       <div className="grid md:grid-cols-3 gap-3">
         <div className="border rounded-lg p-3">
           <div className="text-xs opacity-75">YEAR TO DATE — SALES</div>
           <div className="text-xl font-semibold">{fmtUSD(ytdRevenue)}</div>
-          <div className="text-xs opacity-70 mt-1">
-            Orders {ytdOrders} • Qty {ytdQty}
-          </div>
+          <div className="text-xs opacity-70 mt-1">Orders {ytdOrders} • Qty {ytdQty}</div>
         </div>
-
         <div className="border rounded-lg p-3">
           <div className="text-xs opacity-75">YEAR TO DATE — EXPENSES</div>
           <div className="text-xl font-semibold">{fmtUSD(ytdExpenses)}</div>
-          {!expensesAvailable && (
-            <div className="text-xs text-amber-300 mt-1">
-              Expenses table not set up yet.
-            </div>
-          )}
+          {!expensesAvailable && <div className="text-xs text-amber-300 mt-1">Expenses table not set up yet.</div>}
         </div>
-
         <div className="border rounded-lg p-3">
           <div className="text-xs opacity-75">YEAR TO DATE — PROFIT / LOSS</div>
           <div className="text-xl font-semibold">{fmtUSD(ytdPL)}</div>
