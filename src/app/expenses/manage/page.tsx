@@ -8,31 +8,25 @@ export const dynamic = "force-dynamic";
 export default async function ExpensesManagePage() {
   const supabase = await createServerClient();
   const tenantId = await getEffectiveTenant(supabase);
+
   if (!tenantId) {
     return (
       <main className="max-w-6xl mx-auto p-6">
-        <h1 className="text-2xl font-semibold">Expenses — Manage</h1>
-        <p className="mt-2">Profile missing tenant.</p>
+        <h1 className="text-2xl font-semibold">Expenses</h1>
+        <p className="mt-2 text-neutral-400">Profile missing tenant.</p>
       </main>
     );
   }
 
-  const { data } = await supabase
-    .from("expenses")
-    .select("id, occurred_at, category, description, amount")
-    .eq("tenant_id", tenantId)
-    .order("occurred_at", { ascending: false })
-    .limit(250);
-
   return (
     <main className="max-w-6xl mx-auto p-6 space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Expenses — Manage</h1>
-        <Link href="/expenses" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
+        <h1 className="text-2xl font-semibold">Manage Expenses</h1>
+        <Link href="/expenses" className="px-3 py-2 border rounded hover:bg-neutral-900 text-sm">
           Back to Expenses
         </Link>
       </div>
-      <ExpensesEditorClient initialRows={(data ?? []) as any[]} />
+      <ExpensesEditorClient tenantId={tenantId} />
     </main>
   );
 }
