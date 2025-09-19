@@ -23,7 +23,8 @@ export default function ExpensesImportPage() {
           </Link>
         </div>
 
-        <form method="post" action="/expenses/import" encType="multipart/form-data" className="space-y-3">
+        {/* NOTE: action points to /expenses/import/commit now */}
+        <form method="post" action="/expenses/import/commit" encType="multipart/form-data" className="space-y-3">
           <input type="file" name="file" accept=".csv,text/csv" className="block" required />
           <button className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900" type="submit">
             Upload CSV
