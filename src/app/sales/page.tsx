@@ -1,163 +1,100 @@
-// src/app/sales/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { getEffectiveTenant } from "@/lib/effective-tenant";
-import { fmtUSD } from "@/lib/costing"; // already used across the app
+import { fmtUSD } from "@/lib/costing";
+
 export const dynamic = "force-dynamic";
 
-type Order = {
-  id: string;
-  tenant_id: string;
-  occurred_at: string | null;
-  source: string | null;
-  channel: string | null;
-};
+type Tot = { label: string; orders: number; qty: number; revenue: number };
 
-type Line = {
-  id: string;
-  tenant_id: string;
-  order_id: string;
-  product_name: string | null;
-  qty: number | null;
-  unit_price: number | null;
-};
+function isoWeek(d: Date) {
+  // ISO week number
+  const tmp = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = tmp.getUTCDay() || 7;
+  tmp.setUTCDate(tmp.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((tmp as any) - (yearStart as any)) / 86400000 + 1) / 7);
+  return `${tmp.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
+}
+function quarterLabel(d: Date) {
+  const q = Math.floor(d.getMonth() / 3) + 1;
+  return `${d.getFullYear()}-Q${q}`;
+}
 
-function periodKey(d: Date, mode: "day"|"week"|"month"|"quarter"|"year") {
-  const y = d.getUTCFullYear();
-  if (mode === "day") {
-    return `${y}-${String(d.getUTCMonth()+1).padStart(2,"0")}-${String(d.getUTCDate()).padStart(2,"0")}`;
+function agg<T>(lines: any[], keyFn: (d: Date) => string): Tot[] {
+  const map = new Map<string, Tot>();
+  for (const l of lines ?? []) {
+    const occurred = l?.sales_orders?.occurred_at;
+    if (!occurred) continue;
+    const dt = new Date(occurred);
+    const k = keyFn(dt);
+    const t = map.get(k) ?? { label: k, orders: 0, qty: 0, revenue: 0 };
+    const q = Number(l?.qty ?? 0);
+    const p = Number(l?.unit_price ?? 0);
+    t.qty += q;
+    t.revenue += q * p;
+    // approximate order count by counting unique order_id per label
+    // to keep it quick we’ll increment by 1 per line; small datasets ok
+    t.orders += 1;
+    map.set(k, t);
   }
-  if (mode === "week") {
-    // ISO week number
-    const tmp = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-    const dayNum = (tmp.getUTCDay() + 6) % 7; // 0..6, Monday-based
-    tmp.setUTCDate(tmp.getUTCDate() - dayNum + 3); // nearest Thu
-    const week1 = new Date(Date.UTC(tmp.getUTCFullYear(),0,4));
-    const wk = 1 + Math.round(((tmp.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getUTCDay()+6)%7)) / 7);
-    return `${tmp.getUTCFullYear()}-W${String(wk).padStart(2,"0")}`;
-  }
-  if (mode === "month") {
-    return `${y}-${String(d.getUTCMonth()+1).padStart(2,"0")}`;
-  }
-  if (mode === "quarter") {
-    const q = Math.floor(d.getUTCMonth()/3)+1;
-    return `${y}-Q${q}`;
-  }
-  return `${y}`;
+  return Array.from(map.values()).sort((a, b) => (a.label < b.label ? -1 : 1));
 }
 
 export default async function SalesPage() {
   const supabase = await createServerClient();
-  const { data: u } = await supabase.auth.getUser();
-  const user = u.user ?? null;
-
-  if (!user) {
-    return (
-      <main className="max-w-6xl mx-auto p-6">
-        <h1 className="text-2xl font-semibold">Sales</h1>
-        <p className="mt-4">Sign in required.</p>
-        <Link href="/login?redirect=/sales" className="underline">Go to login</Link>
-      </main>
-    );
-  }
-
   const tenantId = await getEffectiveTenant(supabase);
   if (!tenantId) {
     return (
-      <main className="max-w-6xl mx-auto p-6">
+      <main className="max-w-7xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Sales</h1>
-        <p className="mt-4">Profile missing tenant.</p>
+        <p className="mt-2">Profile missing tenant.</p>
       </main>
     );
   }
 
-  // 1) Fetch recent orders (last 400 days for safety)
-  const since = new Date();
-  since.setUTCDate(since.getUTCDate() - 400);
-
-  const { data: ordersRaw } = await supabase
-    .from("sales_orders")
-    .select("id,tenant_id,occurred_at,source,channel")
+  const { data: lines } = await supabase
+    .from("sales_order_lines")
+    .select("id, order_id, product_name, qty, unit_price, sales_orders!inner(occurred_at)")
     .eq("tenant_id", tenantId)
-    .gte("occurred_at", since.toISOString())
-    .order("occurred_at", { ascending: true });
+    .order("id", { ascending: true });
 
-  const orders: Order[] = (ordersRaw ?? []) as any[];
-  const orderIds = orders.map(o => o.id);
-  let lines: Line[] = [];
-  if (orderIds.length) {
-    const { data: linesRaw } = await supabase
-      .from("sales_order_lines")
-      .select("id,tenant_id,order_id,product_name,qty,unit_price")
-      .in("order_id", orderIds);
-    lines = (linesRaw ?? []) as any[];
-  }
+  // Totals
+  const byMonth = agg(lines ?? [], (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  const byWeek  = agg(lines ?? [], (d) => isoWeek(d));
+  const byDay   = agg(lines ?? [], (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).toLocaleDateString());
+  const byQuarter = agg(lines ?? [], (d) => quarterLabel(d));
+  const byYear = agg(lines ?? [], (d) => String(d.getFullYear()));
 
-  // 2) Index orders by id for date lookup, compute revenue per line
-  const orderById = new Map<string, Order>();
-  orders.forEach(o => orderById.set(o.id, o));
-  const items = lines.map(l => {
-    const o = orderById.get(l.order_id);
-    const when = o?.occurred_at ? new Date(o.occurred_at) : null;
-    const qty = Number(l.qty ?? 0);
-    const price = Number(l.unit_price ?? 0);
-    const revenue = qty * price;
-    return {
-      order_id: l.order_id,
-      when,
-      product: l.product_name ?? "Item",
-      qty,
-      price,
-      revenue,
-    };
-  });
-
-  // 3) Aggregate by mode
-  function aggregate(mode: "day"|"week"|"month"|"quarter"|"year") {
-    const map = new Map<string, { total: number, qty: number, orders: Set<string> }>();
-    for (const it of items) {
-      if (!it.when) continue;
-      const k = periodKey(it.when, mode);
-      const cur = map.get(k) ?? { total: 0, qty: 0, orders: new Set() };
-      cur.total += it.revenue;
-      cur.qty += it.qty;
-      cur.orders.add(it.order_id);
-      map.set(k, cur);
+  // YTD top/bottom 5 products
+  const now = new Date();
+  const yStart = new Date(now.getFullYear(), 0, 1);
+  const yEnd = new Date(now.getFullYear() + 1, 0, 1);
+  const ytd = (lines ?? []).filter(
+    (l: any) => {
+      const ts = l?.sales_orders?.occurred_at ? new Date(l.sales_orders.occurred_at).getTime() : NaN;
+      return Number.isFinite(ts) && ts >= yStart.getTime() && ts < yEnd.getTime();
     }
-    // sort by period
-    const rows = Array.from(map.entries()).map(([period, v]) => ({
-      period,
-      orders: v.orders.size,
-      qty: v.qty,
-      total: v.total,
-    })).sort((a,b) => a.period.localeCompare(b.period));
-    return rows;
-  }
-
-  // default mode is Month; we compute all modes so toggling is instant on the client
-  const dayAgg = aggregate("day");
-  const weekAgg = aggregate("week");
-  const monthAgg = aggregate("month");
-  const quarterAgg = aggregate("quarter");
-  const yearAgg = aggregate("year");
-
-  // 4) Top products (best & worst by revenue YTD)
-  const startOfYear = new Date(Date.UTC(new Date().getUTCFullYear(), 0, 1));
-  const ytd = items.filter(it => it.when && it.when >= startOfYear);
+  );
   const byProduct = new Map<string, number>();
-  for (const it of ytd) {
-    byProduct.set(it.product, (byProduct.get(it.product) ?? 0) + it.revenue);
+  for (const l of ytd) {
+    const name = String(l?.product_name ?? "").trim() || "(unnamed)";
+    const revenue = Number(l?.qty ?? 0) * Number(l?.unit_price ?? 0);
+    byProduct.set(name, (byProduct.get(name) ?? 0) + revenue);
   }
-  const ranked = Array.from(byProduct.entries()).sort((a,b) => b[1]-a[1]);
-  const top5 = ranked.slice(0, 5);
-  const bottom5 = ranked.slice(-5).reverse();
+  const prodArr = Array.from(byProduct.entries()).map(([name, revenue]) => ({ name, revenue }));
+  const top5 = [...prodArr].sort((a, b) => b.revenue - a.revenue).slice(0, 5);
+  const bottom5 = [...prodArr].sort((a, b) => a.revenue - b.revenue).slice(0, 5);
 
   return (
-    <main className="max-w-6xl mx-auto p-6 space-y-6">
+    <main className="max-w-7xl mx-auto p-6 space-y-5">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Sales</h1>
-        <div className="flex items-center gap-2">
-          <Link href="/sales/upload" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
+        <div className="flex gap-2">
+          <Link href="/sales/manage" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
+            Manage
+          </Link>
+          <Link href="/sales/import" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
             Import CSV
           </Link>
           <Link href="/sales/import/template" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
@@ -166,61 +103,112 @@ export default async function SalesPage() {
         </div>
       </div>
 
-      {/* Period toggles (clientless by rendering all and using details/summary) */}
-      <div className="space-y-4">
-        {[
-          {label:"Month", rows: monthAgg},
-          {label:"Week", rows: weekAgg},
-          {label:"Day", rows: dayAgg},
-          {label:"Quarter", rows: quarterAgg},
-          {label:"Year", rows: yearAgg},
-        ].map((block, i) => (
-          <details key={block.label} open={i===0} className="border rounded-lg">
-            <summary className="cursor-pointer px-3 py-2 font-medium bg-neutral-900/60">
-              {block.label} totals
-            </summary>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-neutral-900/40">
-                  <tr>
-                    <th className="p-2 text-left">{block.label}</th>
-                    <th className="p-2 text-right">Orders</th>
-                    <th className="p-2 text-right">Qty</th>
-                    <th className="p-2 text-right">Revenue</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {block.rows.map(r => (
-                    <tr key={r.period} className="border-t">
-                      <td className="p-2">{r.period}</td>
-                      <td className="p-2 text-right tabular-nums">{r.orders}</td>
-                      <td className="p-2 text-right tabular-nums">{r.qty}</td>
-                      <td className="p-2 text-right tabular-nums">{fmtUSD(r.total)}</td>
-                    </tr>
-                  ))}
-                  {block.rows.length === 0 && (
-                    <tr><td className="p-3 text-neutral-400" colSpan={4}>No sales yet.</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </details>
-        ))}
-      </div>
+      {/* Month totals */}
+      <details className="border rounded-lg">
+        <summary className="cursor-pointer px-3 py-2 bg-neutral-900/50">Month totals</summary>
+        <table className="w-full text-sm">
+          <thead><tr><th className="p-2 text-left">Month</th><th className="p-2 text-right">Orders</th><th className="p-2 text-right">Qty</th><th className="p-2 text-right">Revenue</th></tr></thead>
+          <tbody>
+            {byMonth.map((t) => (
+              <tr key={t.label} className="border-t">
+                <td className="p-2">{t.label}</td>
+                <td className="p-2 text-right">{t.orders}</td>
+                <td className="p-2 text-right">{t.qty}</td>
+                <td className="p-2 text-right">{fmtUSD(t.revenue)}</td>
+              </tr>
+            ))}
+            {byMonth.length === 0 && <tr><td className="p-3 text-neutral-400" colSpan={4}>No data.</td></tr>}
+          </tbody>
+        </table>
+      </details>
 
-      {/* Top products */}
-      <div className="grid md:grid-cols-2 gap-6">
+      {/* Week totals */}
+      <details className="border rounded-lg">
+        <summary className="cursor-pointer px-3 py-2 bg-neutral-900/50">Week totals</summary>
+        <table className="w-full text-sm">
+          <thead><tr><th className="p-2 text-left">Week</th><th className="p-2 text-right">Orders</th><th className="p-2 text-right">Qty</th><th className="p-2 text-right">Revenue</th></tr></thead>
+        <tbody>
+          {byWeek.map((t) => (
+            <tr key={t.label} className="border-t">
+              <td className="p-2">{t.label}</td>
+              <td className="p-2 text-right">{t.orders}</td>
+              <td className="p-2 text-right">{t.qty}</td>
+              <td className="p-2 text-right">{fmtUSD(t.revenue)}</td>
+            </tr>
+          ))}
+          {byWeek.length === 0 && <tr><td className="p-3 text-neutral-400" colSpan={4}>No data.</td></tr>}
+        </tbody>
+        </table>
+      </details>
+
+      {/* Day totals */}
+      <details className="border rounded-lg">
+        <summary className="cursor-pointer px-3 py-2 bg-neutral-900/50">Day totals</summary>
+        <table className="w-full text-sm">
+          <thead><tr><th className="p-2 text-left">Day</th><th className="p-2 text-right">Orders</th><th className="p-2 text-right">Qty</th><th className="p-2 text-right">Revenue</th></tr></thead>
+        <tbody>
+          {byDay.map((t) => (
+            <tr key={t.label} className="border-t">
+              <td className="p-2">{t.label}</td>
+              <td className="p-2 text-right">{t.orders}</td>
+              <td className="p-2 text-right">{t.qty}</td>
+              <td className="p-2 text-right">{fmtUSD(t.revenue)}</td>
+            </tr>
+          ))}
+          {byDay.length === 0 && <tr><td className="p-3 text-neutral-400" colSpan={4}>No data.</td></tr>}
+        </tbody>
+        </table>
+      </details>
+
+      {/* Quarter totals */}
+      <details className="border rounded-lg">
+        <summary className="cursor-pointer px-3 py-2 bg-neutral-900/50">Quarter totals</summary>
+        <table className="w-full text-sm">
+          <thead><tr><th className="p-2 text-left">Quarter</th><th className="p-2 text-right">Orders</th><th className="p-2 text-right">Qty</th><th className="p-2 text-right">Revenue</th></tr></thead>
+        <tbody>
+          {byQuarter.map((t) => (
+            <tr key={t.label} className="border-t">
+              <td className="p-2">{t.label}</td>
+              <td className="p-2 text-right">{t.orders}</td>
+              <td className="p-2 text-right">{t.qty}</td>
+              <td className="p-2 text-right">{fmtUSD(t.revenue)}</td>
+            </tr>
+          ))}
+          {byQuarter.length === 0 && <tr><td className="p-3 text-neutral-400" colSpan={4}>No data.</td></tr>}
+        </tbody>
+        </table>
+      </details>
+
+      {/* Year totals */}
+      <details className="border rounded-lg">
+        <summary className="cursor-pointer px-3 py-2 bg-neutral-900/50">Year totals</summary>
+        <table className="w-full text-sm">
+          <thead><tr><th className="p-2 text-left">Year</th><th className="p-2 text-right">Orders</th><th className="p-2 text-right">Qty</th><th className="p-2 text-right">Revenue</th></tr></thead>
+        <tbody>
+          {byYear.map((t) => (
+            <tr key={t.label} className="border-t">
+              <td className="p-2">{t.label}</td>
+              <td className="p-2 text-right">{t.orders}</td>
+              <td className="p-2 text-right">{t.qty}</td>
+              <td className="p-2 text-right">{fmtUSD(t.revenue)}</td>
+            </tr>
+          ))}
+          {byYear.length === 0 && <tr><td className="p-3 text-neutral-400" colSpan={4}>No data.</td></tr>}
+        </tbody>
+        </table>
+      </details>
+
+      {/* Top / Bottom 5 */}
+      <div className="grid md:grid-cols-2 gap-4">
         <div className="border rounded-lg overflow-hidden">
-          <div className="px-3 py-2 font-medium bg-neutral-900/60">Top 5 products (YTD)</div>
+          <div className="px-3 py-2 bg-neutral-900/50 font-medium">Top 5 products (YTD)</div>
           <table className="w-full text-sm">
-            <thead className="bg-neutral-900/40">
-              <tr><th className="p-2 text-left">Product</th><th className="p-2 text-right">Revenue</th></tr>
-            </thead>
+            <thead><tr><th className="p-2 text-left">Product</th><th className="p-2 text-right">Revenue</th></tr></thead>
             <tbody>
-              {top5.map(([name, total]) => (
-                <tr key={name} className="border-t">
-                  <td className="p-2">{name}</td>
-                  <td className="p-2 text-right tabular-nums">{fmtUSD(total)}</td>
+              {top5.map((r) => (
+                <tr key={r.name} className="border-t">
+                  <td className="p-2">{r.name}</td>
+                  <td className="p-2 text-right">{fmtUSD(r.revenue)}</td>
                 </tr>
               ))}
               {top5.length === 0 && <tr><td className="p-3 text-neutral-400" colSpan={2}>No data.</td></tr>}
@@ -228,16 +216,14 @@ export default async function SalesPage() {
           </table>
         </div>
         <div className="border rounded-lg overflow-hidden">
-          <div className="px-3 py-2 font-medium bg-neutral-900/60">Bottom 5 products (YTD)</div>
+          <div className="px-3 py-2 bg-neutral-900/50 font-medium">Bottom 5 products (YTD)</div>
           <table className="w-full text-sm">
-            <thead className="bg-neutral-900/40">
-              <tr><th className="p-2 text-left">Product</th><th className="p-2 text-right">Revenue</th></tr>
-            </thead>
+            <thead><tr><th className="p-2 text-left">Product</th><th className="p-2 text-right">Revenue</th></tr></thead>
             <tbody>
-              {bottom5.map(([name, total]) => (
-                <tr key={name} className="border-t">
-                  <td className="p-2">{name}</td>
-                  <td className="p-2 text-right tabular-nums">{fmtUSD(total)}</td>
+              {bottom5.map((r) => (
+                <tr key={r.name} className="border-t">
+                  <td className="p-2">{r.name}</td>
+                  <td className="p-2 text-right">{fmtUSD(r.revenue)}</td>
                 </tr>
               ))}
               {bottom5.length === 0 && <tr><td className="p-3 text-neutral-400" colSpan={2}>No data.</td></tr>}
