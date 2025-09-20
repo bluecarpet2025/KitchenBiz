@@ -1,89 +1,136 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { getEffectiveTenant } from "@/lib/effective-tenant";
 
-export const dynamic = "force-dynamic";
+type CsvRow = {
+  date?: string;
+  category?: string;
+  description?: string;
+  amount?: string;
+};
 
-function parseCsv(text: string): Record<string, string>[] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = "";
-  let inQuotes = false;
+function parseCsv(text: string): CsvRow[] {
+  // tolerate BOM
+  const t = text.replace(/^\uFEFF/, "");
+  const lines = t.split(/\r?\n/).filter((l) => l.trim().length > 0);
 
-  const pushField = () => { row.push(field); field = ""; };
-  const pushRow = () => { rows.push(row); row = []; };
+  if (lines.length === 0) return [];
+  const headers = lines[0]
+    .split(",")
+    .map((h) => h.trim().toLowerCase().replace(/(^"|"$)/g, ""));
 
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (inQuotes) {
-      if (c === '"') {
-        if (text[i + 1] === '"') { field += '"'; i++; }
-        else { inQuotes = false; }
-      } else field += c;
-    } else {
-      if (c === '"') inQuotes = true;
-      else if (c === ",") pushField();
-      else if (c === "\n") { pushField(); pushRow(); }
-      else if (c === "\r") {/* ignore */}
-      else field += c;
+  const rows: CsvRow[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const raw = lines[i];
+    // simple CSV split; good enough for our template (no embedded commas in quoted fields)
+    const parts = raw.split(",").map((p) => p.trim().replace(/(^"|"$)/g, ""));
+    const row: any = {};
+    headers.forEach((h, idx) => (row[h] = parts[idx]));
+    rows.push(row);
+  }
+  return rows;
+}
+
+function toISODate(d: string | undefined): string | null {
+  if (!d) return null;
+  // accept YYYY-MM-DD or M/D/YYYY style
+  // try native Date parse
+  const maybe = new Date(d);
+  if (!isNaN(maybe.getTime())) {
+    return new Date(Date.UTC(maybe.getFullYear(), maybe.getMonth(), maybe.getDate()))
+      .toISOString();
+  }
+  // manual M/D/YYYY
+  const mdy = d.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if (mdy) {
+    const m = Number(mdy[1]) - 1;
+    const day = Number(mdy[2]);
+    let y = Number(mdy[3]);
+    if (y < 100) y += 2000;
+    return new Date(Date.UTC(y, m, day)).toISOString();
+  }
+  return null;
+}
+
+export async function POST(req: Request) {
+  try {
+    const supabase = await createServerClient();
+    const tenantId = await getEffectiveTenant(supabase);
+    if (!tenantId) {
+      return NextResponse.json(
+        { ok: false, message: "Sign in required / tenant missing." },
+        { status: 401 }
+      );
     }
+
+    const form = await req.formData();
+    const file = form.get("file") as File | null;
+    if (!file) {
+      return NextResponse.json(
+        { ok: false, message: "No file uploaded." },
+        { status: 400 }
+      );
+    }
+
+    const text = await file.text();
+    const rows = parseCsv(text);
+    if (rows.length === 0) {
+      return NextResponse.json(
+        { ok: false, message: "CSV appears empty." },
+        { status: 400 }
+      );
+    }
+
+    // Map to DB rows
+    const payload = rows
+      .map((r) => {
+        const occurred_at = toISODate(r.date);
+        const category = (r.category ?? "").trim();
+        const description = (r.description ?? "").trim();
+        const amount = parseFloat(String(r.amount ?? "").replace(/[$,]/g, ""));
+
+        if (!occurred_at || !category || isNaN(amount)) {
+          return null;
+        }
+        return {
+          tenant_id: tenantId,
+          occurred_at,
+          category,
+          description: description || null,
+          amount_usd: amount,
+        };
+      })
+      .filter(Boolean) as Array<{
+        tenant_id: string;
+        occurred_at: string;
+        category: string;
+        description: string | null;
+        amount_usd: number;
+      }>;
+
+    if (payload.length === 0) {
+      return NextResponse.json(
+        { ok: false, message: "No valid rows found in CSV." },
+        { status: 400 }
+      );
+    }
+
+    const { error } = await supabase.from("expenses").insert(payload);
+    if (error) {
+      console.error(error);
+      return NextResponse.json(
+        { ok: false, message: "Insert failed." },
+        { status: 500 }
+      );
+    }
+
+    // back to listing
+    return NextResponse.redirect(new URL("/expenses", req.url), { status: 303 });
+  } catch (e: any) {
+    console.error(e);
+    return NextResponse.json(
+      { ok: false, message: e?.message ?? "Upload failed." },
+      { status: 500 }
+    );
   }
-  pushField();
-  if (row.length > 1 || row[0] !== "") pushRow();
-
-  if (rows.length === 0) return [];
-  const headers = rows.shift()!.map((h) => h.trim().toLowerCase());
-  return rows
-    .filter((r) => r.some((c) => c.trim() !== ""))
-    .map((r) => {
-      const o: Record<string, string> = {};
-      for (let i = 0; i < headers.length; i++) o[headers[i]] = (r[i] ?? "").trim();
-      return o;
-    });
-}
-
-function toISODate(v?: string) {
-  if (!v) return null;
-  const t = v.trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return new Date(t + "T00:00:00Z").toISOString();
-  const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (m) return new Date(Date.UTC(+m[3], +m[1] - 1, +m[2])).toISOString();
-  const d = new Date(t);
-  return isNaN(+d) ? null : d.toISOString();
-}
-
-export async function POST(req: NextRequest) {
-  const supabase = await createServerClient();
-  const tenantId = await getEffectiveTenant(supabase);
-  if (!tenantId) return NextResponse.json({ error: "No tenant" }, { status: 401 });
-
-  const form = await req.formData();
-  const f = form.get("file");
-  if (!(f instanceof Blob)) return NextResponse.json({ error: "Missing CSV file" }, { status: 400 });
-
-  const rows = parseCsv(await f.text());
-
-  const toInsert: any[] = [];
-  for (const r of rows) {
-    const occurred_at = toISODate(r["date"]) ?? toISODate(r["occurred_at"]);
-    const amountRaw = (r["amount"] ?? "").replace(/[^0-9.\-]/g, "");
-    const amount = Number(amountRaw || "0");
-    if (!occurred_at || !(amount > 0)) continue;
-
-    toInsert.push({
-      tenant_id: tenantId,
-      occurred_at,
-      category: (r["category"] ?? null) || null,
-      description: (r["description"] ?? r["note"] ?? r["memo"] ?? null) || null,
-      amount,
-      source: "import",
-    });
-  }
-
-  if (toInsert.length) {
-    const { error } = await supabase.from("expenses").insert(toInsert);
-    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-  }
-
-  return NextResponse.redirect(new URL("/expenses", req.url));
 }
