@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import createClient from "@/lib/supabase/client";
 
 type Row = {
   id?: string;
@@ -76,13 +76,10 @@ export default function StaffEditorClient({
 
       if (error) throw error;
 
-      // Replace row with returned (has id & computed display_name)
       const saved = data as any;
       setRows((rs) => {
         const copy = [...rs];
-        copy[idx] = {
-          ...saved,
-        };
+        copy[idx] = { ...saved };
         return copy;
       });
       alert("Saved.");
