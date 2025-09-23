@@ -1,4 +1,4 @@
-/* eslint-disable @next/next/no-img-element */
+// src/app/expenses/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { getEffectiveTenant } from "@/lib/effective-tenant";
@@ -6,290 +6,188 @@ import { fmtUSD } from "@/lib/costing";
 
 export const dynamic = "force-dynamic";
 
-type ExpenseRow = {
-  id: string;
-  tenant_id: string;
-  date: string;            // ISO date
-  category: string | null;
-  description: string | null;
-  amount_usd: number;
-};
+type MonthRow = { tenant_id: string; month: string; entries: number; total: number };
+type WeekRow  = { tenant_id: string; week: string;  entries: number; total: number };
+type DayRow   = { tenant_id: string; day: string;   entries: number; total: number };
+type QRow     = { tenant_id: string; quarter: string; entries: number; total: number };
+type YRow     = { tenant_id: string; year: string;  entries: number; total: number };
+type CatRow   = { tenant_id: string; category: string | null; total: number };
 
-type Tot = { key: string; label: string; entries: number; amount: number };
+async function fetchAll() {
+  const supabase = await createServerClient();
+  const tenantId = await getEffectiveTenant(supabase);
 
-function pad(n: number) {
-  return n < 10 ? `0${n}` : String(n);
-}
+  const pick = <T,>(r: { data: T[] | null; error: any }) => (r.data ?? []) as T[];
 
-function ymd(d: Date) {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-function ym(d: Date) {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
-}
-function year(d: Date) {
-  return `${d.getFullYear()}`;
-}
-function quarterKey(d: Date) {
-  const q = Math.floor(d.getMonth() / 3) + 1;
-  return `${d.getFullYear()}-Q${q}`;
-}
-function isoWeekKey(d: Date) {
-  // Minimal ISO week: Thursday-based week number
-  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-  // Set to nearest Thursday (current date + 4 - current day number)
-  const dayNum = date.getUTCDay() || 7;
-  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
-  const weekNo = Math.ceil(((+date - +yearStart) / 86400000 + 1) / 7);
-  return `${date.getUTCFullYear()}-W${pad(weekNo)}`;
-}
+  const month = pick<MonthRow>(
+    await supabase.from("v_expense_month_totals")
+      .select("tenant_id,month,entries,total")
+      .eq("tenant_id", tenantId)
+      .order("month", { ascending: false })
+      .limit(24)
+  );
 
-function agg(rows: ExpenseRow[], keyFn: (d: Date) => string, labelFn: (k: string) => string): Tot[] {
-  const m = new Map<string, { entries: number; amount: number }>();
-  for (const r of rows) {
-    const d = r.date ? new Date(r.date) : null;
-    if (!d) continue;
-    const key = keyFn(d);
-    const cur = m.get(key) ?? { entries: 0, amount: 0 };
-    cur.entries += 1;
-    cur.amount += Number(r.amount_usd || 0);
-    m.set(key, cur);
-  }
-  const out: Tot[] = [];
-  for (const [key, v] of m.entries()) out.push({ key, label: labelFn(key), entries: v.entries, amount: v.amount });
-  // Desc by key where key formats are sortable (they are)
-  out.sort((a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0));
-  return out;
+  const week = pick<WeekRow>(
+    await supabase.from("v_expense_week_totals")
+      .select("tenant_id,week,entries,total")
+      .eq("tenant_id", tenantId)
+      .order("week", { ascending: false })
+      .limit(24)
+  );
+
+  const day = pick<DayRow>(
+    await supabase.from("v_expense_day_totals")
+      .select("tenant_id,day,entries,total")
+      .eq("tenant_id", tenantId)
+      .order("day", { ascending: false })
+      .limit(31)
+  );
+
+  const quarter = pick<QRow>(
+    await supabase.from("v_expense_quarter_totals")
+      .select("tenant_id,quarter,entries,total")
+      .eq("tenant_id", tenantId)
+      .order("quarter", { ascending: false })
+      .limit(8)
+  );
+
+  const year = pick<YRow>(
+    await supabase.from("v_expense_year_totals")
+      .select("tenant_id,year,entries,total")
+      .eq("tenant_id", tenantId)
+      .order("year", { ascending: false })
+      .limit(10)
+  );
+
+  const cats = pick<CatRow>(
+    await supabase.from("v_expense_category_ytd")
+      .select("tenant_id,category,total")
+      .eq("tenant_id", tenantId)
+      .order("total", { ascending: false })
+      .limit(10)
+  );
+
+  return { month, week, day, quarter, year, cats };
 }
 
 export default async function ExpensesPage() {
-  const supabase = await createServerClient();
+  const { month, week, day, quarter, year, cats } = await fetchAll();
 
-  // Auth (soft) — show page even if signed out, but encourage login
-  const { data: au } = await supabase.auth.getUser();
-  const user = au.user ?? null;
-
-  const tenantId = await getEffectiveTenant(supabase);
-  // If no tenant (signed out or profile missing), show empty shell
-  let rows: ExpenseRow[] = [];
-  if (tenantId) {
-    const { data } = await supabase
-      .from("expenses")
-      .select("id, tenant_id, date, category, description, amount_usd")
-      .eq("tenant_id", tenantId)
-      .order("date", { ascending: true })
-      .limit(5000);
-    rows = (data ?? []) as ExpenseRow[];
-  }
-
-  // Aggregations
-  const byMonth = agg(rows, (d) => ym(d), (k) => k);
-  const byWeek = agg(rows, (d) => isoWeekKey(d), (k) => k);
-  const byDay = agg(rows, (d) => ymd(d), (k) => k);
-  const byQuarter = agg(rows, (d) => quarterKey(d), (k) => k);
-  const byYear = agg(rows, (d) => year(d), (k) => k);
-
-  // Top categories (YTD)
-  const now = new Date();
-  const curYear = now.getFullYear();
-  const catMap = new Map<string, number>();
-  for (const r of rows) {
-    const d = r.date ? new Date(r.date) : null;
-    if (!d || d.getFullYear() !== curYear) continue;
-    const cat = (r.category ?? "Uncategorized").trim() || "Uncategorized";
-    catMap.set(cat, (catMap.get(cat) ?? 0) + Number(r.amount_usd || 0));
-  }
-  const topCats = Array.from(catMap.entries())
-    .map(([k, v]) => ({ category: k, amount: v }))
-    .sort((a, b) => b.amount - a.amount)
-    .slice(0, 12);
+  const Section = ({
+    title,
+    headA,
+    headB,
+    rows,
+    getA,
+    getB,
+  }: {
+    title: string;
+    headA: string;
+    headB: string;
+    rows: any[];
+    getA: (r: any) => string;
+    getB: (r: any) => string;
+  }) => (
+    <details className="border rounded-lg mb-4" open>
+      <summary className="px-3 py-2 cursor-pointer bg-neutral-900/60">{title}</summary>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-t">
+            <th className="p-2 text-left">{headA}</th>
+            <th className="p-2 text-center">Entries</th>
+            <th className="p-2 text-right">{headB}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r: any, i: number) => (
+            <tr key={i} className="border-t">
+              <td className="p-2">{getA(r)}</td>
+              <td className="p-2 text-center">{r.entries ?? "—"}</td>
+              <td className="p-2 text-right">{fmtUSD(Number(r.total ?? 0))}</td>
+            </tr>
+          ))}
+          {rows.length === 0 && (
+            <tr><td className="p-3 text-neutral-400" colSpan={3}>No data.</td></tr>
+          )}
+        </tbody>
+      </table>
+    </details>
+  );
 
   return (
-    <main className="max-w-6xl mx-auto p-6 space-y-6">
+    <main className="max-w-6xl mx-auto p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Expenses</h1>
         <div className="flex gap-2">
-          <Link
-            href="/expenses/manage"
-            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-          >
-            Manage
-          </Link>
-          <Link
-            href="/expenses/import"
-            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-          >
-            Import CSV
-          </Link>
-          <Link
-            href="/expenses/template"
-            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-          >
-            Download template
-          </Link>
+          <Link href="/expenses/manage" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Manage</Link>
+          <Link href="/expenses/import" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Import CSV</Link>
+          <Link href="/expenses/template" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">Download template</Link>
         </div>
       </div>
 
-      {/* Month totals */}
-      <Section title="Month totals">
-        <Table header={["Month", "Entries", "Amount"]}>
-          {byMonth.length === 0 ? (
-            <NoData />
-          ) : (
-            byMonth.map((t) => (
-              <tr key={t.key} className="border-t">
-                <td className="p-2">{t.label}</td>
-                <td className="p-2 tabular-nums">{t.entries}</td>
-                <td className="p-2 tabular-nums">{fmtUSD(t.amount)}</td>
-              </tr>
-            ))
-          )}
-        </Table>
-      </Section>
+      <Section
+        title="Month totals"
+        headA="Month"
+        headB="Amount"
+        rows={month}
+        getA={(r) => r.month}
+        getB={(r) => fmtUSD(Number(r.total ?? 0))}
+      />
+      <Section
+        title="Week totals"
+        headA="Week"
+        headB="Amount"
+        rows={week}
+        getA={(r) => r.week}
+        getB={(r) => fmtUSD(Number(r.total ?? 0))}
+      />
+      <Section
+        title="Day totals"
+        headA="Day"
+        headB="Amount"
+        rows={day}
+        getA={(r) => r.day}
+        getB={(r) => fmtUSD(Number(r.total ?? 0))}
+      />
+      <Section
+        title="Quarter totals"
+        headA="Quarter"
+        headB="Amount"
+        rows={quarter}
+        getA={(r) => r.quarter}
+        getB={(r) => fmtUSD(Number(r.total ?? 0))}
+      />
+      <Section
+        title="Year totals"
+        headA="Year"
+        headB="Amount"
+        rows={year}
+        getA={(r) => r.year}
+        getB={(r) => fmtUSD(Number(r.total ?? 0))}
+      />
 
-      {/* Week totals */}
-      <Section title="Week totals">
-        <Table header={["Week", "Entries", "Amount"]}>
-          {byWeek.length === 0 ? (
-            <NoData />
-          ) : (
-            byWeek.map((t) => (
-              <tr key={t.key} className="border-t">
-                <td className="p-2">{t.label}</td>
-                <td className="p-2 tabular-nums">{t.entries}</td>
-                <td className="p-2 tabular-nums">{fmtUSD(t.amount)}</td>
-              </tr>
-            ))
-          )}
-        </Table>
-      </Section>
-
-      {/* Day totals */}
-      <Section title="Day totals">
-        <Table header={["Day", "Entries", "Amount"]}>
-          {byDay.length === 0 ? (
-            <NoData />
-          ) : (
-            byDay.map((t) => (
-              <tr key={t.key} className="border-t">
-                <td className="p-2">{t.label}</td>
-                <td className="p-2 tabular-nums">{t.entries}</td>
-                <td className="p-2 tabular-nums">{fmtUSD(t.amount)}</td>
-              </tr>
-            ))
-          )}
-        </Table>
-      </Section>
-
-      {/* Quarter totals */}
-      <Section title="Quarter totals">
-        <Table header={["Quarter", "Entries", "Amount"]}>
-          {byQuarter.length === 0 ? (
-            <NoData />
-          ) : (
-            byQuarter.map((t) => (
-              <tr key={t.key} className="border-t">
-                <td className="p-2">{t.label}</td>
-                <td className="p-2 tabular-nums">{t.entries}</td>
-                <td className="p-2 tabular-nums">{fmtUSD(t.amount)}</td>
-              </tr>
-            ))
-          )}
-        </Table>
-      </Section>
-
-      {/* Year totals */}
-      <Section title="Year totals">
-        <Table header={["Year", "Entries", "Amount"]}>
-          {byYear.length === 0 ? (
-            <NoData />
-          ) : (
-            byYear.map((t) => (
-              <tr key={t.key} className="border-t">
-                <td className="p-2">{t.label}</td>
-                <td className="p-2 tabular-nums">{t.entries}</td>
-                <td className="p-2 tabular-nums">{fmtUSD(t.amount)}</td>
-              </tr>
-            ))
-          )}
-        </Table>
-      </Section>
-
-      {/* Top categories (YTD) */}
-      <div className="border rounded-lg overflow-hidden">
-        <div className="px-3 py-2 text-sm bg-neutral-900/60">Top categories (YTD)</div>
+      <div className="border rounded-lg">
+        <div className="px-3 py-2 bg-neutral-900/60">Top categories (YTD)</div>
         <table className="w-full text-sm">
           <thead>
-            <tr>
+            <tr className="border-t">
               <th className="p-2 text-left">Category</th>
               <th className="p-2 text-right">Amount</th>
             </tr>
           </thead>
           <tbody>
-            {topCats.length === 0 ? (
-              <NoData colSpan={2} />
-            ) : (
-              topCats.map((c) => (
-                <tr key={c.category} className="border-t">
-                  <td className="p-2">{c.category}</td>
-                  <td className="p-2 text-right tabular-nums">{fmtUSD(c.amount)}</td>
-                </tr>
-              ))
+            {cats.map((r, i) => (
+              <tr key={i} className="border-t">
+                <td className="p-2">{r.category ?? "—"}</td>
+                <td className="p-2 text-right">{fmtUSD(Number(r.total ?? 0))}</td>
+              </tr>
+            ))}
+            {cats.length === 0 && (
+              <tr><td className="p-3 text-neutral-400" colSpan={2}>No data.</td></tr>
             )}
           </tbody>
         </table>
       </div>
-
-      {!user && (
-        <p className="text-sm opacity-70">
-          Tip: sign in to add, import, and manage expenses.
-        </p>
-      )}
     </main>
-  );
-}
-
-/* ---------- small presentational helpers ---------- */
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="border rounded-lg overflow-hidden">
-      <div className="px-3 py-2 text-sm bg-neutral-900/60">{title}</div>
-      {children}
-    </div>
-  );
-}
-
-function Table({
-  header,
-  children,
-}: {
-  header: string[];
-  children: React.ReactNode;
-}) {
-  return (
-    <table className="w-full text-sm">
-      <thead>
-        <tr>
-          {header.map((h) => (
-            <th key={h} className={`p-2 ${h === "Amount" ? "text-right" : h === "Entries" ? "text-right" : "text-left"}`}>
-              {h}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>{children}</tbody>
-    </table>
-  );
-}
-
-function NoData({ colSpan = 3 }: { colSpan?: number }) {
-  return (
-    <tr>
-      <td className="p-3 text-neutral-400" colSpan={colSpan}>
-        No data.
-      </td>
-    </tr>
   );
 }
