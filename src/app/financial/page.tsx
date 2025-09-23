@@ -1,119 +1,126 @@
 // src/app/financial/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
-import { monthStr, yearStr } from "@/lib/dates";
 
-// minimal formatter that always exists
-const usd = (n: number) => n.toLocaleString(undefined, { style: "currency", currency: "USD" });
+// Local, safe USD formatter (keeps you from needing any other import)
+const fmtUSD = (n: number) => n.toLocaleString(undefined, { style: "currency", currency: "USD" });
 
-async function readSingleTotal(
-  table: string,
-  key: { col: string; value: string }
+// Date helpers
+const todayStr = (): string => {
+  const d = new Date();
+  const yyyy = String(d.getFullYear());
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+};
+const monthStr = (): string => {
+  const d = new Date();
+  const yyyy = String(d.getFullYear());
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${yyyy}-${mm}`;
+};
+const yearStr = (): string => String(new Date().getFullYear());
+
+// Small query helpers (column defaults to "total" but we can pass "revenue" for sales)
+async function sumOne(
+  supabase: any,
+  view: string,
+  byCol: "day" | "week" | "month" | "year",
+  period: string,
+  tenantId: string,
+  valueCol: "total" | "revenue" = "total"
 ): Promise<number> {
-  const supabase = await createServerClient();
-  const { data, error } = await supabase
-    .from(table)
-    .select("total")
-    .eq(key.col, key.value)
-    .limit(1)
+  if (!period) return 0;
+  const { data } = await supabase
+    .from(view)
+    .select(`${valueCol}`)
+    .eq("tenant_id", tenantId)
+    .eq(byCol, period)
     .maybeSingle();
-
-  if (error) return 0;
-  return Number(data?.total ?? 0);
-}
-
-async function readYearFallbackFromMonths(
-  monthlyTable: string,
-  year: string
-): Promise<number> {
-  const supabase = await createServerClient();
-  const { data, error } = await supabase
-    .from(monthlyTable)
-    .select("total, month")
-    .like("month", `${year}-%`);
-
-  if (error || !data) return 0;
-  return data.reduce((sum, r) => sum + Number(r.total ?? 0), 0);
+  const n = (data?.[valueCol] ?? 0) as number;
+  return Number(n) || 0;
 }
 
 export default async function FinancialPage() {
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  // Find tenant id (use profiles table like the rest of the app)
+  let tenantId = "";
+  if (user) {
+    const { data: prof } = await supabase
+      .from("profiles")
+      .select("tenant_id")
+      .eq("id", user.id)
+      .maybeSingle();
+    tenantId = prof?.tenant_id ?? "";
+  }
+
   const thisMonth = monthStr();
   const thisYear = yearStr();
 
-  // SALES
-  const monthSales =
-    (await readSingleTotal("v_sales_month_totals", { col: "month", value: thisMonth })) || 0;
+  // Sales use "revenue"; Expenses use "total"
+  const [salesMonth, salesYtd, expenseMonth, expenseYtd] = await Promise.all([
+    sumOne(supabase, "v_sales_month_totals", "month", thisMonth, tenantId, "revenue"),
+    sumOne(supabase, "v_sales_year_totals", "year", thisYear, tenantId, "revenue"),
+    sumOne(supabase, "v_expense_month_totals", "month", thisMonth, tenantId, "total"),
+    sumOne(supabase, "v_expense_year_totals", "year", thisYear, tenantId, "total"),
+  ]);
 
-  let ytdSales =
-    (await readSingleTotal("v_sales_year_totals", { col: "year", value: thisYear })) || 0;
-
-  // If the yearly view isn’t populated yet, sum the monthly rows instead.
-  if (!ytdSales) {
-    ytdSales = await readYearFallbackFromMonths("v_sales_month_totals", thisYear);
-  }
-
-  // EXPENSES
-  const monthExpenses =
-    (await readSingleTotal("v_expense_month_totals", { col: "month", value: thisMonth })) || 0;
-
-  let ytdExpenses =
-    (await readSingleTotal("v_expense_year_totals", { col: "year", value: thisYear })) || 0;
-
-  if (!ytdExpenses) {
-    ytdExpenses = await readYearFallbackFromMonths("v_expense_month_totals", thisYear);
-  }
-
-  const monthProfit = monthSales - monthExpenses;
-  const ytdProfit = ytdSales - ytdExpenses;
+  const profitThisMonth = salesMonth - expenseMonth;
+  const profitYtd = salesYtd - expenseYtd;
 
   return (
-    <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Financials</h1>
-        <div className="flex gap-3">
-          <Link href="/sales" className="rounded border px-3 py-1 hover:bg-neutral-900">
-            Sales details
-          </Link>
-          <Link href="/expenses" className="rounded border px-3 py-1 hover:bg-neutral-900">
-            Expenses details
-          </Link>
-        </div>
+    <main className="max-w-6xl mx-auto px-6 py-8 space-y-6">
+      <div className="flex gap-3">
+        <Link href="/sales" className="px-3 py-2 border rounded text-sm hover:bg-neutral-900">
+          Sales details
+        </Link>
+        <Link href="/expenses" className="px-3 py-2 border rounded text-sm hover:bg-neutral-900">
+          Expenses details
+        </Link>
       </div>
 
-      <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="border rounded p-4">
-          <div className="text-xs opacity-60 mb-2">THIS MONTH — SALES</div>
-          <div className="text-2xl font-semibold">{usd(monthSales)}</div>
+      <section className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        {/* THIS MONTH — SALES */}
+        <div className="border rounded p-5">
+          <div className="text-xs uppercase opacity-70 mb-2">This month — Sales</div>
+          <div className="text-2xl font-semibold">{fmtUSD(salesMonth)}</div>
         </div>
 
-        <div className="border rounded p-4">
-          <div className="text-xs opacity-60 mb-2">THIS MONTH — EXPENSES</div>
-          <div className="text-2xl font-semibold">{usd(monthExpenses)}</div>
+        {/* THIS MONTH — EXPENSES */}
+        <div className="border rounded p-5">
+          <div className="text-xs uppercase opacity-70 mb-2">This month — Expenses</div>
+          <div className="text-2xl font-semibold">{fmtUSD(expenseMonth)}</div>
         </div>
 
-        <div className="border rounded p-4">
-          <div className="text-xs opacity-60 mb-2">THIS MONTH — PROFIT / LOSS</div>
-          <div className={`text-2xl font-semibold ${monthProfit < 0 ? "text-rose-400" : ""}`}>
-            {usd(monthProfit)}
+        {/* THIS MONTH — PROFIT / LOSS */}
+        <div className="border rounded p-5">
+          <div className="text-xs uppercase opacity-70 mb-2">This month — Profit / Loss</div>
+          <div className={`text-2xl font-semibold ${profitThisMonth < 0 ? "text-rose-400" : ""}`}>
+            {fmtUSD(profitThisMonth)}
           </div>
         </div>
-      </section>
 
-      <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="border rounded p-4">
-          <div className="text-xs opacity-60 mb-2">YEAR TO DATE — SALES</div>
-          <div className="text-2xl font-semibold">{usd(ytdSales)}</div>
+        {/* YTD — SALES */}
+        <div className="border rounded p-5">
+          <div className="text-xs uppercase opacity-70 mb-2">Year to date — Sales</div>
+          <div className="text-2xl font-semibold">{fmtUSD(salesYtd)}</div>
         </div>
 
-        <div className="border rounded p-4">
-          <div className="text-xs opacity-60 mb-2">YEAR TO DATE — EXPENSES</div>
-          <div className="text-2xl font-semibold">{usd(ytdExpenses)}</div>
+        {/* YTD — EXPENSES */}
+        <div className="border rounded p-5">
+          <div className="text-xs uppercase opacity-70 mb-2">Year to date — Expenses</div>
+          <div className="text-2xl font-semibold">{fmtUSD(expenseYtd)}</div>
         </div>
 
-        <div className="border rounded p-4">
-          <div className="text-xs opacity-60 mb-2">YEAR TO DATE — PROFIT / LOSS</div>
-          <div className={`text-2xl font-semibold ${ytdProfit < 0 ? "text-rose-400" : ""}`}>
-            {usd(ytdProfit)}
+        {/* YTD — PROFIT / LOSS */}
+        <div className="border rounded p-5">
+          <div className="text-xs uppercase opacity-70 mb-2">Year to date — Profit / Loss</div>
+          <div className={`text-2xl font-semibold ${profitYtd < 0 ? "text-rose-400" : ""}`}>
+            {fmtUSD(profitYtd)}
           </div>
         </div>
       </section>
