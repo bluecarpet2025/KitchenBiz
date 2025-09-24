@@ -1,31 +1,46 @@
 // src/lib/dates.ts
-// Small date helpers that match how our SQL views key periods.
+const pad2 = (n: number) => String(n).padStart(2, "0");
 
-const pad = (n: number) => String(n).padStart(2, "0");
-
-export const dayStr = (d: Date = new Date()) =>
-  `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-
-export const monthStr = (d: Date = new Date()) =>
-  `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
-
-export const yearStr = (d: Date = new Date()) => String(d.getFullYear());
-
-// ISO week algorithm (no deps). Returns YYYY-Www.
-export const weekStr = (d: Date = new Date()) => {
+// ISO week-numbering year and week (IYYY / IW in Postgres)
+function isoWeekParts(dIn?: Date) {
+  const d = dIn ? new Date(dIn) : new Date();
+  // Copy & normalize to UTC midnight to avoid TZ surprises
   const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-  // Thursday in current week decides the year.
-  date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
+  // Thursday of this week determines the ISO year
+  const dayNum = date.getUTCDay() || 7; // Sun=0 -> 7
+  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
   const isoYear = date.getUTCFullYear();
-  // Week number: count weeks since 1 Jan.
-  const yearStart = new Date(Date.UTC(isoYear, 0, 1));
-  const week = Math.ceil(((+date - +yearStart) / 86400000 + 1) / 7);
-  return `${isoYear}-W${String(week).padStart(2, "0")}`;
+
+  // Week number: count weeks since the Thursday of week 1
+  const jan1 = new Date(Date.UTC(isoYear, 0, 1));
+  const days = Math.floor((+date - +jan1) / 86400000) + 1;
+  const isoWeek = Math.ceil(days / 7);
+  return { isoYear, isoWeek };
+}
+
+export const addDays = (d: Date, days: number) => {
+  const x = new Date(d);
+  x.setDate(x.getDate() + days);
+  return x;
 };
 
-// Convenience for relative ranges
-export const addDays = (base: Date, days: number) => {
-  const d = new Date(base);
-  d.setDate(d.getDate() + days);
-  return d;
+export const todayStr = (d?: Date) => {
+  const dt = d ?? new Date();
+  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+};
+
+export const monthStr = (d?: Date) => {
+  const dt = d ?? new Date();
+  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}`;
+};
+
+export const yearStr = (d?: Date) => {
+  const dt = d ?? new Date();
+  return String(dt.getFullYear());
+};
+
+export const weekStr = (d?: Date) => {
+  const { isoYear, isoWeek } = isoWeekParts(d);
+  // Matches Postgres format: IYYY-"W"IW -> 2025-W38
+  return `${isoYear}-W${pad2(isoWeek)}`;
 };
