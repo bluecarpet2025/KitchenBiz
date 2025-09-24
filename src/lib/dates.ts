@@ -1,56 +1,31 @@
 // src/lib/dates.ts
-// Date helpers that return strings matching the formats used by the SQL views.
+// Small date helpers that match how our SQL views key periods.
 
-const pad2 = (n: number) => String(n).padStart(2, "0");
+const pad = (n: number) => String(n).padStart(2, "0");
 
-/** YYYY-MM-DD for the given date (or today). */
-export function todayStr(d: Date = new Date()): string {
-  const y = d.getFullYear();
-  const m = pad2(d.getMonth() + 1);
-  const day = pad2(d.getDate());
-  return `${y}-${m}-${day}`;
-}
+export const dayStr = (d: Date = new Date()) =>
+  `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
-/** YYYY-MM for the given date (or today). */
-export function monthStr(d: Date = new Date()): string {
-  const y = d.getFullYear();
-  const m = pad2(d.getMonth() + 1);
-  return `${y}-${m}`;
-}
+export const monthStr = (d: Date = new Date()) =>
+  `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
 
-/** YYYY for the given date (or today). */
-export function yearStr(d: Date = new Date()): string {
-  return `${d.getFullYear()}`;
-}
+export const yearStr = (d: Date = new Date()) => String(d.getFullYear());
 
-/** Add (or subtract) whole days and return a **new** Date. */
-export function addDays(d: Date, days: number): Date {
-  const copy = new Date(d);
-  copy.setDate(copy.getDate() + days);
-  return copy;
-}
-
-/**
- * ISO week-numbering year and week, formatted as "YYYY-Www".
- * Matches what your views output (e.g. 2025-W35).
- */
-export function weekStr(d: Date = new Date()): string {
+// ISO week algorithm (no deps). Returns YYYY-Www.
+export const weekStr = (d: Date = new Date()) => {
   const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-
-  // Shift to nearest Thursday: current date + 4 - current day number (Mon=1, Sun=7)
-  const dayNum = (date.getUTCDay() + 6) % 7; // 0..6 (Mon=0)
-  date.setUTCDate(date.getUTCDate() - dayNum + 3);
-
-  // ISO week-year is the year of that Thursday
+  // Thursday in current week decides the year.
+  date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
   const isoYear = date.getUTCFullYear();
+  // Week number: count weeks since 1 Jan.
+  const yearStart = new Date(Date.UTC(isoYear, 0, 1));
+  const week = Math.ceil(((+date - +yearStart) / 86400000 + 1) / 7);
+  return `${isoYear}-W${String(week).padStart(2, "0")}`;
+};
 
-  // First Thursday of ISO year
-  const firstThursday = new Date(Date.UTC(isoYear, 0, 4));
-  const firstDayNum = (firstThursday.getUTCDay() + 6) % 7;
-  firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDayNum + 3);
-
-  // Week number: count weeks between the two Thursdays
-  const week = 1 + Math.round((date.getTime() - firstThursday.getTime()) / 604800000);
-
-  return `${isoYear}-W${pad2(week)}`;
-}
+// Convenience for relative ranges
+export const addDays = (base: Date, days: number) => {
+  const d = new Date(base);
+  d.setDate(d.getDate() + days);
+  return d;
+};
