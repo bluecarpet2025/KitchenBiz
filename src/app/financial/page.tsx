@@ -1,129 +1,107 @@
 // src/app/financial/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
+import { sumOne, todayStr, monthStr, yearStr } from "@/lib/db";
 
-// Local, safe USD formatter (keeps you from needing any other import)
-const fmtUSD = (n: number) => n.toLocaleString(undefined, { style: "currency", currency: "USD" });
+const fmtUSD = (n: number) =>
+  n.toLocaleString(undefined, { style: "currency", currency: "USD" });
 
-// Date helpers
-const todayStr = (): string => {
-  const d = new Date();
-  const yyyy = String(d.getFullYear());
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-};
-const monthStr = (): string => {
-  const d = new Date();
-  const yyyy = String(d.getFullYear());
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return `${yyyy}-${mm}`;
-};
-const yearStr = (): string => String(new Date().getFullYear());
-
-// Small query helpers (column defaults to "total" but we can pass "revenue" for sales)
-async function sumOne(
-  supabase: any,
-  view: string,
-  byCol: "day" | "week" | "month" | "year",
-  period: string,
-  tenantId: string,
-  valueCol: "total" | "revenue" = "total"
-): Promise<number> {
-  if (!period) return 0;
-  const { data } = await supabase
-    .from(view)
-    .select(`${valueCol}`)
-    .eq("tenant_id", tenantId)
-    .eq(byCol, period)
-    .maybeSingle();
-  const n = (data?.[valueCol] ?? 0) as number;
-  return Number(n) || 0;
-}
+export const dynamic = "force-dynamic";
 
 export default async function FinancialPage() {
   const supabase = await createServerClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
+  if (!user) return <div className="p-6">Please sign in.</div>;
 
-  // Find tenant id (use profiles table like the rest of the app)
-  let tenantId = "";
-  if (user) {
-    const { data: prof } = await supabase
-      .from("profiles")
-      .select("tenant_id")
-      .eq("id", user.id)
-      .maybeSingle();
-    tenantId = prof?.tenant_id ?? "";
-  }
+  const { data: prof } = await supabase
+    .from("profiles")
+    .select("tenant_id")
+    .eq("id", user.id)
+    .maybeSingle();
 
-  const thisMonth = monthStr();
-  const thisYear = yearStr();
+  const tenantId = prof?.tenant_id ?? "";
 
-  // Sales use "revenue"; Expenses use "total"
-  const [salesMonth, salesYtd, expenseMonth, expenseYtd] = await Promise.all([
-    sumOne(supabase, "v_sales_month_totals", "month", thisMonth, tenantId, "revenue"),
-    sumOne(supabase, "v_sales_year_totals", "year", thisYear, tenantId, "revenue"),
-    sumOne(supabase, "v_expense_month_totals", "month", thisMonth, tenantId, "total"),
-    sumOne(supabase, "v_expense_year_totals", "year", thisYear, tenantId, "total"),
-  ]);
+  const now = new Date();
+  const thisMonth = monthStr(now);
+  const thisYear = yearStr(now);
 
-  const profitThisMonth = salesMonth - expenseMonth;
-  const profitYtd = salesYtd - expenseYtd;
+  // Sales = revenue
+  const salesThisMonth = await sumOne(
+    supabase,
+    "v_sales_month_totals",
+    "month",
+    thisMonth,
+    tenantId,
+    "revenue"
+  );
+  const salesYTD = await sumOne(
+    supabase,
+    "v_sales_year_totals",
+    "year",
+    thisYear,
+    tenantId,
+    "revenue"
+  );
+
+  // Expenses = total
+  const expThisMonth = await sumOne(
+    supabase,
+    "v_expense_month_totals",
+    "month",
+    thisMonth,
+    tenantId,
+    "total"
+  );
+  const expYTD = await sumOne(
+    supabase,
+    "v_expense_year_totals",
+    "year",
+    thisYear,
+    tenantId,
+    "total"
+  );
+
+  const profitThisMonth = salesThisMonth - expThisMonth;
+  const profitYTD = salesYTD - expYTD;
 
   return (
-    <main className="max-w-6xl mx-auto px-6 py-8 space-y-6">
+    <div className="p-6 space-y-6">
       <div className="flex gap-3">
-        <Link href="/sales" className="px-3 py-2 border rounded text-sm hover:bg-neutral-900">
+        <Link href="/sales" className="rounded border px-3 py-2 hover:bg-neutral-900">
           Sales details
         </Link>
-        <Link href="/expenses" className="px-3 py-2 border rounded text-sm hover:bg-neutral-900">
+        <Link href="/expenses" className="rounded border px-3 py-2 hover:bg-neutral-900">
           Expenses details
         </Link>
       </div>
 
-      <section className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-        {/* THIS MONTH — SALES */}
-        <div className="border rounded p-5">
-          <div className="text-xs uppercase opacity-70 mb-2">This month — Sales</div>
-          <div className="text-2xl font-semibold">{fmtUSD(salesMonth)}</div>
-        </div>
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Card title="THIS MONTH — SALES" value={fmtUSD(salesThisMonth)} />
+        <Card title="THIS MONTH — EXPENSES" value={fmtUSD(expThisMonth)} />
+        <Card
+          title="THIS MONTH — PROFIT / LOSS"
+          value={fmtUSD(profitThisMonth)}
+          red={profitThisMonth < 0}
+        />
+        <Card title="YEAR TO DATE — SALES" value={fmtUSD(salesYTD)} />
+        <Card title="YEAR TO DATE — EXPENSES" value={fmtUSD(expYTD)} />
+        <Card
+          title="YEAR TO DATE — PROFIT / LOSS"
+          value={fmtUSD(profitYTD)}
+          red={profitYTD < 0}
+        />
+      </div>
+    </div>
+  );
+}
 
-        {/* THIS MONTH — EXPENSES */}
-        <div className="border rounded p-5">
-          <div className="text-xs uppercase opacity-70 mb-2">This month — Expenses</div>
-          <div className="text-2xl font-semibold">{fmtUSD(expenseMonth)}</div>
-        </div>
-
-        {/* THIS MONTH — PROFIT / LOSS */}
-        <div className="border rounded p-5">
-          <div className="text-xs uppercase opacity-70 mb-2">This month — Profit / Loss</div>
-          <div className={`text-2xl font-semibold ${profitThisMonth < 0 ? "text-rose-400" : ""}`}>
-            {fmtUSD(profitThisMonth)}
-          </div>
-        </div>
-
-        {/* YTD — SALES */}
-        <div className="border rounded p-5">
-          <div className="text-xs uppercase opacity-70 mb-2">Year to date — Sales</div>
-          <div className="text-2xl font-semibold">{fmtUSD(salesYtd)}</div>
-        </div>
-
-        {/* YTD — EXPENSES */}
-        <div className="border rounded p-5">
-          <div className="text-xs uppercase opacity-70 mb-2">Year to date — Expenses</div>
-          <div className="text-2xl font-semibold">{fmtUSD(expenseYtd)}</div>
-        </div>
-
-        {/* YTD — PROFIT / LOSS */}
-        <div className="border rounded p-5">
-          <div className="text-xs uppercase opacity-70 mb-2">Year to date — Profit / Loss</div>
-          <div className={`text-2xl font-semibold ${profitYtd < 0 ? "text-rose-400" : ""}`}>
-            {fmtUSD(profitYtd)}
-          </div>
-        </div>
-      </section>
-    </main>
+function Card({ title, value, red }: { title: string; value: string; red?: boolean }) {
+  return (
+    <div className="rounded border border-neutral-800 p-5">
+      <div className="text-xs uppercase tracking-wide text-neutral-400">{title}</div>
+      <div className={`mt-2 text-3xl font-semibold ${red ? "text-rose-400" : ""}`}>{value}</div>
+    </div>
   );
 }
