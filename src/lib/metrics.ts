@@ -1,6 +1,11 @@
 // src/lib/metrics.ts
 import { SupabaseClient } from "@supabase/supabase-js";
 
+/**
+ * Notes:
+ * - Our Postgres views already filter by tenant via tenant_for_select().
+ * - We keep `tenantId` in the signature for backward compatibility, but it is not used.
+ */
 type AmountCol = "revenue" | "total";
 type PeriodCol = "day" | "week" | "month" | "year";
 
@@ -9,13 +14,12 @@ export async function sumOne(
   view: string,
   periodCol: PeriodCol,
   key: string,
-  tenantId: string,
+  _tenantId: string, // unused (views handle tenant)
   amountCol: AmountCol
 ): Promise<number> {
   const { data, error } = await supabase
     .from(view)
     .select(`${amountCol}`)
-    .eq("tenant_id", tenantId)
     .eq(periodCol, key)
     .maybeSingle();
 
@@ -27,20 +31,19 @@ export async function sumOne(
 export async function daySeries(
   supabase: SupabaseClient,
   view: string,
-  tenantId: string,
+  _tenantId: string, // unused (views handle tenant)
   startDay: string,
   amountCol: AmountCol
 ): Promise<Array<{ day: string; amount: number }>> {
   const { data, error } = await supabase
     .from(view)
     .select(`day, ${amountCol}`)
-    .eq("tenant_id", tenantId)
     .gte("day", startDay)
     .order("day", { ascending: true });
 
   if (error || !data) return [];
   return (data as any[]).map((r) => ({
-    day: r.day,
+    day: String(r.day),
     amount: Number(r[amountCol] ?? 0),
   }));
 }
