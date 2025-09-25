@@ -12,52 +12,37 @@ function yearStr(d = new Date()) {
   return `${d.getUTCFullYear()}`;
 }
 
+/** NO tenant filter here; views route via tenant_for_select() */
 async function sumOne(
   supabase: any,
   view: string,
   periodCol: "month" | "year",
   key: string,
-  tenantId: string | null,
   valueCol: "revenue" | "total"
 ): Promise<number> {
-  if (!tenantId) return 0;
   const { data } = await supabase
     .from(view)
     .select(valueCol)
-    .eq("tenant_id", tenantId)
     .eq(periodCol, key)
     .maybeSingle();
-  return Number(data?.[valueCol] ?? 0);
+  return Number((data as any)?.[valueCol] ?? 0);
 }
+
+export const dynamic = "force-dynamic";
 
 export default async function FinancialPage() {
   const supabase = await createServerClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  let tenantId: string | null = null;
-  if (user) {
-    const { data: prof } = await supabase
-      .from("profiles")
-      .select("tenant_id, display_name")
-      .eq("id", user.id)
-      .maybeSingle();
-    tenantId = (prof?.tenant_id as string | null) ?? null;
-  }
 
   const thisMonth = monthStr();
   const thisYear = yearStr();
 
   const [salesMonth, salesYTD] = await Promise.all([
-    sumOne(supabase, "v_sales_month_totals", "month", thisMonth, tenantId, "revenue"),
-    sumOne(supabase, "v_sales_year_totals", "year", thisYear, tenantId, "revenue"),
+    sumOne(supabase, "v_sales_month_totals", "month", thisMonth, "revenue"),
+    sumOne(supabase, "v_sales_year_totals", "year", thisYear, "revenue"),
   ]);
-
   const [expMonth, expYTD] = await Promise.all([
-    sumOne(supabase, "v_expense_month_totals", "month", thisMonth, tenantId, "total"),
-    sumOne(supabase, "v_expense_year_totals", "year", thisYear, tenantId, "total"),
+    sumOne(supabase, "v_expense_month_totals", "month", thisMonth, "total"),
+    sumOne(supabase, "v_expense_year_totals", "year", thisYear, "total"),
   ]);
 
   const profitMonth = salesMonth - expMonth;

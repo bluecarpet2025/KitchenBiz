@@ -2,7 +2,9 @@ import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 
 /** ---- tiny local date helpers (no external deps) ---- */
-function pad(n: number) { return n.toString().padStart(2, "0"); }
+function pad(n: number) {
+  return n.toString().padStart(2, "0");
+}
 function todayStr(d = new Date()) {
   const y = d.getUTCFullYear();
   const m = pad(d.getUTCMonth() + 1);
@@ -22,37 +24,30 @@ function monthStr(d = new Date()) {
 function yearStr(d = new Date()) {
   return `${d.getUTCFullYear()}`;
 }
-// ISO week as IYYY-Www (matches the view)
+// ISO week as IYYY-Www (matches the view label)
 function weekStr(d = new Date()) {
   const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-  // Thursday in current week decides the year
-  date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
+  date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7)); // Thursday decides the year
   const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
   const weekNo = Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
   return `${date.getUTCFullYear()}-W${pad(weekNo)}`;
 }
-
-/** Simple currency formatter (fallback if you don't have a central one) */
 const fmtUSD = (n: number) =>
   (n || 0).toLocaleString(undefined, { style: "currency", currency: "USD" });
 
-/** ----- Small query helpers (accept tenantId as string|null to satisfy TS) ----- */
+/** ----- Query helpers (NO tenant filter; views already route via tenant_for_select) ----- */
 async function sumOne(
   supabase: any,
   view: string,
   periodCol: "day" | "week" | "month" | "year",
   periodKey: string,
-  tenantId: string | null,
   valueCol: "revenue" | "total"
 ): Promise<number> {
-  if (!tenantId) return 0;
   const { data, error } = await supabase
     .from(view)
     .select(valueCol)
-    .eq("tenant_id", tenantId)
     .eq(periodCol, periodKey)
     .maybeSingle();
-
   if (error) return 0;
   return Number(data?.[valueCol] ?? 0);
 }
@@ -60,42 +55,25 @@ async function sumOne(
 async function daySeries(
   supabase: any,
   view: string,
-  tenantId: string | null,
   startDay: string,
   valueCol: "revenue" | "total"
 ): Promise<Array<{ day: string; amount: number }>> {
-  if (!tenantId) return [];
   const { data, error } = await supabase
     .from(view)
     .select(`day, ${valueCol}`)
-    .eq("tenant_id", tenantId)
     .gte("day", startDay)
     .order("day", { ascending: true });
-
   if (error) return [];
   return (data ?? []).map((r: any) => ({
-    day: r.day as string,
+    day: String(r.day),
     amount: Number(r?.[valueCol] ?? 0),
   }));
 }
 
+export const dynamic = "force-dynamic";
+
 export default async function DashboardPage() {
   const supabase = await createServerClient();
-
-  // figure out tenant
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  let tenantId: string | null = null;
-  if (user) {
-    const { data: prof } = await supabase
-      .from("profiles")
-      .select("tenant_id")
-      .eq("id", user.id)
-      .maybeSingle();
-    tenantId = (prof?.tenant_id as string | null) ?? null;
-  }
 
   const today = todayStr();
   const thisWeek = weekStr();
@@ -105,26 +83,26 @@ export default async function DashboardPage() {
 
   // ---- SALES (use revenue) ----
   const [salesToday, salesWeek, salesMonth, salesYTD] = await Promise.all([
-    sumOne(supabase, "v_sales_day_totals", "day", today, tenantId, "revenue"),
-    sumOne(supabase, "v_sales_week_totals", "week", thisWeek, tenantId, "revenue"),
-    sumOne(supabase, "v_sales_month_totals", "month", thisMonth, tenantId, "revenue"),
-    sumOne(supabase, "v_sales_year_totals", "year", thisYear, tenantId, "revenue"),
+    sumOne(supabase, "v_sales_day_totals", "day", today, "revenue"),
+    sumOne(supabase, "v_sales_week_totals", "week", thisWeek, "revenue"),
+    sumOne(supabase, "v_sales_month_totals", "month", thisMonth, "revenue"),
+    sumOne(supabase, "v_sales_year_totals", "year", thisYear, "revenue"),
   ]);
 
   // ---- EXPENSES (use total) ----
   const [expToday, expWeek, expMonth, expYTD] = await Promise.all([
-    sumOne(supabase, "v_expense_day_totals", "day", today, tenantId, "total"),
-    sumOne(supabase, "v_expense_week_totals", "week", thisWeek, tenantId, "total"),
-    sumOne(supabase, "v_expense_month_totals", "month", thisMonth, tenantId, "total"),
-    sumOne(supabase, "v_expense_year_totals", "year", thisYear, tenantId, "total"),
+    sumOne(supabase, "v_expense_day_totals", "day", today, "total"),
+    sumOne(supabase, "v_expense_week_totals", "week", thisWeek, "total"),
+    sumOne(supabase, "v_expense_month_totals", "month", thisMonth, "total"),
+    sumOne(supabase, "v_expense_year_totals", "year", thisYear, "total"),
   ]);
 
   const profitThisMonth = salesMonth - expMonth;
   const profitYTD = salesYTD - expYTD;
 
   const [sales7, exp7] = await Promise.all([
-    daySeries(supabase, "v_sales_day_totals", tenantId, last7Start, "revenue"),
-    daySeries(supabase, "v_expense_day_totals", tenantId, last7Start, "total"),
+    daySeries(supabase, "v_sales_day_totals", last7Start, "revenue"),
+    daySeries(supabase, "v_expense_day_totals", last7Start, "total"),
   ]);
 
   return (
@@ -141,23 +119,20 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      {/* Top row of stat cards — keep existing simple style */}
+      {/* Top row of stat cards */}
       <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="border rounded p-4">
           <div className="text-sm opacity-80">TODAY — SALES</div>
           <div className="text-2xl font-semibold">{fmtUSD(salesToday)}</div>
         </div>
-
         <div className="border rounded p-4">
           <div className="text-sm opacity-80">THIS WEEK — SALES</div>
           <div className="text-2xl font-semibold">{fmtUSD(salesWeek)}</div>
         </div>
-
         <div className="border rounded p-4">
           <div className="text-sm opacity-80">THIS MONTH — SALES</div>
           <div className="text-2xl font-semibold">{fmtUSD(salesMonth)}</div>
         </div>
-
         <div className="border rounded p-4">
           <div className="text-sm opacity-80">YTD — SALES</div>
           <div className="text-2xl font-semibold">{fmtUSD(salesYTD)}</div>
@@ -169,17 +144,14 @@ export default async function DashboardPage() {
           <div className="text-sm opacity-80">TODAY — EXPENSES</div>
           <div className="text-2xl font-semibold">{fmtUSD(expToday)}</div>
         </div>
-
         <div className="border rounded p-4">
           <div className="text-sm opacity-80">THIS WEEK — EXPENSES</div>
           <div className="text-2xl font-semibold">{fmtUSD(expWeek)}</div>
         </div>
-
         <div className="border rounded p-4">
           <div className="text-sm opacity-80">THIS MONTH — EXPENSES</div>
           <div className="text-2xl font-semibold">{fmtUSD(expMonth)}</div>
         </div>
-
         <div className="border rounded p-4">
           <div className="text-sm opacity-80">YTD — EXPENSES</div>
           <div className="text-2xl font-semibold">{fmtUSD(expYTD)}</div>
@@ -193,7 +165,6 @@ export default async function DashboardPage() {
             {fmtUSD(profitThisMonth)}
           </div>
         </div>
-
         <div className="border rounded p-4">
           <div className="text-sm opacity-80">YTD — PROFIT / LOSS</div>
           <div className={`text-2xl font-semibold ${profitYTD < 0 ? "text-rose-400" : ""}`}>
@@ -229,7 +200,6 @@ export default async function DashboardPage() {
             )}
           </div>
         </div>
-
         <div className="border rounded">
           <div className="px-4 py-3 border-b text-sm opacity-80">Last 7 days — Expenses</div>
           <div className="px-4 py-3">
