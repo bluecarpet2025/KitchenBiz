@@ -72,7 +72,7 @@ async function daySeries(
   return (data as any[]).map((r) => ({ label: String(r.day), amount: Number(r[valueCol] ?? 0) }));
 }
 
-/** week series: newest first in DB; we’ll order ascending here */
+/** week series */
 async function weekSeries(
   supabase: any,
   view: string,
@@ -107,7 +107,7 @@ async function monthSeries(
     .reverse();
 }
 
-/** ---------------- tiny SVG sparkline component (server-safe) ---------------- */
+/** ---------------- tiny SVG sparkline ---------------- */
 function Sparkline({ values, width = 220, height = 48 }: { values: number[]; width?: number; height?: number }) {
   const max = Math.max(1, ...values);
   const stepX = values.length > 1 ? width / (values.length - 1) : width;
@@ -127,19 +127,19 @@ function Sparkline({ values, width = 220, height = 48 }: { values: number[]; wid
 type RangeKey = "today" | "week" | "month";
 
 const GOALS: Record<RangeKey, number> = {
-  today: 500,   // edit as you like
+  today: 500,
   week: 3500,
   month: 15000,
 };
 
-export default async function DashboardPage({
-  searchParams,
-}: {
-  searchParams?: { [key: string]: string | string[] | undefined };
+export default async function DashboardPage(props: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const supabase = await createServerClient();
 
-  const range = (Array.isArray(searchParams?.range) ? searchParams?.range[0] : searchParams?.range) as RangeKey | undefined;
+  const sp = (await props.searchParams) ?? {};
+  const raw = Array.isArray(sp.range) ? sp.range[0] : sp.range;
+  const range = raw as RangeKey | undefined;
   const mode: RangeKey = range === "today" || range === "week" || range === "month" ? range : "month";
 
   const today = todayStr();
@@ -312,7 +312,7 @@ function TrendCard({ title, series }: { title: string; series: { label: string; 
 }
 
 function MiniTable({ title, rows }: { title: string; rows: { label: string; amount: number }[] }) {
-  const fmtLabel = (s: string) => s; // already in correct display form from the views
+  const fmtLabel = (s: string) => s;
   return (
     <div className="p-4">
       <div className="text-sm opacity-80 mb-2">{title}</div>
