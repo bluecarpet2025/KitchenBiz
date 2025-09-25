@@ -54,12 +54,12 @@ export default async function HomePage() {
             blurb="Build menus, save/load, share read-only links, and print."
           />
           <CTACard
-            href="/sales/manage"
+            href="/sales"
             title="Sales →"
             blurb="Import sales CSVs and see day/week/month/quarter/year totals."
           />
           <CTACard
-            href="/expenses/manage"
+            href="/expenses"
             title="Expenses →"
             blurb="Log or import expenses. Category totals feed the dashboard."
           />
@@ -128,24 +128,6 @@ function CTACard({
   );
 }
 
-function ArrowRightIcon(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      width="18"
-      height="18"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      {...props}
-    >
-      <path d="M5 12h14" />
-      <path d="M13 5l7 7-7 7" />
-    </svg>
-  );
-}
-
 function CTAButton({ href, label }: { href: string; label: string }) {
   return (
     <Link
@@ -166,5 +148,23 @@ function GhostButton({ href, label }: { href: string; label: string }) {
     >
       <span>{label}</span>
     </Link>
+  );
+}
+
+function ArrowRightIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      {...props}
+    >
+      <path d="M5 12h14" />
+      <path d="M13 5l7 7-7 7" />
+    </svg>
   );
 }
