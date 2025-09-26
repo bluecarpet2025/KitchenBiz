@@ -128,8 +128,8 @@ async function weekdayRevenueThisMonth(
   return names.map((n, i) => ({ label: n, amount: buckets[i] || 0 }));
 }
 
-/** server action to save goal to profiles.goal_month_usd */
-export async function updateGoal(formData: FormData) {
+/** ---------- server action: save goal (local, not exported) ---------- */
+async function updateGoal(formData: FormData) {
   "use server";
   const supabase = await createServerClient();
   const val = Number(formData.get("goal"));
@@ -189,7 +189,6 @@ export default async function DashboardPage({
     ordersThis = await sumOne(supabase, "v_sales_week_totals", "week", weekKey, tenantId, "orders");
   } else if (range === "ytd") {
     salesThis = await sumOne(supabase, "v_sales_year_totals", "year", thisYear, tenantId, "revenue");
-    // ✅ FIXED: include tenantId and the 'orders' column
     ordersThis = await sumOne(supabase, "v_sales_year_totals", "year", thisYear, tenantId, "orders");
   } else {
     // month
