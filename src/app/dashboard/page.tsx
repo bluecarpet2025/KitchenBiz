@@ -15,42 +15,32 @@ const lastDayOfMonth = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getU
 const toISODate = (d: Date) => d.toISOString().slice(0, 10);
 
 /* ----------------------------- DB helpers ------------------------------ */
-async function getTenantId(supabase: any): Promise<string | null> {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
-  const { data: prof } = await supabase.from("profiles").select("tenant_id").eq("id", user.id).maybeSingle();
-  return (prof?.tenant_id as string | null) ?? null;
-}
-
+/** Select a single aggregate from a view; rely on RLS for tenant scoping. */
 async function sumOne(
   supabase: any,
   view: string,
   periodCol: "day" | "week" | "month" | "year",
   key: string,
-  tenantId: string | null,
   col: "revenue" | "total" | "orders",
 ): Promise<number> {
-  if (!tenantId) return 0;
   const { data } = await supabase
     .from(view)
     .select(col)
-    .eq("tenant_id", tenantId)
     .eq(periodCol, key)
     .maybeSingle();
   const raw = (data as any)?.[col];
   return typeof raw === "number" ? raw : Number(raw ?? 0);
 }
 
+/** Expenses by category for the date window (RLS enforces tenant). */
 async function rangeExpensesByCategory(
   supabase: any,
-  tenantId: string,
   startISO: string,
   endISO: string
 ): Promise<Array<{ name: string; value: number }>> {
   const { data } = await supabase
     .from("expenses")
     .select("category, amount_usd, occurred_at, created_at")
-    .eq("tenant_id", tenantId)
     .or(`and(occurred_at.gte.${startISO},occurred_at.lte.${endISO}),and(occurred_at.is.null,created_at.gte.${startISO},created_at.lte.${endISO})`);
   if (!data) return [];
   const m = new Map<string, number>();
@@ -58,39 +48,49 @@ async function rangeExpensesByCategory(
   return Array.from(m.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
 }
 
+/** Robust Top Items: 2-step fetch (orders in window → lines for those orders). */
 async function topItemsForRange(
   supabase: any,
-  tenantId: string,
   startISO: string,
   endISO: string
 ): Promise<Array<{ name: string; revenue: number }>> {
-  // Join to parent for date filter
-  const { data, error } = await supabase
-    .from("sales_order_lines")
-    .select("product, qty, unit_price, sales_orders!inner(tenant_id, occurred_at, created_at)")
-    .eq("sales_orders.tenant_id", tenantId)
+  const { data: orders } = await supabase
+    .from("sales_orders")
+    .select("id, occurred_at, created_at")
     .or(
-      `and(sales_orders.occurred_at.gte.${startISO},sales_orders.occurred_at.lte.${endISO}),` +
-      `and(sales_orders.occurred_at.is.null,sales_orders.created_at.gte.${startISO},sales_orders.created_at.lte.${endISO})`
+      `and(occurred_at.gte.${startISO},occurred_at.lte.${endISO}),` +
+      `and(occurred_at.is.null,created_at.gte.${startISO},created_at.lte.${endISO})`
     )
-    .limit(5000);
-  if (error || !data) return [];
+    .limit(10000);
+
+  const ids = (orders ?? []).map((o: any) => o.id);
+  if (ids.length === 0) return [];
+
+  const { data: lines } = await supabase
+    .from("sales_order_lines")
+    .select("order_id, product, qty, unit_price")
+    .in("order_id", ids.slice(0, 10000));
+
+  if (!lines) return [];
   const m = new Map<string, number>();
-  for (const r of data as any[]) {
+  for (const r of lines as any[]) {
     const name = r.product || "Unknown";
-    const rev  = Number(r.qty || 0) * Number(r.unit_price || 0);
+    const rev = Number(r.qty || 0) * Number(r.unit_price || 0);
     m.set(name, (m.get(name) || 0) + rev);
   }
-  return [...m.entries()].map(([name, revenue]) => ({ name, revenue })).sort((a, b) => b.revenue - a.revenue).slice(0, 5);
+  return [...m.entries()]
+    .map(([name, revenue]) => ({ name, revenue }))
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, 5);
 }
 
-async function weekdayRevenueThisMonth(supabase: any, tenantId: string) {
+/** Weekday revenue for current month (Sun..Sat). */
+async function weekdayRevenueThisMonth(supabase: any) {
   const start = toISODate(firstDayOfMonth(today));
   const end   = toISODate(lastDayOfMonth(today));
   const { data } = await supabase
     .from("v_sales_day_totals")
     .select("day, revenue")
-    .eq("tenant_id", tenantId)
     .gte("day", start)
     .lte("day", end)
     .order("day", { ascending: true });
@@ -104,6 +104,7 @@ async function weekdayRevenueThisMonth(supabase: any, tenantId: string) {
   return label.map((l, i) => ({ label: l, amount: totals[i] }));
 }
 
+/* ------------------------------ UI bits ------------------------------ */
 function Delta({ value }: { value: number }) {
   const color = value > 0 ? "text-emerald-400" : value < 0 ? "text-rose-400" : "text-neutral-400";
   const sign = value > 0 ? "+" : "";
@@ -130,19 +131,17 @@ function Tile({
   );
 }
 
-/* ------------------------------- Page ------------------------------- */
+/* -------------------------------- Page -------------------------------- */
 // keep type loose to avoid Next.js Page typing trap
 export default async function DashboardPage(props: { searchParams?: any }) {
   const sp = (props?.searchParams ? await props.searchParams : {}) as Record<string, string>;
   const range = (typeof sp.range === "string" ? sp.range : "month") as "today" | "week" | "month" | "ytd";
 
   const supabase = await createServerClient();
-  const tenantId = await getTenantId(supabase);
 
   /* -------- determine period keys & date window based on range -------- */
   const now = new Date();
   let keyMonth = monthStr(now);
-  let keyYear  = yearStr(now);
   let startISO: string;
   let endISO: string;
 
@@ -150,7 +149,7 @@ export default async function DashboardPage(props: { searchParams?: any }) {
     startISO = endISO = toISODate(now);
   } else if (range === "week") {
     const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-    const diff = d.getUTCDay(); // 0..6 (Sun..Sat)
+    const diff = d.getUTCDay(); // 0..6
     const sun = new Date(d); sun.setUTCDate(d.getUTCDate() - diff);
     const sat = new Date(sun); sat.setUTCDate(sun.getUTCDate() + 6);
     startISO = toISODate(sun);
@@ -165,10 +164,11 @@ export default async function DashboardPage(props: { searchParams?: any }) {
   }
 
   /* ------------------------ top summary aggregates ----------------------- */
+  // Rely on RLS; do not filter by tenant_id explicitly.
   const [salesMonth, ordersMonth, expMonth] = await Promise.all([
-    sumOne(supabase, "v_sales_month_totals", "month", keyMonth, tenantId, "revenue"),
-    sumOne(supabase, "v_sales_month_totals", "month", keyMonth, tenantId, "orders"),
-    sumOne(supabase, "v_expense_month_totals", "month", keyMonth, tenantId, "total"),
+    sumOne(supabase, "v_sales_month_totals", "month", keyMonth, "revenue"),
+    sumOne(supabase, "v_sales_month_totals", "month", keyMonth, "orders"),
+    sumOne(supabase, "v_expense_month_totals", "month", keyMonth, "total"),
   ]);
   const profitMonth = salesMonth - expMonth;
 
@@ -176,8 +176,8 @@ export default async function DashboardPage(props: { searchParams?: any }) {
   const prevMonthDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
   const prevMonthKey  = monthStr(prevMonthDate);
   const [salesPrev, expPrev] = await Promise.all([
-    sumOne(supabase, "v_sales_month_totals", "month", prevMonthKey, tenantId, "revenue"),
-    sumOne(supabase, "v_expense_month_totals", "month", prevMonthKey, tenantId, "total"),
+    sumOne(supabase, "v_sales_month_totals", "month", prevMonthKey, "revenue"),
+    sumOne(supabase, "v_expense_month_totals", "month", prevMonthKey, "total"),
   ]);
   const profitPrev = salesPrev - expPrev;
   const pct = (a: number, b: number) => (b === 0 ? 0 : ((a - b) / Math.max(1, b)) * 100);
@@ -186,20 +186,19 @@ export default async function DashboardPage(props: { searchParams?: any }) {
   const profMoM   = pct(profitMonth, profitPrev);
 
   /* ------------------------ KPI (current range) ------------------------- */
-  const cats = tenantId ? await rangeExpensesByCategory(supabase, tenantId, startISO, endISO) : [];
+  const cats = await rangeExpensesByCategory(supabase, startISO, endISO);
   const getCat = (name: string) => cats.find(c => c.name.toLowerCase() === name.toLowerCase())?.value ?? 0;
   const foodTotal  = getCat("Food");
   const laborTotal = getCat("Labor");
 
-  // for AOV/Food/Labor/Prime: use month’s sales so it matches range selector behavior today
   const aov      = ordersMonth > 0 ? salesMonth / ordersMonth : 0;
   const foodPct  = salesMonth > 0 ? (foodTotal  / salesMonth) * 100 : 0;
   const laborPct = salesMonth > 0 ? (laborTotal / salesMonth) * 100 : 0;
   const primePct = Math.min(100, foodPct + laborPct);
 
   /* ------------------------ charts & tables data ------------------------ */
-  const topItems = tenantId ? await topItemsForRange(supabase, tenantId, startISO, endISO) : [];
-  const weekday  = tenantId ? await weekdayRevenueThisMonth(supabase, tenantId) : [];
+  const topItems = await topItemsForRange(supabase, startISO, endISO);
+  const weekday  = await weekdayRevenueThisMonth(supabase);
 
   // 12mo Sales vs Expenses line
   const months: string[] = [];
@@ -207,15 +206,15 @@ export default async function DashboardPage(props: { searchParams?: any }) {
     const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
     months.push(monthStr(d));
   }
-  const salesSeries = await Promise.all(months.map((k) => sumOne(supabase, "v_sales_month_totals", "month", k, tenantId, "revenue")));
-  const expSeries   = await Promise.all(months.map((k) => sumOne(supabase, "v_expense_month_totals", "month", k, tenantId, "total")));
+  const salesSeries = await Promise.all(months.map((k) => sumOne(supabase, "v_sales_month_totals", "month", k, "revenue")));
+  const expSeries   = await Promise.all(months.map((k) => sumOne(supabase, "v_expense_month_totals", "month", k, "total")));
   const lineData    = months.map((m, i) => ({ month: m, sales: salesSeries[i], expenses: expSeries[i] }));
 
   // Last 4 months quick table
   const last4 = months.slice(-4);
-  const last4Sales  = await Promise.all(last4.map((k) => sumOne(supabase, "v_sales_month_totals", "month", k, tenantId, "revenue")));
-  const last4Orders = await Promise.all(last4.map((k) => sumOne(supabase, "v_sales_month_totals", "month", k, tenantId, "orders")));
-  const last4Exp    = await Promise.all(last4.map((k) => sumOne(supabase, "v_expense_month_totals", "month", k, tenantId, "total")));
+  const last4Sales  = await Promise.all(last4.map((k) => sumOne(supabase, "v_sales_month_totals", "month", k, "revenue")));
+  const last4Orders = await Promise.all(last4.map((k) => sumOne(supabase, "v_sales_month_totals", "month", k, "orders")));
+  const last4Exp    = await Promise.all(last4.map((k) => sumOne(supabase, "v_expense_month_totals", "month", k, "total")));
   const last4Rows   = last4.map((m, i) => {
     const sales    = last4Sales[i];
     const orders   = Math.max(0, Math.floor(last4Orders[i]));
@@ -231,13 +230,12 @@ export default async function DashboardPage(props: { searchParams?: any }) {
 
   return (
     <main className="max-w-7xl mx-auto px-4 py-6 space-y-4">
-      {/* Range toggles (back working) */}
+      {/* Range toggles */}
       <div className="flex gap-2 mb-2">
         <Link className={active("today")} href="/dashboard?range=today">Today</Link>
         <Link className={active("week")}  href="/dashboard?range=week">Week</Link>
         <Link className={active("month")} href="/dashboard?range=month">Month</Link>
         <Link className={active("ytd")}   href="/dashboard?range=ytd">YTD</Link>
-        {/* CSV buttons removed per request */}
       </div>
 
       {/* Top tiles */}
