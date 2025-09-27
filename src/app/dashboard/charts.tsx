@@ -19,10 +19,10 @@ import * as React from "react";
 
 const defaultTick = { fontSize: 12, fill: "var(--neutral-400, #aaa)" };
 const gridStroke = "var(--neutral-800, #2a2a2a)";
-const stroke1 = "var(--chart-1, #3ea65f)";   // green-ish
-const stroke2 = "var(--chart-2, #4094ff)";   // blue-ish
-const stroke3 = "var(--chart-3, #ffaf26)";   // orange-ish
-const piePalette = [stroke1, stroke2, stroke3, "#225c5e", "#eab308", "#38bdf8", "#c084fc", "#f97316"];
+const strokeSales = "var(--chart-1, #3ea65f)";   // green-ish
+const strokeExp   = "var(--chart-2, #4094ff)";   // blue-ish
+const strokeBar   = "var(--chart-3, #ffaf26)";   // orange-ish
+const piePalette  = [strokeSales, strokeExp, strokeBar, "#225c5e", "#eab308", "#38bdf8", "#c084fc", "#f97316"];
 
 const currency = (v?: number) =>
   (v ?? 0).toLocaleString(undefined, { style: "currency", currency: "USD" });
@@ -31,21 +31,21 @@ const currency = (v?: number) =>
 export function SalesVsExpensesChart({
   data,
 }: {
-  data: Array<{ month: string; sales: number; expenses: number; profit: number }>;
+  data: Array<{ month: string; sales: number; expenses: number }>;
 }) {
   return (
     <div className="border rounded p-4">
       <div className="text-sm opacity-80 mb-2">Sales vs Expenses — last 12 months</div>
       <div className="h-64">
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data}>
+          <LineChart data={data} margin={{ left: 8, right: 16, top: 10, bottom: 0 }}>
             <CartesianGrid stroke={gridStroke} strokeDasharray="3 3" />
             <XAxis dataKey="month" tick={defaultTick} />
             <YAxis tick={defaultTick} />
             <Tooltip formatter={(v: any) => currency(Number(v))} />
             <Legend />
-            <Line type="monotone" dataKey="expenses" stroke={stroke2} strokeWidth={2} dot={false} />
-            <Line type="monotone" dataKey="sales" stroke={stroke1} strokeWidth={2} dot={false} />
+            <Line type="monotone" dataKey="expenses" name="expenses" stroke={strokeExp} strokeWidth={2} dot={false} />
+            <Line type="monotone" dataKey="sales"    name="sales"    stroke={strokeSales} strokeWidth={2} dot={false} />
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -106,30 +106,27 @@ export function TopItemsChart({
 }: {
   data: Array<{ name: string; revenue: number }>;
 }) {
+  const rows = data && data.length ? [...data].slice(0, 5).reverse() : [];
   return (
     <div className="border rounded p-4">
       <div className="text-sm opacity-80 mb-2">Top items — current range</div>
-      <div className="h-64">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart
-            data={[...data].reverse()} // smallest at top, biggest at bottom visually
-            layout="vertical"
-            margin={{ left: 8, right: 12, top: 10, bottom: 0 }}
-          >
-            <CartesianGrid stroke={gridStroke} horizontal={false} />
-            <XAxis type="number" tick={defaultTick} />
-            <YAxis
-              dataKey="name"
-              type="category"
-              tick={defaultTick}
-              width={120}
-              interval={0}
-            />
-            <Tooltip formatter={(v: any) => currency(Number(v))} />
-            <Bar dataKey="revenue" fill={stroke3} radius={[3, 3, 3, 3]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
+      {rows.length === 0 ? (
+        <div className="h-64 flex items-center justify-center opacity-60 text-sm">
+          No items in this range.
+        </div>
+      ) : (
+        <div className="h-64">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={rows} layout="vertical" margin={{ left: 8, right: 12, top: 10, bottom: 0 }}>
+              <CartesianGrid stroke={gridStroke} horizontal={false} />
+              <XAxis type="number" tick={defaultTick} />
+              <YAxis dataKey="name" type="category" tick={defaultTick} width={140} interval={0} />
+              <Tooltip formatter={(v: any) => currency(Number(v))} />
+              <Bar dataKey="revenue" fill={strokeBar} radius={[3, 3, 3, 3]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
     </div>
   );
 }
