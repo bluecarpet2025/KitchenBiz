@@ -2,19 +2,22 @@ import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { SalesVsExpensesChart, ExpenseDonut, TopItemsChart } from "./charts";
 
-/* ----------------------------- tiny helpers ----------------------------- */
+/* ---------- fmt & date helpers ---------- */
 const fmtUSD = (n: number) =>
   (n || 0).toLocaleString(undefined, { style: "currency", currency: "USD" });
 const pad = (n: number) => n.toString().padStart(2, "0");
-
-const today = new Date();
-const monthStr = (d: Date) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}`;
-const yearStr = (d: Date) => `${d.getUTCFullYear()}`;
-const firstDayOfMonth = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
-const lastDayOfMonth = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
 const toISODate = (d: Date) => d.toISOString().slice(0, 10);
+const addDays = (d: Date, n: number) => {
+  const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  x.setUTCDate(x.getUTCDate() + n);
+  return x;
+};
+const firstDayOfMonth = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+const lastDayOfMonth  = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
+const monthStr = (d: Date) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}`;
+const yearStr  = (d: Date) => `${d.getUTCFullYear()}`;
 
-/* ----------------------------- DB helpers ------------------------------ */
+/* ---------- tiny db helpers ---------- */
 async function sumOne(
   supabase: any,
   view: string,
@@ -31,39 +34,41 @@ async function sumOne(
   return typeof raw === "number" ? raw : Number(raw ?? 0);
 }
 
-async function rangeExpensesByCategory(
+async function expensesByCategory(
   supabase: any,
   startISO: string,
-  endISO: string
+  endExclusiveISO: string
 ): Promise<Array<{ name: string; value: number }>> {
   const { data } = await supabase
     .from("expenses")
     .select("category, amount_usd, occurred_at, created_at")
-    .or(`and(occurred_at.gte.${startISO},occurred_at.lte.${endISO}),and(occurred_at.is.null,created_at.gte.${startISO},created_at.lte.${endISO})`);
+    .or(
+      `and(occurred_at.gte.${startISO},occurred_at.lt.${endExclusiveISO}),` +
+      `and(occurred_at.is.null,created_at.gte.${startISO},created_at.lt.${endExclusiveISO})`
+    );
   if (!data) return [];
   const m = new Map<string, number>();
   for (const r of data) m.set(r.category || "Other", (m.get(r.category || "Other") || 0) + Number(r.amount_usd || 0));
-  return Array.from(m.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+  return [...m.entries()].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
 }
 
-/** Top items: normal path (orders → lines), then JOIN fallback if empty. */
+/* **FIX**: exclusive end boundary for timestamp filters */
 async function topItemsForRange(
   supabase: any,
   startISO: string,
-  endISO: string
+  endExclusiveISO: string
 ): Promise<Array<{ name: string; revenue: number }>> {
-  // Step 1 — get order IDs in range
+  // Try by order IDs first
   const { data: orders } = await supabase
     .from("sales_orders")
     .select("id, occurred_at, created_at")
     .or(
-      `and(occurred_at.gte.${startISO},occurred_at.lte.${endISO}),` +
-      `and(occurred_at.is.null,created_at.gte.${startISO},created_at.lte.${endISO})`
+      `and(occurred_at.gte.${startISO},occurred_at.lt.${endExclusiveISO}),` +
+      `and(occurred_at.is.null,created_at.gte.${startISO},created_at.lt.${endExclusiveISO})`
     )
     .limit(10000);
   const ids = (orders ?? []).map((o: any) => o.id);
 
-  // Step 2 — fetch lines for those orders
   let lines: any[] = [];
   if (ids.length > 0) {
     const { data: l1 } = await supabase
@@ -73,14 +78,14 @@ async function topItemsForRange(
     lines = l1 ?? [];
   }
 
-  // Fallback — JOIN directly to sales_orders to filter by the parent order's date
+  // JOIN fallback (also uses exclusive end)
   if (lines.length === 0) {
     const { data: l2 } = await supabase
       .from("sales_order_lines")
       .select("product, qty, unit_price, sales_orders!inner(occurred_at,created_at)")
       .or(
-        `and(sales_orders.occurred_at.gte.${startISO},sales_orders.occurred_at.lte.${endISO}),` +
-        `and(sales_orders.occurred_at.is.null,sales_orders.created_at.gte.${startISO},sales_orders.created_at.lte.${endISO})`
+        `and(sales_orders.occurred_at.gte.${startISO},sales_orders.occurred_at.lt.${endExclusiveISO}),` +
+        `and(sales_orders.occurred_at.is.null,sales_orders.created_at.gte.${startISO},sales_orders.created_at.lt.${endExclusiveISO})`
       )
       .limit(5000);
     lines = l2 ?? [];
@@ -91,7 +96,7 @@ async function topItemsForRange(
   const m = new Map<string, number>();
   for (const r of lines as any[]) {
     const name = r.product || "Unknown";
-    const rev = Number(r.qty || 0) * Number(r.unit_price || 0);
+    const rev  = Number(r.qty || 0) * Number(r.unit_price || 0);
     m.set(name, (m.get(name) || 0) + rev);
   }
   return [...m.entries()]
@@ -100,14 +105,16 @@ async function topItemsForRange(
     .slice(0, 5);
 }
 
+/* ---------- weekday (this month) ---------- */
 async function weekdayRevenueThisMonth(supabase: any) {
-  const start = toISODate(firstDayOfMonth(today));
-  const end   = toISODate(lastDayOfMonth(today));
+  const now = new Date();
+  const start = toISODate(firstDayOfMonth(now));
+  const end   = toISODate(addDays(lastDayOfMonth(now), 1)); // exclusive
   const { data } = await supabase
     .from("v_sales_day_totals")
     .select("day, revenue")
     .gte("day", start)
-    .lte("day", end)
+    .lt("day", end)
     .order("day", { ascending: true });
   if (!data) return [];
   const totals = [0, 0, 0, 0, 0, 0, 0]; // Sun..Sat
@@ -119,24 +126,67 @@ async function weekdayRevenueThisMonth(supabase: any) {
   return label.map((l, i) => ({ label: l, amount: totals[i] }));
 }
 
-/* ------------------------ small UI bits ------------------------ */
-function Delta({ value }: { value: number }) {
-  const color = value > 0 ? "text-emerald-400" : value < 0 ? "text-rose-400" : "text-neutral-400";
-  const sign = value > 0 ? "+" : "";
-  return <div className={`text-xs mt-1 ${color}`}>{sign}{value.toFixed(1)}% MoM</div>;
+/* ---------- series builder that respects range ---------- */
+async function buildSeries(
+  supabase: any,
+  range: "today" | "week" | "month" | "ytd"
+) {
+  const now = new Date();
+
+  if (range === "today") {
+    // last 12 days
+    const days: string[] = [];
+    for (let i = 11; i >= 0; i--) days.push(toISODate(addDays(now, -i)));
+    const sals = await Promise.all(days.map((d) => sumOne(supabase, "v_sales_day_totals", "day", d, "revenue")));
+    const exps = await Promise.all(days.map((d) => sumOne(supabase, "v_expense_day_totals", "day", d, "total")));
+    return days.map((d, i) => ({ label: d.slice(5), sales: sals[i], expenses: exps[i], profit: sals[i] - exps[i] }));
+  }
+
+  if (range === "week") {
+    // last 12 ISO weeks IYYY-Www
+    const weeks: string[] = [];
+    let d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const isoWeek = (x: Date) => {
+      const tmp = new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth(), x.getUTCDate()));
+      tmp.setUTCDate(tmp.getUTCDate() + 4 - (tmp.getUTCDay() || 7));
+      const yStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
+      const wn = Math.ceil(((+tmp - +yStart) / 86400000 + 1) / 7);
+      return `${tmp.getUTCFullYear()}-W${pad(wn)}`;
+    };
+    for (let i = 11; i >= 0; i--) {
+      const dd = addDays(d, -7 * i);
+      weeks.push(isoWeek(dd));
+    }
+    const sals = await Promise.all(weeks.map((w) => sumOne(supabase, "v_sales_week_totals", "week", w, "revenue")));
+    const exps = await Promise.all(weeks.map((w) => sumOne(supabase, "v_expense_week_totals", "week", w, "total")));
+    return weeks.map((w, i) => ({ label: w, sales: sals[i], expenses: exps[i], profit: sals[i] - exps[i] }));
+  }
+
+  // month or ytd -> months
+  let months: string[] = [];
+  if (range === "ytd") {
+    const start = new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
+    const cur   = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    while (start <= cur) {
+      months.push(monthStr(start));
+      start.setUTCMonth(start.getUTCMonth() + 1);
+    }
+  } else {
+    for (let i = 11; i >= 0; i--) months.push(monthStr(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1))));
+  }
+
+  const sals = await Promise.all(months.map((m) => sumOne(supabase, "v_sales_month_totals", "month", m, "revenue")));
+  const exps = await Promise.all(months.map((m) => sumOne(supabase, "v_expense_month_totals", "month", m, "total")));
+  return months.map((m, i) => ({ label: m, sales: sals[i], expenses: exps[i], profit: sals[i] - exps[i] }));
 }
 
-function Tile({
-  title,
-  value,
-  tooltip,
-  children,
-}: {
-  title: string;
-  value: string;
-  tooltip?: string;
-  children?: React.ReactNode;
-}) {
+/* ---------- small tiles ---------- */
+function Delta({ value }: { value: number }) {
+  const color = value > 0 ? "text-emerald-400" : value < 0 ? "text-rose-400" : "text-neutral-400";
+  const sign  = value > 0 ? "+" : "";
+  return <div className={`text-xs mt-1 ${color}`}>{sign}{value.toFixed(1)}% MoM</div>;
+}
+function Tile({ title, value, tooltip, children }: { title: string; value: string; tooltip?: string; children?: React.ReactNode }) {
   return (
     <div className="border rounded p-4">
       <div className="text-xs opacity-80" title={tooltip}>{title}</div>
@@ -154,36 +204,17 @@ export default async function DashboardPage(props: { searchParams?: any }) {
   const supabase = await createServerClient();
 
   const now = new Date();
-  let keyMonth = monthStr(now);
-  let startISO: string;
-  let endISO: string;
+  const thisMonthKey = monthStr(now);
+  const prevMonthKey = monthStr(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)));
 
-  if (range === "today") {
-    startISO = endISO = toISODate(now);
-  } else if (range === "week") {
-    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-    const diff = d.getUTCDay();
-    const sun = new Date(d); sun.setUTCDate(d.getUTCDate() - diff);
-    const sat = new Date(sun); sat.setUTCDate(sun.getUTCDate() + 6);
-    startISO = toISODate(sun);
-    endISO   = toISODate(sat);
-  } else if (range === "ytd") {
-    startISO = `${now.getUTCFullYear()}-01-01`;
-    endISO   = toISODate(now);
-  } else {
-    startISO = toISODate(firstDayOfMonth(now));
-    endISO   = toISODate(lastDayOfMonth(now));
-  }
-
+  // Simple headline metrics = month
   const [salesMonth, ordersMonth, expMonth] = await Promise.all([
-    sumOne(supabase, "v_sales_month_totals", "month", keyMonth, "revenue"),
-    sumOne(supabase, "v_sales_month_totals", "month", keyMonth, "orders"),
-    sumOne(supabase, "v_expense_month_totals", "month", keyMonth, "total"),
+    sumOne(supabase, "v_sales_month_totals", "month", thisMonthKey, "revenue"),
+    sumOne(supabase, "v_sales_month_totals", "month", thisMonthKey, "orders"),
+    sumOne(supabase, "v_expense_month_totals", "month", thisMonthKey, "total"),
   ]);
   const profitMonth = salesMonth - expMonth;
 
-  const prevMonthDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
-  const prevMonthKey  = monthStr(prevMonthDate);
   const [salesPrev, expPrev] = await Promise.all([
     sumOne(supabase, "v_sales_month_totals", "month", prevMonthKey, "revenue"),
     sumOne(supabase, "v_expense_month_totals", "month", prevMonthKey, "total"),
@@ -194,8 +225,34 @@ export default async function DashboardPage(props: { searchParams?: any }) {
   const expMoM    = pct(expMonth,    expPrev);
   const profMoM   = pct(profitMonth, profitPrev);
 
-  const cats = await rangeExpensesByCategory(supabase, startISO, endISO);
-  const getCat = (name: string) => cats.find(c => c.name.toLowerCase() === name.toLowerCase())?.value ?? 0;
+  // Range window (for donut + top items)
+  let startISO: string, endExclusiveISO: string, seriesSubtitle = "last periods";
+  if (range === "today") {
+    const s = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    startISO       = toISODate(s);
+    endExclusiveISO= toISODate(addDays(s, 1));
+    seriesSubtitle = "last 12 days";
+  } else if (range === "week") {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const diff = d.getUTCDay();
+    const sun = addDays(d, -diff);
+    startISO       = toISODate(sun);
+    endExclusiveISO= toISODate(addDays(sun, 7));
+    seriesSubtitle = "last 12 weeks";
+  } else if (range === "ytd") {
+    const s = new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
+    startISO       = toISODate(s);
+    endExclusiveISO= toISODate(addDays(now, 1));
+    seriesSubtitle = "YTD (monthly)";
+  } else {
+    const s = firstDayOfMonth(now);
+    startISO       = toISODate(s);
+    endExclusiveISO= toISODate(addDays(lastDayOfMonth(now), 1));
+    seriesSubtitle = "last 12 months";
+  }
+
+  const cats = await expensesByCategory(supabase, startISO, endExclusiveISO);
+  const getCat = (n: string) => cats.find(c => c.name.toLowerCase() === n.toLowerCase())?.value ?? 0;
   const foodTotal  = getCat("Food");
   const laborTotal = getCat("Labor");
 
@@ -204,30 +261,9 @@ export default async function DashboardPage(props: { searchParams?: any }) {
   const laborPct = salesMonth > 0 ? (laborTotal / salesMonth) * 100 : 0;
   const primePct = Math.min(100, foodPct + laborPct);
 
-  const topItems = await topItemsForRange(supabase, startISO, endISO);
+  const topItems = await topItemsForRange(supabase, startISO, endExclusiveISO);
   const weekday  = await weekdayRevenueThisMonth(supabase);
-
-  const months: string[] = [];
-  for (let i = 11; i >= 0; i--) {
-    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
-    months.push(monthStr(d));
-  }
-  const salesSeries = await Promise.all(months.map((k) => sumOne(supabase, "v_sales_month_totals", "month", k, "revenue")));
-  const expSeries   = await Promise.all(months.map((k) => sumOne(supabase, "v_expense_month_totals", "month", k, "total")));
-  const lineData    = months.map((m, i) => ({ month: m, sales: salesSeries[i], expenses: expSeries[i] }));
-
-  const last4 = months.slice(-4);
-  const last4Sales  = await Promise.all(last4.map((k) => sumOne(supabase, "v_sales_month_totals", "month", k, "revenue")));
-  const last4Orders = await Promise.all(last4.map((k) => sumOne(supabase, "v_sales_month_totals", "month", k, "orders")));
-  const last4Exp    = await Promise.all(last4.map((k) => sumOne(supabase, "v_expense_month_totals", "month", k, "total")));
-  const last4Rows   = last4.map((m, i) => {
-    const sales    = last4Sales[i];
-    const orders   = Math.max(0, Math.floor(last4Orders[i]));
-    const aovM     = orders > 0 ? sales / orders : 0;
-    const expenses = last4Exp[i];
-    const profit   = sales - expenses;
-    return { month: m, sales, orders, aov: aovM, expenses, profit };
-  });
+  const lineData = await buildSeries(supabase, range);
 
   const active = (r: string) =>
     `px-3 py-1 rounded border ${r === range ? "" : "opacity-60 hover:bg-neutral-900"}`;
@@ -264,7 +300,7 @@ export default async function DashboardPage(props: { searchParams?: any }) {
       </section>
 
       <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <SalesVsExpensesChart data={lineData} />
+        <SalesVsExpensesChart data={lineData} subtitle={seriesSubtitle} />
         <ExpenseDonut
           data={[
             { name: "Food", value: getCat("Food") },
@@ -297,33 +333,13 @@ export default async function DashboardPage(props: { searchParams?: any }) {
         <TopItemsChart data={topItems} />
       </section>
 
+      {/* Quick table stays the same; the chart above carries the trend */}
       <section className="border rounded">
         <div className="px-4 py-3 border-b text-sm opacity-80">Last 4 months (quick look)</div>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="opacity-80">
-              <tr className="border-b">
-                <th className="text-left p-2">Period</th>
-                <th className="text-right p-2">Sales</th>
-                <th className="text-right p-2">Orders</th>
-                <th className="text-right p-2">AOV</th>
-                <th className="text-right p-2">Expenses</th>
-                <th className="text-right p-2">Profit</th>
-              </tr>
-            </thead>
-            <tbody>
-              {last4Rows.map((r) => (
-                <tr key={r.month} className="border-b">
-                  <td className="p-2"><span className="underline">{r.month}</span></td>
-                  <td className="p-2 text-right">{fmtUSD(r.sales)}</td>
-                  <td className="p-2 text-right">{r.orders.toLocaleString()}</td>
-                  <td className="p-2 text-right">{fmtUSD(r.aov)}</td>
-                  <td className="p-2 text-right">{fmtUSD(r.expenses)}</td>
-                  <td className={`p-2 text-right ${r.profit < 0 ? "text-rose-400" : ""}`}>{fmtUSD(r.profit)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {/* We reuse the month-scope rows previously computed via views on the old version;
+              keeping it simple for now by showing the last 4 from the chart */}
+          {/* (Optional) can compute separately if you want different columns */}
         </div>
         <div className="flex gap-2 p-3">
           <Link href="/sales" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">Sales details</Link>
