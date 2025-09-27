@@ -15,7 +15,6 @@ const lastDayOfMonth = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getU
 const toISODate = (d: Date) => d.toISOString().slice(0, 10);
 
 /* ----------------------------- DB helpers ------------------------------ */
-/** Select a single aggregate from a view; rely on RLS for tenant scoping. */
 async function sumOne(
   supabase: any,
   view: string,
@@ -32,7 +31,6 @@ async function sumOne(
   return typeof raw === "number" ? raw : Number(raw ?? 0);
 }
 
-/** Expenses by category for the date window (RLS enforces tenant). */
 async function rangeExpensesByCategory(
   supabase: any,
   startISO: string,
@@ -48,12 +46,13 @@ async function rangeExpensesByCategory(
   return Array.from(m.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
 }
 
-/** Robust Top Items: 2-step fetch (orders in window → lines for those orders). */
+/** Top items: normal path (orders → lines), then JOIN fallback if empty. */
 async function topItemsForRange(
   supabase: any,
   startISO: string,
   endISO: string
 ): Promise<Array<{ name: string; revenue: number }>> {
+  // Step 1 — get order IDs in range
   const { data: orders } = await supabase
     .from("sales_orders")
     .select("id, occurred_at, created_at")
@@ -62,16 +61,33 @@ async function topItemsForRange(
       `and(occurred_at.is.null,created_at.gte.${startISO},created_at.lte.${endISO})`
     )
     .limit(10000);
-
   const ids = (orders ?? []).map((o: any) => o.id);
-  if (ids.length === 0) return [];
 
-  const { data: lines } = await supabase
-    .from("sales_order_lines")
-    .select("order_id, product, qty, unit_price")
-    .in("order_id", ids.slice(0, 10000));
+  // Step 2 — fetch lines for those orders
+  let lines: any[] = [];
+  if (ids.length > 0) {
+    const { data: l1 } = await supabase
+      .from("sales_order_lines")
+      .select("order_id, product, qty, unit_price")
+      .in("order_id", ids.slice(0, 10000));
+    lines = l1 ?? [];
+  }
 
-  if (!lines) return [];
+  // Fallback — JOIN directly to sales_orders to filter by the parent order's date
+  if (lines.length === 0) {
+    const { data: l2 } = await supabase
+      .from("sales_order_lines")
+      .select("product, qty, unit_price, sales_orders!inner(occurred_at,created_at)")
+      .or(
+        `and(sales_orders.occurred_at.gte.${startISO},sales_orders.occurred_at.lte.${endISO}),` +
+        `and(sales_orders.occurred_at.is.null,sales_orders.created_at.gte.${startISO},sales_orders.created_at.lte.${endISO})`
+      )
+      .limit(5000);
+    lines = l2 ?? [];
+  }
+
+  if (lines.length === 0) return [];
+
   const m = new Map<string, number>();
   for (const r of lines as any[]) {
     const name = r.product || "Unknown";
@@ -84,7 +100,6 @@ async function topItemsForRange(
     .slice(0, 5);
 }
 
-/** Weekday revenue for current month (Sun..Sat). */
 async function weekdayRevenueThisMonth(supabase: any) {
   const start = toISODate(firstDayOfMonth(today));
   const end   = toISODate(lastDayOfMonth(today));
@@ -104,7 +119,7 @@ async function weekdayRevenueThisMonth(supabase: any) {
   return label.map((l, i) => ({ label: l, amount: totals[i] }));
 }
 
-/* ------------------------------ UI bits ------------------------------ */
+/* ------------------------ small UI bits ------------------------ */
 function Delta({ value }: { value: number }) {
   const color = value > 0 ? "text-emerald-400" : value < 0 ? "text-rose-400" : "text-neutral-400";
   const sign = value > 0 ? "+" : "";
@@ -132,14 +147,12 @@ function Tile({
 }
 
 /* -------------------------------- Page -------------------------------- */
-// keep type loose to avoid Next.js Page typing trap
 export default async function DashboardPage(props: { searchParams?: any }) {
   const sp = (props?.searchParams ? await props.searchParams : {}) as Record<string, string>;
   const range = (typeof sp.range === "string" ? sp.range : "month") as "today" | "week" | "month" | "ytd";
 
   const supabase = await createServerClient();
 
-  /* -------- determine period keys & date window based on range -------- */
   const now = new Date();
   let keyMonth = monthStr(now);
   let startISO: string;
@@ -149,7 +162,7 @@ export default async function DashboardPage(props: { searchParams?: any }) {
     startISO = endISO = toISODate(now);
   } else if (range === "week") {
     const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-    const diff = d.getUTCDay(); // 0..6
+    const diff = d.getUTCDay();
     const sun = new Date(d); sun.setUTCDate(d.getUTCDate() - diff);
     const sat = new Date(sun); sat.setUTCDate(sun.getUTCDate() + 6);
     startISO = toISODate(sun);
@@ -158,13 +171,10 @@ export default async function DashboardPage(props: { searchParams?: any }) {
     startISO = `${now.getUTCFullYear()}-01-01`;
     endISO   = toISODate(now);
   } else {
-    // month (default)
     startISO = toISODate(firstDayOfMonth(now));
     endISO   = toISODate(lastDayOfMonth(now));
   }
 
-  /* ------------------------ top summary aggregates ----------------------- */
-  // Rely on RLS; do not filter by tenant_id explicitly.
   const [salesMonth, ordersMonth, expMonth] = await Promise.all([
     sumOne(supabase, "v_sales_month_totals", "month", keyMonth, "revenue"),
     sumOne(supabase, "v_sales_month_totals", "month", keyMonth, "orders"),
@@ -172,7 +182,6 @@ export default async function DashboardPage(props: { searchParams?: any }) {
   ]);
   const profitMonth = salesMonth - expMonth;
 
-  // deltas vs previous month
   const prevMonthDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
   const prevMonthKey  = monthStr(prevMonthDate);
   const [salesPrev, expPrev] = await Promise.all([
@@ -185,7 +194,6 @@ export default async function DashboardPage(props: { searchParams?: any }) {
   const expMoM    = pct(expMonth,    expPrev);
   const profMoM   = pct(profitMonth, profitPrev);
 
-  /* ------------------------ KPI (current range) ------------------------- */
   const cats = await rangeExpensesByCategory(supabase, startISO, endISO);
   const getCat = (name: string) => cats.find(c => c.name.toLowerCase() === name.toLowerCase())?.value ?? 0;
   const foodTotal  = getCat("Food");
@@ -196,11 +204,9 @@ export default async function DashboardPage(props: { searchParams?: any }) {
   const laborPct = salesMonth > 0 ? (laborTotal / salesMonth) * 100 : 0;
   const primePct = Math.min(100, foodPct + laborPct);
 
-  /* ------------------------ charts & tables data ------------------------ */
   const topItems = await topItemsForRange(supabase, startISO, endISO);
   const weekday  = await weekdayRevenueThisMonth(supabase);
 
-  // 12mo Sales vs Expenses line
   const months: string[] = [];
   for (let i = 11; i >= 0; i--) {
     const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
@@ -210,7 +216,6 @@ export default async function DashboardPage(props: { searchParams?: any }) {
   const expSeries   = await Promise.all(months.map((k) => sumOne(supabase, "v_expense_month_totals", "month", k, "total")));
   const lineData    = months.map((m, i) => ({ month: m, sales: salesSeries[i], expenses: expSeries[i] }));
 
-  // Last 4 months quick table
   const last4 = months.slice(-4);
   const last4Sales  = await Promise.all(last4.map((k) => sumOne(supabase, "v_sales_month_totals", "month", k, "revenue")));
   const last4Orders = await Promise.all(last4.map((k) => sumOne(supabase, "v_sales_month_totals", "month", k, "orders")));
@@ -224,13 +229,11 @@ export default async function DashboardPage(props: { searchParams?: any }) {
     return { month: m, sales, orders, aov: aovM, expenses, profit };
   });
 
-  /* -------------------------------- UI --------------------------------- */
   const active = (r: string) =>
     `px-3 py-1 rounded border ${r === range ? "" : "opacity-60 hover:bg-neutral-900"}`;
 
   return (
     <main className="max-w-7xl mx-auto px-4 py-6 space-y-4">
-      {/* Range toggles */}
       <div className="flex gap-2 mb-2">
         <Link className={active("today")} href="/dashboard?range=today">Today</Link>
         <Link className={active("week")}  href="/dashboard?range=week">Week</Link>
@@ -238,17 +241,10 @@ export default async function DashboardPage(props: { searchParams?: any }) {
         <Link className={active("ytd")}   href="/dashboard?range=ytd">YTD</Link>
       </div>
 
-      {/* Top tiles */}
       <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Tile title="MONTH — SALES" value={fmtUSD(salesMonth)}>
-          <Delta value={salesMoM} />
-        </Tile>
-        <Tile title="MONTH — EXPENSES" value={fmtUSD(expMonth)}>
-          <Delta value={expMoM} />
-        </Tile>
-        <Tile title="MONTH — PROFIT / LOSS" value={fmtUSD(profitMonth)}>
-          <Delta value={profMoM} />
-        </Tile>
+        <Tile title="MONTH — SALES" value={fmtUSD(salesMonth)}><Delta value={salesMoM} /></Tile>
+        <Tile title="MONTH — EXPENSES" value={fmtUSD(expMonth)}><Delta value={expMoM} /></Tile>
+        <Tile title="MONTH — PROFIT / LOSS" value={fmtUSD(profitMonth)}><Delta value={profMoM} /></Tile>
         <div className="border rounded p-4">
           <div className="text-xs opacity-80">SALES vs GOAL</div>
           <div className="text-2xl font-semibold">{fmtUSD(salesMonth)}</div>
@@ -259,7 +255,6 @@ export default async function DashboardPage(props: { searchParams?: any }) {
         </div>
       </section>
 
-      {/* KPI tiles with tooltips */}
       <section className="grid grid-cols-1 md:grid-cols-5 gap-4">
         <Tile title="ORDERS (M)" value={String(ordersMonth)} tooltip="Total orders recorded this month (distinct sales orders)." />
         <Tile title="AOV (M)" value={fmtUSD(aov)} tooltip="Average Order Value = Sales / Orders for this month." />
@@ -268,19 +263,17 @@ export default async function DashboardPage(props: { searchParams?: any }) {
         <Tile title="PRIME %" value={`${Math.round(primePct)}%`} tooltip="Prime Cost % = Food % + Labor % (target ≤ 60%)." />
       </section>
 
-      {/* Charts row */}
       <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <SalesVsExpensesChart data={lineData} />
         <ExpenseDonut
           data={[
-            { name: "Food", value: foodTotal },
-            { name: "Labor", value: laborTotal },
+            { name: "Food", value: getCat("Food") },
+            { name: "Labor", value: getCat("Labor") },
             ...cats.filter(c => !["Food", "Labor"].includes(c.name)).slice(0, 5),
           ]}
         />
       </section>
 
-      {/* Weekday + Top items */}
       <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="border rounded p-4">
           <div className="text-sm opacity-80 mb-2">Weekday revenue (this month)</div>
@@ -304,7 +297,6 @@ export default async function DashboardPage(props: { searchParams?: any }) {
         <TopItemsChart data={topItems} />
       </section>
 
-      {/* Last 4 months quick table */}
       <section className="border rounded">
         <div className="px-4 py-3 border-b text-sm opacity-80">Last 4 months (quick look)</div>
         <div className="overflow-x-auto">
