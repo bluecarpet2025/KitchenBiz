@@ -8,10 +8,11 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  Area,
+  Legend,
   PieChart,
   Pie,
   Cell,
-  Legend,
   BarChart,
   Bar,
 } from "recharts";
@@ -19,117 +20,100 @@ import * as React from "react";
 
 const defaultTick = { fontSize: 12, fill: "var(--neutral-400, #aaa)" };
 const gridStroke = "var(--neutral-800, #2a2a2a)";
-const stroke1 = "var(--chart-1, #36a65f)"; // sales
-const stroke2 = "var(--chart-2, #59a0e1)"; // expenses
-const piePalette = [stroke2, "#22c55e", "#eab308", "#38bdf8", "#c084fc", "#f97316"];
-const currency = (v: number) =>
-  (v || 0).toLocaleString(undefined, { style: "currency", currency: "USD" });
+const stroke1 = "var(--chart-1, #3ea65f)"; // greenish
+const stroke2 = "var(--chart-2, #4aa3ff)"; // blue
+const piePalette = [stroke1, stroke2, "#22c55e", "#eab308", "#38bdf8", "#f472b6", "#f97316"];
+
+type SvEPoint = { key: string; sales: number; expenses: number; profit: number };
 
 export function SalesVsExpensesChart({
   data,
-  label,
+  range,
 }: {
-  data: Array<{ key: string; sales: number; expenses: number; profit: number }>;
-  label: string;
+  data: SvEPoint[];
+  range: "today" | "week" | "month" | "ytd";
 }) {
+  const xLabel =
+    range === "today" ? "day" : range === "week" ? "week" : range === "ytd" ? "month" : "month";
   return (
     <div className="border rounded p-3">
-      <div className="text-sm opacity-80 mb-2">Sales vs Expenses — {label}</div>
-      <div className="h-64">
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data}>
-            <CartesianGrid stroke={gridStroke} strokeDasharray="3 3" />
-            <XAxis dataKey="key" tick={defaultTick} />
-            <YAxis tick={defaultTick} tickFormatter={(v) => currency(v)} />
-            <Tooltip formatter={(v: any) => currency(Number(v))} />
-            <Line type="monotone" dataKey="sales" stroke={stroke1} strokeWidth={2} dot={false} />
-            <Line type="monotone" dataKey="expenses" stroke={stroke2} strokeWidth={2} dot={false} />
-            <Legend />
-          </LineChart>
-        </ResponsiveContainer>
+      <div className="text-sm opacity-80 mb-2">
+        Sales vs Expenses —{" "}
+        {range === "today" ? "last 12 days" : range === "week" ? "last 12 weeks" : range === "ytd" ? "YTD (by month)" : "last 12 months"}
       </div>
+      <ResponsiveContainer width="100%" height={240}>
+        <LineChart data={data}>
+          <CartesianGrid stroke={gridStroke} strokeDasharray="3 3" />
+          <XAxis dataKey="key" tick={defaultTick} />
+          <YAxis tick={defaultTick} />
+          <Tooltip formatter={(v: any) => currency(v)} />
+          <Legend />
+          <Line type="monotone" dataKey="sales" stroke={stroke1} dot={false} strokeWidth={2} />
+          <Line type="monotone" dataKey="expenses" stroke={stroke2} dot={false} strokeWidth={2} />
+        </LineChart>
+      </ResponsiveContainer>
+      <div className="text-xs opacity-60 mt-1">X axis: {xLabel}</div>
     </div>
   );
 }
 
 export function ExpenseDonut({
   data,
-  label,
 }: {
-  data: Array<{ name: string; value: number; pct?: number }>;
-  label: string;
+  data: Array<{ name: string; value: number; label?: string }>;
 }) {
-  const total = data.reduce((s, r) => s + (r.value || 0), 0);
+  const total = data.reduce((s, d) => s + (Number(d.value) || 0), 0);
+  const withPct = data.map((d) => ({
+    ...d,
+    label:
+      d.label ??
+      `${d.name} – ${total > 0 ? Math.round((Number(d.value) / total) * 100) : 0}%`,
+  }));
   return (
     <div className="border rounded p-3">
-      <div className="text-sm opacity-80 mb-2">Expense breakdown — {label}</div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-center">
-        <div className="h-56">
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie data={data} dataKey="value" nameKey="name" innerRadius={45} outerRadius={70}>
-                {data.map((_, i) => (
-                  <Cell key={i} fill={piePalette[i % piePalette.length]} />
-                ))}
-              </Pie>
-              <Tooltip
-                formatter={(v: any) => currency(Number(v))}
-                labelFormatter={(n) => String(n)}
-              />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-        <div className="text-sm">
-          {data.map((r, i) => {
-            const pct = total ? Math.round((r.value / total) * 100) : 0;
-            return (
-              <div className="flex justify-between py-1 border-b border-neutral-800" key={i}>
-                <div className="flex items-center gap-2">
-                  <span
-                    className="inline-block w-3 h-3 rounded"
-                    style={{ background: piePalette[i % piePalette.length] }}
-                  />
-                  <span>{r.name}</span>
-                </div>
-                <div className="tabular-nums">
-                  {currency(r.value)} <span className="opacity-70">({pct}%)</span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+      <div className="text-sm opacity-80 mb-2">Expense breakdown — current range</div>
+      <div className="h-64">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie
+              data={withPct}
+              dataKey="value"
+              nameKey="name"
+              innerRadius={48}
+              outerRadius={80}
+              paddingAngle={2}
+            >
+              {withPct.map((_, i) => (
+                <Cell key={i} fill={piePalette[i % piePalette.length]} />
+              ))}
+            </Pie>
+            <Tooltip formatter={(v: any, _k, item: any) => [currency(v), item?.payload?.label]} />
+          </PieChart>
+        </ResponsiveContainer>
       </div>
     </div>
   );
 }
 
-export function TopItemsChart({
-  data,
-  label,
-}: {
-  data: Array<{ name: string; value: number }>;
-  label: string;
-}) {
+export function TopItemsChart({ data }: { data: Array<{ name: string; value: number }> }) {
   return (
     <div className="border rounded p-3">
-      <div className="text-sm opacity-80 mb-2">Top items — {label}</div>
+      <div className="text-sm opacity-80 mb-2">Top items — current range</div>
       <div className="h-64">
-        {data.length === 0 ? (
-          <div className="opacity-70 text-sm h-full flex items-center justify-center">
-            No items in this range.
-          </div>
-        ) : (
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={data}>
-              <CartesianGrid stroke={gridStroke} strokeDasharray="3 3" />
-              <XAxis dataKey="name" tick={defaultTick} />
-              <YAxis tick={defaultTick} tickFormatter={(v) => currency(v)} />
-              <Tooltip formatter={(v: any) => currency(Number(v))} />
-              <Bar dataKey="value" fill={stroke1} />
-            </BarChart>
-          </ResponsiveContainer>
-        )}
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data}>
+            <CartesianGrid stroke={gridStroke} strokeDasharray="3 3" />
+            <XAxis dataKey="name" tick={defaultTick} interval={0} angle={0} />
+            <YAxis tick={defaultTick} />
+            <Tooltip formatter={(v: any) => currency(v)} />
+            <Bar dataKey="value" fill={stroke1} />
+          </BarChart>
+        </ResponsiveContainer>
       </div>
     </div>
   );
+}
+
+function currency(v: number) {
+  return (Number(v) || 0).toLocaleString(undefined, { style: "currency", currency: "USD" });
 }
