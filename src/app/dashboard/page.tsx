@@ -141,8 +141,12 @@ export const dynamic = "force-dynamic";
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams?: { [k: string]: string | string[] | undefined };
+  searchParams?: Promise<{ [k: string]: string | string[] | undefined }>;
 }) {
+  // ✅ Next 15 requires awaiting searchParams
+  const sp = (await searchParams) ?? {};
+  const range = String(sp?.range ?? "month") as "today" | "week" | "month" | "ytd";
+
   const supabase = await createServerClient();
   const {
     data: { user },
@@ -165,8 +169,6 @@ export default async function DashboardPage({
       </main>
     );
   }
-
-  const range = String(searchParams?.range ?? "month") as "today" | "week" | "month" | "ytd";
 
   const now = today();
   const thisMonth = monthKey(now);
@@ -366,7 +368,7 @@ export default async function DashboardPage({
         <Kpi title="ORDERS (M)" value={ordersThis} tooltip="Number of orders in this range." />
         <Kpi
           title="AOV (M)"
-          value={fmtUSD(ordersThis > 0 ? salesThis / ordersThis : 0)}
+          value={fmtUSD(aov)}
           tooltip="Average order value = Sales ÷ Orders (current range)."
         />
         <Kpi title="FOOD %" value={`${foodPct}%`} tooltip="Food cost % of sales (current range)." />
