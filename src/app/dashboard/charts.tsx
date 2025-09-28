@@ -1,41 +1,50 @@
 "use client";
 
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  Area, Legend, PieChart, Pie, Cell, BarChart, Bar
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  Legend,
+  BarChart,
+  Bar,
 } from "recharts";
 import * as React from "react";
 
 const defaultTick = { fontSize: 12, fill: "var(--neutral-400, #aaa)" };
-const gridStroke   = "var(--neutral-800, #2a2a2a)";
-const stroke1      = "var(--chart-1, #1eae55)";   // sales
-const stroke2      = "var(--chart-2, #3b82f6)";   // expenses
-const stroke3      = "var(--chart-3, #ffa726)";   // profit (area)
-const piePalette   = [ "#f59e0b", "#22c55e", "#3b82f6", "#38bdf8", "#c084fc", "#f97316" ];
-
-type SeriesRow = { label: string; sales: number; expenses: number; profit?: number };
+const gridStroke = "var(--neutral-800, #2a2a2a)";
+const stroke1 = "var(--chart-1, #36a65f)"; // sales
+const stroke2 = "var(--chart-2, #59a0e1)"; // expenses
+const piePalette = [stroke2, "#22c55e", "#eab308", "#38bdf8", "#c084fc", "#f97316"];
+const currency = (v: number) =>
+  (v || 0).toLocaleString(undefined, { style: "currency", currency: "USD" });
 
 export function SalesVsExpensesChart({
   data,
-  subtitle,
+  label,
 }: {
-  data: SeriesRow[];
-  subtitle?: string;
+  data: Array<{ key: string; sales: number; expenses: number; profit: number }>;
+  label: string;
 }) {
   return (
-    <div className="border rounded p-4">
-      <div className="text-sm opacity-80 mb-2">Sales vs Expenses — {subtitle ?? "last periods"}</div>
+    <div className="border rounded p-3">
+      <div className="text-sm opacity-80 mb-2">Sales vs Expenses — {label}</div>
       <div className="h-64">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data}>
             <CartesianGrid stroke={gridStroke} strokeDasharray="3 3" />
-            <XAxis dataKey="label" tick={defaultTick} />
-            <YAxis tick={defaultTick} />
-            <Tooltip formatter={(v: any) => currency(v)} />
-            <Legend />
-            <Area type="monotone" dataKey="profit" fill="rgba(244,114,182,0.1)" stroke="transparent" />
-            <Line type="monotone" dataKey="sales"    stroke={stroke1} strokeWidth={2} dot={false} />
+            <XAxis dataKey="key" tick={defaultTick} />
+            <YAxis tick={defaultTick} tickFormatter={(v) => currency(v)} />
+            <Tooltip formatter={(v: any) => currency(Number(v))} />
+            <Line type="monotone" dataKey="sales" stroke={stroke1} strokeWidth={2} dot={false} />
             <Line type="monotone" dataKey="expenses" stroke={stroke2} strokeWidth={2} dot={false} />
+            <Legend />
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -45,46 +54,49 @@ export function SalesVsExpensesChart({
 
 export function ExpenseDonut({
   data,
+  label,
 }: {
-  data: Array<{ name: string; value: number }>;
+  data: Array<{ name: string; value: number; pct?: number }>;
+  label: string;
 }) {
-  const total = data.reduce((a, b) => a + (b?.value ?? 0), 0);
+  const total = data.reduce((s, r) => s + (r.value || 0), 0);
   return (
-    <div className="border rounded p-4">
-      <div className="text-sm opacity-80 mb-2">Expense breakdown — current range</div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="h-64">
+    <div className="border rounded p-3">
+      <div className="text-sm opacity-80 mb-2">Expense breakdown — {label}</div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-center">
+        <div className="h-56">
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
-              <Pie data={data} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80}>
+              <Pie data={data} dataKey="value" nameKey="name" innerRadius={45} outerRadius={70}>
                 {data.map((_, i) => (
                   <Cell key={i} fill={piePalette[i % piePalette.length]} />
                 ))}
               </Pie>
-              <Tooltip formatter={(v: any) => currency(v)} />
+              <Tooltip
+                formatter={(v: any) => currency(Number(v))}
+                labelFormatter={(n) => String(n)}
+              />
             </PieChart>
           </ResponsiveContainer>
         </div>
         <div className="text-sm">
-          <table className="w-full">
-            <tbody>
-              {data.map((r, i) => {
-                const pct = total > 0 ? Math.round((r.value / total) * 100) : 0;
-                return (
-                  <tr key={r.name} className="border-b last:border-0">
-                    <td className="py-1">
-                      <span
-                        className="inline-block w-2 h-2 rounded-sm mr-2 align-middle"
-                        style={{ background: piePalette[i % piePalette.length] }}
-                      />
-                      {r.name}
-                    </td>
-                    <td className="py-1 text-right">{currency(r.value)} <span className="opacity-60">({pct}%)</span></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          {data.map((r, i) => {
+            const pct = total ? Math.round((r.value / total) * 100) : 0;
+            return (
+              <div className="flex justify-between py-1 border-b border-neutral-800" key={i}>
+                <div className="flex items-center gap-2">
+                  <span
+                    className="inline-block w-3 h-3 rounded"
+                    style={{ background: piePalette[i % piePalette.length] }}
+                  />
+                  <span>{r.name}</span>
+                </div>
+                <div className="tabular-nums">
+                  {currency(r.value)} <span className="opacity-70">({pct}%)</span>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -93,36 +105,31 @@ export function ExpenseDonut({
 
 export function TopItemsChart({
   data,
+  label,
 }: {
-  data: Array<{ name: string; revenue: number }>;
+  data: Array<{ name: string; value: number }>;
+  label: string;
 }) {
-  const max = Math.max(1, ...data.map(d => d.revenue));
   return (
-    <div className="border rounded p-4">
-      <div className="text-sm opacity-80 mb-2">Top items — current range</div>
-      {data.length === 0 ? (
-        <div className="text-sm opacity-70">No items in this range.</div>
-      ) : (
-        <div className="space-y-2">
-          {data.map((d) => (
-            <div key={d.name} className="flex items-center gap-3">
-              <div className="flex-1">
-                <div className="flex justify-between text-sm">
-                  <span className="opacity-80">{d.name}</span>
-                  <span>{currency(d.revenue)}</span>
-                </div>
-                <div className="h-2 bg-neutral-800 rounded overflow-hidden">
-                  <div className="h-2 bg-neutral-300" style={{ width: `${(d.revenue / max) * 100}%` }} />
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+    <div className="border rounded p-3">
+      <div className="text-sm opacity-80 mb-2">Top items — {label}</div>
+      <div className="h-64">
+        {data.length === 0 ? (
+          <div className="opacity-70 text-sm h-full flex items-center justify-center">
+            No items in this range.
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data}>
+              <CartesianGrid stroke={gridStroke} strokeDasharray="3 3" />
+              <XAxis dataKey="name" tick={defaultTick} />
+              <YAxis tick={defaultTick} tickFormatter={(v) => currency(v)} />
+              <Tooltip formatter={(v: any) => currency(Number(v))} />
+              <Bar dataKey="value" fill={stroke1} />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </div>
     </div>
   );
-}
-
-function currency(n: number) {
-  return (n || 0).toLocaleString(undefined, { style: "currency", currency: "USD" });
 }

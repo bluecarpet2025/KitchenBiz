@@ -2,350 +2,526 @@ import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { SalesVsExpensesChart, ExpenseDonut, TopItemsChart } from "./charts";
 
-/* ---------- fmt & date helpers ---------- */
+/** ---------- tiny local utils ---------- */
 const fmtUSD = (n: number) =>
   (n || 0).toLocaleString(undefined, { style: "currency", currency: "USD" });
-const pad = (n: number) => n.toString().padStart(2, "0");
-const toISODate = (d: Date) => d.toISOString().slice(0, 10);
-const addDays = (d: Date, n: number) => {
-  const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-  x.setUTCDate(x.getUTCDate() + n);
-  return x;
-};
-const firstDayOfMonth = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
-const lastDayOfMonth  = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
-const monthStr = (d: Date) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}`;
-const yearStr  = (d: Date) => `${d.getUTCFullYear()}`;
+const pad = (n: number) => String(n).padStart(2, "0");
+const today = () => new Date();
+function addDays(d: Date, n: number) {
+  const c = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  c.setUTCDate(c.getUTCDate() + n);
+  return c;
+}
+const dayKey = (d: Date) =>
+  `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+const monthKey = (d: Date) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}`;
+const yearKey = (d: Date) => `${d.getUTCFullYear()}`;
+function weekKey(d: Date) {
+  const dt = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  dt.setUTCDate(dt.getUTCDate() + 4 - (dt.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(dt.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil(((+dt - +yearStart) / 86400000 + 1) / 7);
+  return `${dt.getUTCFullYear()}-W${pad(weekNo)}`;
+}
 
-/* ---------- tiny db helpers ---------- */
+/** -------- reused DB helpers -------- */
 async function sumOne(
   supabase: any,
   view: string,
   periodCol: "day" | "week" | "month" | "year",
   key: string,
-  col: "revenue" | "total" | "orders",
+  tenantId: string,
+  amountCol: "revenue" | "total" | "orders"
 ): Promise<number> {
   const { data } = await supabase
     .from(view)
-    .select(col)
+    .select(amountCol)
+    .eq("tenant_id", tenantId)
     .eq(periodCol, key)
     .maybeSingle();
-  const raw = (data as any)?.[col];
-  return typeof raw === "number" ? raw : Number(raw ?? 0);
+  return Number((data as any)?.[amountCol] ?? 0);
 }
 
-async function expensesByCategory(
+async function seriesFor(
   supabase: any,
-  startISO: string,
-  endExclusiveISO: string
-): Promise<Array<{ name: string; value: number }>> {
-  const { data } = await supabase
-    .from("expenses")
-    .select("category, amount_usd, occurred_at, created_at")
-    .or(
-      `and(occurred_at.gte.${startISO},occurred_at.lt.${endExclusiveISO}),` +
-      `and(occurred_at.is.null,created_at.gte.${startISO},created_at.lt.${endExclusiveISO})`
-    );
-  if (!data) return [];
-  const m = new Map<string, number>();
-  for (const r of data) m.set(r.category || "Other", (m.get(r.category || "Other") || 0) + Number(r.amount_usd || 0));
-  return [...m.entries()].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-}
-
-/* **FIX**: exclusive end boundary for timestamp filters */
-async function topItemsForRange(
-  supabase: any,
-  startISO: string,
-  endExclusiveISO: string
-): Promise<Array<{ name: string; revenue: number }>> {
-  // Try by order IDs first
-  const { data: orders } = await supabase
-    .from("sales_orders")
-    .select("id, occurred_at, created_at")
-    .or(
-      `and(occurred_at.gte.${startISO},occurred_at.lt.${endExclusiveISO}),` +
-      `and(occurred_at.is.null,created_at.gte.${startISO},created_at.lt.${endExclusiveISO})`
-    )
-    .limit(10000);
-  const ids = (orders ?? []).map((o: any) => o.id);
-
-  let lines: any[] = [];
-  if (ids.length > 0) {
-    const { data: l1 } = await supabase
-      .from("sales_order_lines")
-      .select("order_id, product, qty, unit_price")
-      .in("order_id", ids.slice(0, 10000));
-    lines = l1 ?? [];
-  }
-
-  // JOIN fallback (also uses exclusive end)
-  if (lines.length === 0) {
-    const { data: l2 } = await supabase
-      .from("sales_order_lines")
-      .select("product, qty, unit_price, sales_orders!inner(occurred_at,created_at)")
-      .or(
-        `and(sales_orders.occurred_at.gte.${startISO},sales_orders.occurred_at.lt.${endExclusiveISO}),` +
-        `and(sales_orders.occurred_at.is.null,sales_orders.created_at.gte.${startISO},sales_orders.created_at.lt.${endExclusiveISO})`
+  tenantId: string,
+  keyCol: "day" | "week" | "month",
+  keys: string[]
+): Promise<Array<{ key: string; sales: number; expenses: number; profit: number }>> {
+  const [salesRes, expRes] = await Promise.all([
+    supabase
+      .from(
+        keyCol === "day"
+          ? "v_sales_day_totals"
+          : keyCol === "week"
+          ? "v_sales_week_totals"
+          : "v_sales_month_totals"
       )
-      .limit(5000);
-    lines = l2 ?? [];
-  }
+      .select(`${keyCol}, revenue`)
+      .eq("tenant_id", tenantId)
+      .in(keyCol, keys),
+    supabase
+      .from(
+        keyCol === "day"
+          ? "v_expense_day_totals"
+          : keyCol === "week"
+          ? "v_expense_week_totals"
+          : "v_expense_month_totals"
+      )
+      .select(`${keyCol}, total`)
+      .eq("tenant_id", tenantId)
+      .in(keyCol, keys),
+  ]);
 
-  if (lines.length === 0) return [];
+  const salesMap = new Map<string, number>();
+  (salesRes.data ?? []).forEach((r: any) => salesMap.set(r[keyCol], Number(r.revenue ?? 0)));
+  const expMap = new Map<string, number>();
+  (expRes.data ?? []).forEach((r: any) => expMap.set(r[keyCol], Number(r.total ?? 0)));
 
-  const m = new Map<string, number>();
-  for (const r of lines as any[]) {
-    const name = r.product || "Unknown";
-    const rev  = Number(r.qty || 0) * Number(r.unit_price || 0);
-    m.set(name, (m.get(name) || 0) + rev);
-  }
-  return [...m.entries()]
-    .map(([name, revenue]) => ({ name, revenue }))
-    .sort((a, b) => b.revenue - a.revenue)
-    .slice(0, 5);
+  return keys.map((k) => {
+    const sales = salesMap.get(k) ?? 0;
+    const expenses = expMap.get(k) ?? 0;
+    return { key: k, sales, expenses, profit: sales - expenses };
+  });
 }
 
-/* ---------- weekday (this month) ---------- */
-async function weekdayRevenueThisMonth(supabase: any) {
-  const now = new Date();
-  const start = toISODate(firstDayOfMonth(now));
-  const end   = toISODate(addDays(lastDayOfMonth(now), 1)); // exclusive
+async function topItems(
+  supabase: any,
+  tenantId: string,
+  startTs: string,
+  endTsExcl: string,
+  limit = 5
+): Promise<Array<{ name: string; value: number }>> {
+  const { data, error } = await supabase
+    .from("sales_order_lines")
+    .select(
+      "product_name, qty, unit_price, sales_orders!inner(id,tenant_id,occurred_at,created_at)"
+    )
+    .eq("sales_orders.tenant_id", tenantId)
+    .gte("sales_orders.occurred_at", startTs)
+    .lt("sales_orders.occurred_at", endTsExcl);
+
+  if (error || !data) return [];
+
+  const acc = new Map<string, number>();
+  for (const row of data) {
+    const name = (row as any).product_name as string | null;
+    if (!name) continue;
+    const value = Number((row as any).qty ?? 0) * Number((row as any).unit_price ?? 0);
+    acc.set(name, (acc.get(name) ?? 0) + value);
+  }
+  return Array.from(acc.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([name, value]) => ({ name, value }));
+}
+
+async function weekdayRevenueThisMonth(supabase: any, tenantId: string) {
+  const n = today();
+  const start = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), 1));
+  const end = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth() + 1, 1));
   const { data } = await supabase
     .from("v_sales_day_totals")
     .select("day, revenue")
-    .gte("day", start)
-    .lt("day", end)
-    .order("day", { ascending: true });
-  if (!data) return [];
-  const totals = [0, 0, 0, 0, 0, 0, 0]; // Sun..Sat
-  for (const r of data as any[]) {
+    .eq("tenant_id", tenantId)
+    .gte("day", dayKey(start))
+    .lt("day", dayKey(end))
+    .order("day");
+  const sums = new Array(7).fill(0);
+  (data ?? []).forEach((r: any) => {
     const d = new Date(r.day + "T00:00:00Z");
-    totals[d.getUTCDay()] += Number(r.revenue || 0);
-  }
-  const label = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  return label.map((l, i) => ({ label: l, amount: totals[i] }));
+    sums[d.getUTCDay()] += Number(r.revenue ?? 0);
+  });
+  const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  return labels.map((name, i) => ({ name, value: sums[i] }));
 }
 
-/* ---------- series builder that respects range ---------- */
-async function buildSeries(
-  supabase: any,
-  range: "today" | "week" | "month" | "ytd"
-) {
-  const now = new Date();
+export const dynamic = "force-dynamic";
 
-  if (range === "today") {
-    // last 12 days
-    const days: string[] = [];
-    for (let i = 11; i >= 0; i--) days.push(toISODate(addDays(now, -i)));
-    const sals = await Promise.all(days.map((d) => sumOne(supabase, "v_sales_day_totals", "day", d, "revenue")));
-    const exps = await Promise.all(days.map((d) => sumOne(supabase, "v_expense_day_totals", "day", d, "total")));
-    return days.map((d, i) => ({ label: d.slice(5), sales: sals[i], expenses: exps[i], profit: sals[i] - exps[i] }));
-  }
-
-  if (range === "week") {
-    // last 12 ISO weeks IYYY-Www
-    const weeks: string[] = [];
-    let d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-    const isoWeek = (x: Date) => {
-      const tmp = new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth(), x.getUTCDate()));
-      tmp.setUTCDate(tmp.getUTCDate() + 4 - (tmp.getUTCDay() || 7));
-      const yStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
-      const wn = Math.ceil(((+tmp - +yStart) / 86400000 + 1) / 7);
-      return `${tmp.getUTCFullYear()}-W${pad(wn)}`;
-    };
-    for (let i = 11; i >= 0; i--) {
-      const dd = addDays(d, -7 * i);
-      weeks.push(isoWeek(dd));
-    }
-    const sals = await Promise.all(weeks.map((w) => sumOne(supabase, "v_sales_week_totals", "week", w, "revenue")));
-    const exps = await Promise.all(weeks.map((w) => sumOne(supabase, "v_expense_week_totals", "week", w, "total")));
-    return weeks.map((w, i) => ({ label: w, sales: sals[i], expenses: exps[i], profit: sals[i] - exps[i] }));
-  }
-
-  // month or ytd -> months
-  let months: string[] = [];
-  if (range === "ytd") {
-    const start = new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
-    const cur   = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-    while (start <= cur) {
-      months.push(monthStr(start));
-      start.setUTCMonth(start.getUTCMonth() + 1);
-    }
-  } else {
-    for (let i = 11; i >= 0; i--) months.push(monthStr(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1))));
-  }
-
-  const sals = await Promise.all(months.map((m) => sumOne(supabase, "v_sales_month_totals", "month", m, "revenue")));
-  const exps = await Promise.all(months.map((m) => sumOne(supabase, "v_expense_month_totals", "month", m, "total")));
-  return months.map((m, i) => ({ label: m, sales: sals[i], expenses: exps[i], profit: sals[i] - exps[i] }));
-}
-
-/* ---------- small tiles ---------- */
-function Delta({ value }: { value: number }) {
-  const color = value > 0 ? "text-emerald-400" : value < 0 ? "text-rose-400" : "text-neutral-400";
-  const sign  = value > 0 ? "+" : "";
-  return <div className={`text-xs mt-1 ${color}`}>{sign}{value.toFixed(1)}% MoM</div>;
-}
-function Tile({ title, value, tooltip, children }: { title: string; value: string; tooltip?: string; children?: React.ReactNode }) {
-  return (
-    <div className="border rounded p-4">
-      <div className="text-xs opacity-80" title={tooltip}>{title}</div>
-      <div className="text-2xl font-semibold">{value}</div>
-      {children}
-    </div>
-  );
-}
-
-/* -------------------------------- Page -------------------------------- */
-export default async function DashboardPage(props: { searchParams?: any }) {
-  const sp = (props?.searchParams ? await props.searchParams : {}) as Record<string, string>;
-  const range = (typeof sp.range === "string" ? sp.range : "month") as "today" | "week" | "month" | "ytd";
-
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams?: { [k: string]: string | string[] | undefined };
+}) {
   const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-  const now = new Date();
-  const thisMonthKey = monthStr(now);
-  const prevMonthKey = monthStr(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)));
-
-  // Simple headline metrics = month
-  const [salesMonth, ordersMonth, expMonth] = await Promise.all([
-    sumOne(supabase, "v_sales_month_totals", "month", thisMonthKey, "revenue"),
-    sumOne(supabase, "v_sales_month_totals", "month", thisMonthKey, "orders"),
-    sumOne(supabase, "v_expense_month_totals", "month", thisMonthKey, "total"),
-  ]);
-  const profitMonth = salesMonth - expMonth;
-
-  const [salesPrev, expPrev] = await Promise.all([
-    sumOne(supabase, "v_sales_month_totals", "month", prevMonthKey, "revenue"),
-    sumOne(supabase, "v_expense_month_totals", "month", prevMonthKey, "total"),
-  ]);
-  const profitPrev = salesPrev - expPrev;
-  const pct = (a: number, b: number) => (b === 0 ? 0 : ((a - b) / Math.max(1, b)) * 100);
-  const salesMoM  = pct(salesMonth,  salesPrev);
-  const expMoM    = pct(expMonth,    expPrev);
-  const profMoM   = pct(profitMonth, profitPrev);
-
-  // Range window (for donut + top items)
-  let startISO: string, endExclusiveISO: string, seriesSubtitle = "last periods";
-  if (range === "today") {
-    const s = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-    startISO       = toISODate(s);
-    endExclusiveISO= toISODate(addDays(s, 1));
-    seriesSubtitle = "last 12 days";
-  } else if (range === "week") {
-    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-    const diff = d.getUTCDay();
-    const sun = addDays(d, -diff);
-    startISO       = toISODate(sun);
-    endExclusiveISO= toISODate(addDays(sun, 7));
-    seriesSubtitle = "last 12 weeks";
-  } else if (range === "ytd") {
-    const s = new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
-    startISO       = toISODate(s);
-    endExclusiveISO= toISODate(addDays(now, 1));
-    seriesSubtitle = "YTD (monthly)";
-  } else {
-    const s = firstDayOfMonth(now);
-    startISO       = toISODate(s);
-    endExclusiveISO= toISODate(addDays(lastDayOfMonth(now), 1));
-    seriesSubtitle = "last 12 months";
+  let tenantId: string | null = null;
+  if (user) {
+    const { data: prof } = await supabase
+      .from("profiles")
+      .select("tenant_id")
+      .eq("id", user.id)
+      .maybeSingle();
+    tenantId = (prof?.tenant_id as string | null) ?? null;
+  }
+  if (!tenantId) {
+    return (
+      <main className="max-w-6xl mx-auto p-6">
+        <h1 className="text-2xl font-semibold">Dashboard</h1>
+        <p className="opacity-80 mt-2">No tenant available.</p>
+      </main>
+    );
   }
 
-  const cats = await expensesByCategory(supabase, startISO, endExclusiveISO);
-  const getCat = (n: string) => cats.find(c => c.name.toLowerCase() === n.toLowerCase())?.value ?? 0;
-  const foodTotal  = getCat("Food");
-  const laborTotal = getCat("Labor");
+  const range = String(searchParams?.range ?? "month") as "today" | "week" | "month" | "ytd";
 
-  const aov      = ordersMonth > 0 ? salesMonth / ordersMonth : 0;
-  const foodPct  = salesMonth > 0 ? (foodTotal  / salesMonth) * 100 : 0;
-  const laborPct = salesMonth > 0 ? (laborTotal / salesMonth) * 100 : 0;
+  const now = today();
+  const thisMonth = monthKey(now);
+  const thisYear = yearKey(now);
+
+  let keys: string[] = [];
+  let label = "last 12 months";
+  if (range === "today") {
+    keys = Array.from({ length: 12 }, (_, i) => dayKey(addDays(now, -(11 - i))));
+    label = "last 12 days";
+  } else if (range === "week") {
+    const base = addDays(now, -7 * 11);
+    keys = Array.from({ length: 12 }, (_, i) => weekKey(addDays(base, i * 7)));
+    label = "last 12 weeks";
+  } else if (range === "ytd") {
+    keys = Array.from({ length: now.getUTCMonth() + 1 }, (_, i) =>
+      monthKey(new Date(Date.UTC(now.getUTCFullYear(), i, 1)))
+    );
+    label = "YTD (by month)";
+  } else {
+    const base = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11, 1));
+    keys = Array.from({ length: 12 }, (_, i) =>
+      monthKey(new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + i, 1)))
+    );
+  }
+  const keyCol = range === "today" ? "day" : range === "week" ? "week" : "month";
+
+  // current-period totals
+  let salesThis = 0,
+    expThis = 0,
+    ordersThis = 0,
+    salesPrevMonth = 0;
+
+  if (range === "today") {
+    const k = dayKey(now);
+    [salesThis, expThis, ordersThis] = await Promise.all([
+      sumOne(supabase, "v_sales_day_totals", "day", k, tenantId, "revenue"),
+      sumOne(supabase, "v_expense_day_totals", "day", k, tenantId, "total"),
+      sumOne(supabase, "v_sales_day_totals", "day", k, tenantId, "orders"),
+    ]);
+    const prev = monthKey(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)));
+    salesPrevMonth = await sumOne(supabase, "v_sales_month_totals", "month", prev, tenantId, "revenue");
+  } else if (range === "week") {
+    const k = weekKey(now);
+    [salesThis, expThis, ordersThis] = await Promise.all([
+      sumOne(supabase, "v_sales_week_totals", "week", k, tenantId, "revenue"),
+      sumOne(supabase, "v_expense_week_totals", "week", k, tenantId, "total"),
+      sumOne(supabase, "v_sales_week_totals", "week", k, tenantId, "orders"),
+    ]);
+    const prev = monthKey(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)));
+    salesPrevMonth = await sumOne(supabase, "v_sales_month_totals", "month", prev, tenantId, "revenue");
+  } else {
+    const k = range === "ytd" ? thisYear : thisMonth;
+    const [s, e, o] =
+      range === "ytd"
+        ? await Promise.all([
+            sumOne(supabase, "v_sales_year_totals", "year", k, tenantId, "revenue"),
+            sumOne(supabase, "v_expense_year_totals", "year", k, tenantId, "total"),
+            sumOne(supabase, "v_sales_year_totals", "year", k, tenantId, "orders"),
+          ])
+        : await Promise.all([
+            sumOne(supabase, "v_sales_month_totals", "month", k, tenantId, "revenue"),
+            sumOne(supabase, "v_expense_month_totals", "month", k, tenantId, "total"),
+            sumOne(supabase, "v_sales_month_totals", "month", k, tenantId, "orders"),
+          ]);
+    salesThis = s;
+    expThis = e;
+    ordersThis = o;
+    const prev = monthKey(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)));
+    salesPrevMonth = await sumOne(supabase, "v_sales_month_totals", "month", prev, tenantId, "revenue");
+  }
+
+  const aov = ordersThis > 0 ? salesThis / ordersThis : 0;
+
+  // Food/Labor amounts this period (for %s)
+  const periodStart =
+    range === "today"
+      ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+      : range === "week"
+      ? addDays(now, -6)
+      : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const periodEndExcl =
+    range === "today"
+      ? addDays(periodStart, 1)
+      : range === "week"
+      ? addDays(now, 1)
+      : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+
+  async function sumExpensesBy(cat: string) {
+    const { data } = await supabase
+      .from("expenses")
+      .select("amount_usd")
+      .eq("tenant_id", tenantId)
+      .gte("occurred_at", periodStart.toISOString())
+      .lt("occurred_at", periodEndExcl.toISOString())
+      .ilike("category", cat);
+    return (data ?? []).reduce((s: number, r: any) => s + Number(r.amount_usd ?? 0), 0);
+  }
+  const [foodAmt, laborAmt] = await Promise.all([sumExpensesBy("Food%"), sumExpensesBy("Labor%")]);
+  const foodPct = salesThis > 0 ? Math.round((foodAmt / salesThis) * 100) : 0;
+  const laborPct = salesThis > 0 ? Math.round((laborAmt / salesThis) * 100) : 0;
   const primePct = Math.min(100, foodPct + laborPct);
 
-  const topItems = await topItemsForRange(supabase, startISO, endExclusiveISO);
-  const weekday  = await weekdayRevenueThisMonth(supabase);
-  const lineData = await buildSeries(supabase, range);
+  const lineData = await seriesFor(supabase, tenantId, keyCol, keys);
 
-  const active = (r: string) =>
-    `px-3 py-1 rounded border ${r === range ? "" : "opacity-60 hover:bg-neutral-900"}`;
+  const { data: expRows } = await supabase
+    .from("expenses")
+    .select("category, amount_usd")
+    .eq("tenant_id", tenantId)
+    .gte("occurred_at", periodStart.toISOString())
+    .lt("occurred_at", periodEndExcl.toISOString());
+  const byCat = new Map<string, number>();
+  (expRows ?? []).forEach((r: any) => {
+    const k = String(r.category ?? "Other");
+    byCat.set(k, (byCat.get(k) ?? 0) + Number(r.amount_usd ?? 0));
+  });
+  const donutData = Array.from(byCat.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([name, value]) => ({ name, value }));
+
+  const weekday = await weekdayRevenueThisMonth(supabase, tenantId);
+
+  const topItemsData = await topItems(
+    supabase,
+    tenantId,
+    periodStart.toISOString(),
+    periodEndExcl.toISOString()
+  );
+
+  // simple goal UI
+  const goal = Math.max(1000, Math.round((salesPrevMonth || 10000) / 1000) * 1000);
+  const pctToGoal = Math.min(100, Math.round(((salesThis || 0) / goal) * 100));
+
+  const rangeTabs = [
+    { key: "today", label: "Today" },
+    { key: "week", label: "Week" },
+    { key: "month", label: "Month" },
+    { key: "ytd", label: "YTD" },
+  ] as const;
 
   return (
-    <main className="max-w-7xl mx-auto px-4 py-6 space-y-4">
-      <div className="flex gap-2 mb-2">
-        <Link className={active("today")} href="/dashboard?range=today">Today</Link>
-        <Link className={active("week")}  href="/dashboard?range=week">Week</Link>
-        <Link className={active("month")} href="/dashboard?range=month">Month</Link>
-        <Link className={active("ytd")}   href="/dashboard?range=ytd">YTD</Link>
+    <main className="max-w-7xl mx-auto px-4 py-6">
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-2xl font-semibold">Dashboard</h1>
+        <div className="flex gap-2 text-sm">
+          {rangeTabs.map((t) => (
+            <Link
+              key={t.key}
+              href={`/dashboard?range=${t.key}`}
+              className={`px-3 py-1 rounded border ${
+                range === t.key ? "bg-neutral-900" : "hover:bg-neutral-900"
+              }`}
+            >
+              {t.label}
+            </Link>
+          ))}
+        </div>
       </div>
 
+      {/* KPI row */}
       <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Tile title="MONTH — SALES" value={fmtUSD(salesMonth)}><Delta value={salesMoM} /></Tile>
-        <Tile title="MONTH — EXPENSES" value={fmtUSD(expMonth)}><Delta value={expMoM} /></Tile>
-        <Tile title="MONTH — PROFIT / LOSS" value={fmtUSD(profitMonth)}><Delta value={profMoM} /></Tile>
+        <CardStat
+          title={`${range.toUpperCase()} — SALES`}
+          value={fmtUSD(salesThis)}
+          hint="+MoM compares to last month’s sales."
+          sub={
+            range !== "today" && range !== "week" ? (
+              <span className="text-xs opacity-70">
+                +
+                {salesPrevMonth
+                  ? Math.round(((salesThis - salesPrevMonth) / salesPrevMonth) * 100)
+                  : 0}
+                % MoM
+              </span>
+            ) : null
+          }
+        />
+        <CardStat title={`${range.toUpperCase()} — EXPENSES`} value={fmtUSD(expThis)} />
+        <CardStat title={`${range.toUpperCase()} — PROFIT / LOSS`} value={fmtUSD(salesThis - expThis)} />
         <div className="border rounded p-4">
-          <div className="text-xs opacity-80">SALES vs GOAL</div>
-          <div className="text-2xl font-semibold">{fmtUSD(salesMonth)}</div>
-          <div className="mt-2 text-xs opacity-80">Goal $10,000.00</div>
-          <div className="h-2 bg-neutral-800 rounded mt-1 overflow-hidden">
-            <div className="h-2 bg-pink-500" style={{ width: `${Math.min(100, (salesMonth / 10000) * 100)}%` }} />
+          <div className="text-xs opacity-70">SALES vs GOAL</div>
+          <div className="text-xl font-semibold">{fmtUSD(salesThis)}</div>
+          <div className="text-xs mt-1 opacity-70">Goal {fmtUSD(goal)}</div>
+          <div className="h-2 bg-neutral-800 rounded mt-2">
+            <div
+              className="h-2 bg-pink-500 rounded"
+              style={{ width: `${pctToGoal}%`, transition: "width .2s" }}
+            />
           </div>
+          <div className="text-right text-xs opacity-70 mt-1">{pctToGoal}%</div>
         </div>
       </section>
 
-      <section className="grid grid-cols-1 md:grid-cols-5 gap-4">
-        <Tile title="ORDERS (M)" value={String(ordersMonth)} tooltip="Total orders recorded this month (distinct sales orders)." />
-        <Tile title="AOV (M)" value={fmtUSD(aov)} tooltip="Average Order Value = Sales / Orders for this month." />
-        <Tile title="FOOD %" value={`${Math.round(foodPct)}%`} tooltip="Food Cost % = Food expenses / Sales for this month." />
-        <Tile title="LABOR %" value={`${Math.round(laborPct)}%`} tooltip="Labor Cost % = Labor expenses / Sales for this month." />
-        <Tile title="PRIME %" value={`${Math.round(primePct)}%`} tooltip="Prime Cost % = Food % + Labor % (target ≤ 60%)." />
-      </section>
-
-      <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <SalesVsExpensesChart data={lineData} subtitle={seriesSubtitle} />
-        <ExpenseDonut
-          data={[
-            { name: "Food", value: getCat("Food") },
-            { name: "Labor", value: getCat("Labor") },
-            ...cats.filter(c => !["Food", "Labor"].includes(c.name)).slice(0, 5),
-          ]}
+      {/* KPI mini row */}
+      <section className="grid grid-cols-1 md:grid-cols-5 gap-4 mt-4">
+        <Kpi title="ORDERS (M)" value={ordersThis} tooltip="Number of orders in this range." />
+        <Kpi
+          title="AOV (M)"
+          value={fmtUSD(ordersThis > 0 ? salesThis / ordersThis : 0)}
+          tooltip="Average order value = Sales ÷ Orders (current range)."
         />
+        <Kpi title="FOOD %" value={`${foodPct}%`} tooltip="Food cost % of sales (current range)." />
+        <Kpi title="LABOR %" value={`${laborPct}%`} tooltip="Labor cost % of sales (current range)." />
+        <Kpi title="PRIME %" value={`${primePct}%`} tooltip="Prime cost = Food% + Labor%." />
       </section>
 
-      <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="border rounded p-4">
+      {/* Charts row */}
+      <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+        <SalesVsExpensesChart data={lineData} label={label} />
+        <ExpenseDonut data={donutData} label="current range" />
+      </section>
+
+      {/* Second charts row */}
+      <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+        {/* Weekday bars */}
+        <div className="border rounded p-3">
           <div className="text-sm opacity-80 mb-2">Weekday revenue (this month)</div>
           <div className="space-y-2">
-            {weekday.map((w: any) => (
-              <div key={w.label} className="flex items-center gap-3">
-                <div className="w-8 opacity-70 text-sm">{w.label}</div>
+            {weekday.map((r) => (
+              <div key={r.name} className="flex items-center gap-3">
+                <div className="w-8 text-sm opacity-70">{r.name}</div>
                 <div className="flex-1 h-2 bg-neutral-800 rounded overflow-hidden">
                   <div
                     className="h-2 bg-neutral-300"
                     style={{
-                      width: `${Math.min(100, (w.amount / Math.max(1, Math.max(...weekday.map((x: any) => x.amount)))) * 100)}%`,
+                      width: `${
+                        Math.min(
+                          100,
+                          (r.value / Math.max(...weekday.map((x) => x.value || 1))) * 100
+                        )
+                      }%`,
                     }}
                   />
                 </div>
-                <div className="w-24 text-right text-sm">{fmtUSD(w.amount)}</div>
+                <div className="w-24 text-right text-sm tabular-nums">{fmtUSD(r.value)}</div>
               </div>
             ))}
           </div>
         </div>
-        <TopItemsChart data={topItems} />
+        <TopItemsChart data={topItemsData} label="current range" />
       </section>
 
-      {/* Quick table stays the same; the chart above carries the trend */}
-      <section className="border rounded">
-        <div className="px-4 py-3 border-b text-sm opacity-80">Last 4 months (quick look)</div>
-        <div className="overflow-x-auto">
-          {/* We reuse the month-scope rows previously computed via views on the old version;
-              keeping it simple for now by showing the last 4 from the chart */}
-          {/* (Optional) can compute separately if you want different columns */}
-        </div>
-        <div className="flex gap-2 p-3">
-          <Link href="/sales" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">Sales details</Link>
-          <Link href="/expenses" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">Expenses details</Link>
+      {/* Last 4 months quick look */}
+      <section className="border rounded p-3 mt-4">
+        <div className="text-sm opacity-80 mb-2">Last 4 months (quick look)</div>
+        <table className="w-full text-sm">
+          <thead className="opacity-70">
+            <tr className="border-b">
+              <th className="text-left py-1">Period</th>
+              <th className="text-right py-1">Sales</th>
+              <th className="text-right py-1">Orders</th>
+              <th className="text-right py-1">AOV</th>
+              <th className="text-right py-1">Expenses</th>
+              <th className="text-right py-1">Profit</th>
+            </tr>
+          </thead>
+          <tbody>
+            {Array.from({ length: 4 }, (_, i) => {
+              const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (3 - i), 1));
+              const mk = monthKey(d);
+              return <RowMonth key={mk} supabase={supabase} tenantId={tenantId!} monthKey={mk} />;
+            })}
+          </tbody>
+        </table>
+        <div className="flex gap-2 mt-3">
+          <Link href="/sales" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">
+            Sales details
+          </Link>
+          <Link href="/expenses" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">
+            Expenses details
+          </Link>
         </div>
       </section>
     </main>
+  );
+}
+
+/** ----- small server components & UI bits ----- */
+async function RowMonth({
+  supabase,
+  tenantId,
+  monthKey,
+}: {
+  supabase: any;
+  tenantId: string;
+  monthKey: string;
+}) {
+  const [s, e, o] = await Promise.all([
+    sumOne(supabase, "v_sales_month_totals", "month", monthKey, tenantId, "revenue"),
+    sumOne(supabase, "v_expense_month_totals", "month", monthKey, tenantId, "total"),
+    sumOne(supabase, "v_sales_month_totals", "month", monthKey, tenantId, "orders"),
+  ]);
+  const aov = o > 0 ? s / o : 0;
+  return (
+    <tr className="border-t">
+      <td className="py-1">{monthKey}</td>
+      <td className="py-1 text-right tabular-nums">{fmtUSD(s)}</td>
+      <td className="py-1 text-right tabular-nums">{o}</td>
+      <td className="py-1 text-right tabular-nums">{fmtUSD(aov)}</td>
+      <td className="py-1 text-right tabular-nums">{fmtUSD(e)}</td>
+      <td className="py-1 text-right tabular-nums">{fmtUSD(s - e)}</td>
+    </tr>
+  );
+}
+
+function CardStat({
+  title,
+  value,
+  sub,
+  hint,
+}: {
+  title: string;
+  value: string;
+  sub?: React.ReactNode;
+  hint?: string;
+}) {
+  return (
+    <div className="border rounded p-4">
+      <div className="text-xs opacity-70 flex items-center gap-2">
+        <span>{title}</span>
+        {hint ? (
+          <span className="inline-block text-[10px] opacity-60 border px-1 rounded" title={hint}>
+            ?
+          </span>
+        ) : null}
+      </div>
+      <div className="text-2xl font-semibold">{value}</div>
+      {sub}
+    </div>
+  );
+}
+
+function Kpi({
+  title,
+  value,
+  className,
+  tooltip,
+}: {
+  title: string;
+  value: string | number;
+  className?: string;
+  tooltip?: string;
+}) {
+  return (
+    <div className={`border rounded p-4 ${className ?? ""}`}>
+      <div className="text-xs opacity-70 flex items-center gap-2">
+        <span>{title}</span>
+        {tooltip ? (
+          <span className="inline-block text-[10px] opacity-60 border px-1 rounded" title={tooltip}>
+            ?
+          </span>
+        ) : null}
+      </div>
+      <div className="text-2xl font-semibold">{value}</div>
+    </div>
   );
 }
