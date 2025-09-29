@@ -4,16 +4,13 @@ import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { SalesVsExpensesChart, ExpenseDonut, TopItemsChart } from "./charts";
 
-// ---------- tiny utils ----------
+/* ----------------- tiny utils ----------------- */
 const fmtUSD = (n: number) =>
   (Number(n) || 0).toLocaleString(undefined, { style: "currency", currency: "USD" });
-
 const pad = (n: number) => String(n).padStart(2, "0");
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const monthISO = (d: Date) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}`;
 const yearISO = (d: Date) => String(d.getUTCFullYear());
-
-// ISO week label
 const isoWeek = (d = new Date()) => {
   const dt = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
   dt.setUTCDate(dt.getUTCDate() + 4 - (dt.getUTCDay() || 7));
@@ -22,7 +19,7 @@ const isoWeek = (d = new Date()) => {
   return `${dt.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
 };
 
-// ---------- server action: set sales goal ----------
+/* -------- server action: save goal (cookie) -------- */
 async function setGoal(formData: FormData) {
   "use server";
   const v = Number(formData.get("goal"));
@@ -32,7 +29,7 @@ async function setGoal(formData: FormData) {
   revalidatePath("/dashboard");
 }
 
-// ---------- helpers (RLS scopes tenant; no tenant_id filters here) ----------
+/* ---- helpers (RLS scopes tenant; no tenant_id filters here) ---- */
 async function sumOne(
   supabase: any,
   view: string,
@@ -52,19 +49,21 @@ async function expenseBreakdown(
   const { data } = await supabase
     .from("expenses")
     .select("category, amount_usd, occurred_at, created_at")
-    .gte("coalesce(occurred_at, created_at)", start)
-    .lt("coalesce(occurred_at, created_at)", endExcl);
+  /* RLS handles tenant scoping */;
 
   const byCat = new Map<string, number>();
   for (const r of (data ?? []) as any[]) {
-    const k = r.category ?? "Misc";
-    byCat.set(k, (byCat.get(k) ?? 0) + Number(r.amount_usd ?? 0));
+    const when = new Date(r.occurred_at ?? r.created_at ?? new Date());
+    if (when >= new Date(start) && when < new Date(endExcl)) {
+      const k = r.category ?? "Misc";
+      byCat.set(k, (byCat.get(k) ?? 0) + Number(r.amount_usd ?? 0));
+    }
   }
   const total = Array.from(byCat.values()).reduce((s, v) => s + v, 0);
   return Array.from(byCat.entries()).map(([name, value]) => ({
     name,
     value,
-    label: `${name} – ${total > 0 ? Math.round((value / total) * 100) : 0}%`,
+    label: `${name} — ${total > 0 ? Math.round((value / total) * 100) : 0}%`,
   }));
 }
 
@@ -75,7 +74,6 @@ async function weekdayRevenueThisMonth(supabase: any) {
   const { data } = await supabase
     .from("sales_order_lines")
     .select("qty, unit_price, order:sales_orders(occurred_at, created_at)");
-
   const days = Array.from({ length: 7 }, (_, i) => ({ dow: i, total: 0 }));
   for (const r of (data ?? []) as any[]) {
     const od = new Date(
@@ -146,7 +144,7 @@ async function seriesForRange(supabase: any, range: "today" | "week" | "month" |
     return out;
   }
 
-  // last 12 months
+  // last 12 months (default)
   const base = new Date();
   for (let i = 11; i >= 0; i--) {
     const d = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() - i, 1));
@@ -164,7 +162,6 @@ async function topItemsInRange(supabase: any, start: string, endExcl: string) {
   const { data } = await supabase
     .from("sales_order_lines")
     .select("product_name, qty, unit_price, order:sales_orders(occurred_at, created_at)");
-
   const by = new Map<string, number>();
   for (const r of (data ?? []) as any[]) {
     const when = new Date(r.order?.occurred_at ?? r.order?.created_at ?? r.created_at ?? new Date());
@@ -179,20 +176,21 @@ async function topItemsInRange(supabase: any, start: string, endExcl: string) {
     .map(([name, value]) => ({ name, value }));
 }
 
-// ---------- PAGE ----------
+/* -------------------- PAGE -------------------- */
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams?: { [k: string]: string | string[] | undefined };
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const cookieStore = await cookies();
-  const savedGoal = Number(cookieStore.get("kb_goal")?.value ?? 10000) || 10000;
-
-  const range = (typeof searchParams?.range === "string" ? searchParams!.range : "month") as
+  const sp = (await searchParams) ?? {};
+  const range = (typeof sp.range === "string" ? sp.range : "month") as
     | "today"
     | "week"
     | "month"
     | "ytd";
+
+  const cookieStore = await cookies();
+  const savedGoal = Number(cookieStore.get("kb_goal")?.value ?? 10000) || 10000;
 
   const supabase = await createServerClient();
 
@@ -203,9 +201,8 @@ export default async function DashboardPage({
   const thisMonth = monthISO(now);
   const thisYear = yearISO(now);
 
-  // current window [start, end)
-  let start = "";
-  let endExcl = "";
+  // window [start, end)
+  let start = "", endExcl = "";
   if (range === "today") {
     start = thisDay;
     endExcl = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1))
@@ -214,11 +211,9 @@ export default async function DashboardPage({
   } else if (range === "week") {
     const dt = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
     const wd = dt.getUTCDay() || 7;
-    const monday = new Date(dt);
-    monday.setUTCDate(dt.getUTCDate() - (wd - 1));
-    const nextMon = new Date(monday);
-    nextMon.setUTCDate(monday.getUTCDate() + 7);
-    start = monday.toISOString().slice(0, 10);
+    const mon = new Date(dt); mon.setUTCDate(dt.getUTCDate() - (wd - 1));
+    const nextMon = new Date(mon); nextMon.setUTCDate(mon.getUTCDate() + 7);
+    start = mon.toISOString().slice(0, 10);
     endExcl = nextMon.toISOString().slice(0, 10);
   } else if (range === "ytd") {
     start = `${thisYear}-01-01`;
@@ -232,7 +227,7 @@ export default async function DashboardPage({
     endExcl = mEnd.toISOString().slice(0, 10);
   }
 
-  // headline metrics
+  // headline
   const [salesThis, expensesThis] = await Promise.all([
     (async () => {
       if (range === "today") return sumOne(supabase, "v_sales_day_totals", "day", thisDay, "revenue");
@@ -249,14 +244,14 @@ export default async function DashboardPage({
   ]);
   const profitThis = salesThis - expensesThis;
 
-  // AOV & Orders for current month (simple/consistent)
+  // AOV & orders (current month)
   const [ordersMonth, salesMonth] = await Promise.all([
     sumOne(supabase, "v_sales_month_totals", "month", thisMonth, "orders"),
     sumOne(supabase, "v_sales_month_totals", "month", thisMonth, "revenue"),
   ]);
   const aov = ordersMonth > 0 ? salesMonth / ordersMonth : 0;
 
-  // percentages
+  // expense %, prime
   const breakdown = await expenseBreakdown(supabase, start, endExcl);
   const totalExp = breakdown.reduce((s, x) => s + x.value, 0);
   const food = breakdown.find((x) => x.name?.toLowerCase() === "food")?.value ?? 0;
@@ -265,48 +260,42 @@ export default async function DashboardPage({
   const laborPct = totalExp > 0 ? Math.round((labor / totalExp) * 100) : 0;
   const primePct = Math.min(100, foodPct + laborPct);
 
-  // charts data
+  // charts
   const series = await seriesForRange(supabase, range);
   const weekdays = await weekdayRevenueThisMonth(supabase);
   const topItems = await topItemsInRange(supabase, start, endExcl);
 
-  // table rows (last 4 months quick look)
+  // last 4 rows
   const last4 = series.slice(-4);
   const rows = await Promise.all(
     last4.map(async (p) => {
       const label = p.key;
-      // if it's a month label, fetch orders to compute AOV
       const isMonth = /^\d{4}-\d{2}$/.test(label);
-      const orders = isMonth
-        ? await sumOne(supabase, "v_sales_month_totals", "month", label, "orders")
-        : 0;
+      const orders = isMonth ? await sumOne(supabase, "v_sales_month_totals", "month", label, "orders") : 0;
       const aovCell = orders > 0 ? p.sales / orders : 0;
       return { label, orders, aov: aovCell, sales: p.sales, expenses: p.expenses, profit: p.profit };
     })
   );
 
-  // goal
   const goal = savedGoal;
   const goalPct = Math.min(100, Math.round((salesThis / Math.max(1, goal)) * 100));
 
   return (
     <main className="max-w-6xl mx-auto px-4 py-6 space-y-4">
-      {/* Range toggles */}
+      {/* range toggles */}
       <div className="flex justify-end gap-2">
         {(["today", "week", "month", "ytd"] as const).map((r) => (
           <Link
             key={r}
             href={`/dashboard?range=${r}`}
-            className={`px-3 py-1 border rounded text-sm ${
-              range === r ? "bg-neutral-900" : "hover:bg-neutral-900"
-            }`}
+            className={`px-3 py-1 border rounded text-sm ${range === r ? "bg-neutral-900" : "hover:bg-neutral-900"}`}
           >
             {r === "ytd" ? "YTD" : r[0].toUpperCase() + r.slice(1)}
           </Link>
         ))}
       </div>
 
-      {/* Top row */}
+      {/* top row */}
       <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card title={`${range.toUpperCase()} — SALES`} extra={null}>
           <div className="text-2xl font-semibold">{fmtUSD(salesThis)}</div>
@@ -315,59 +304,42 @@ export default async function DashboardPage({
           <div className="text-2xl font-semibold">{fmtUSD(expensesThis)}</div>
         </Card>
         <Card title={`${range.toUpperCase()} — PROFIT / LOSS`} extra={null}>
-          <div className={`text-2xl font-semibold ${profitThis < 0 ? "text-rose-400" : ""}`}>
-            {fmtUSD(profitThis)}
-          </div>
+          <div className={`text-2xl font-semibold ${profitThis < 0 ? "text-rose-400" : ""}`}>{fmtUSD(profitThis)}</div>
         </Card>
         <Card
           title="SALES vs GOAL"
           extra={
             <form action={setGoal} className="flex items-center gap-2">
-              <input
-                name="goal"
-                inputMode="numeric"
-                className="w-20 px-2 py-1 bg-black/20 border rounded text-sm"
-                defaultValue={goal}
-              />
-              <button type="submit" className="px-2 py-1 border rounded text-sm hover:bg-neutral-900">
-                Save
-              </button>
+              <input name="goal" inputMode="numeric" className="w-20 px-2 py-1 bg-black/20 border rounded text-sm" defaultValue={goal} />
+              <button type="submit" className="px-2 py-1 border rounded text-sm hover:bg-neutral-900">Save</button>
             </form>
           }
         >
           <div className="text-xl font-semibold">{fmtUSD(salesThis)}</div>
           <div className="text-xs opacity-70">Goal {fmtUSD(goal)}</div>
           <div className="mt-2 h-2 rounded bg-neutral-800">
-            <div
-              className="h-2 rounded bg-pink-500"
-              style={{ width: `${goalPct}%` }}
-              aria-label="goal-progress"
-            />
+            <div className="h-2 rounded bg-pink-500" style={{ width: `${goalPct}%` }} />
           </div>
           <div className="text-xs opacity-70 mt-1">{goalPct}%</div>
         </Card>
       </section>
 
-      {/* Mid row KPIs */}
+      {/* mid KPIs */}
       <section className="grid grid-cols-1 md:grid-cols-5 gap-4">
-        <Mini title="ORDERS (M)">
-          <span className="text-xl font-semibold">{ordersMonth}</span>
-        </Mini>
-        <Mini title="AOV (M)">
-          <span className="text-xl font-semibold">{fmtUSD(aov)}</span>
-        </Mini>
-        <Mini title={<>FOOD % <span title="Food cost as % of total expenses in the selected range">ⓘ</span></>}>
+        <Mini title="ORDERS (M)"><span className="text-xl font-semibold">{ordersMonth}</span></Mini>
+        <Mini title="AOV (M)"><span className="text-xl font-semibold">{fmtUSD(aov)}</span></Mini>
+        <Mini title={<>FOOD % <span title="Food cost as % of expenses in selected range">ⓘ</span></>}>
           <span className="text-xl font-semibold">{foodPct}%</span>
         </Mini>
-        <Mini title={<>LABOR % <span title="Labor cost as % of total expenses in the selected range">ⓘ</span></>}>
+        <Mini title={<>LABOR % <span title="Labor cost as % of expenses in selected range">ⓘ</span></>}>
           <span className="text-xl font-semibold">{laborPct}%</span>
         </Mini>
-        <Mini title={<>PRIME % <span title="Food% + Labor% (top-line efficiency metric)">ⓘ</span></>}>
+        <Mini title={<>PRIME % <span title="Food% + Labor%">ⓘ</span></>}>
           <span className="text-xl font-semibold">{primePct}%</span>
         </Mini>
       </section>
 
-      {/* Charts */}
+      {/* charts */}
       <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <SalesVsExpensesChart data={series} range={range} />
         <ExpenseDonut data={breakdown} />
@@ -395,12 +367,10 @@ export default async function DashboardPage({
             ))}
           </ul>
         </Card>
-        <TopItemsChart
-          data={topItems.length ? topItems : [{ name: "No items in this range.", value: 0 }]}
-        />
+        <TopItemsChart data={topItems.length ? topItems : [{ name: "No items in this range.", value: 0 }]} />
       </section>
 
-      {/* Bottom table */}
+      {/* bottom table */}
       <section className="mt-4">
         <div className="border rounded overflow-x-auto">
           <table className="w-full text-sm">
@@ -422,9 +392,7 @@ export default async function DashboardPage({
                   <td className="px-3 py-2 text-right">{r.orders}</td>
                   <td className="px-3 py-2 text-right">{fmtUSD(r.aov)}</td>
                   <td className="px-3 py-2 text-right">{fmtUSD(r.expenses)}</td>
-                  <td className={`px-3 py-2 text-right ${r.profit < 0 ? "text-rose-400" : ""}`}>
-                    {fmtUSD(r.profit)}
-                  </td>
+                  <td className={`px-3 py-2 text-right ${r.profit < 0 ? "text-rose-400" : ""}`}>{fmtUSD(r.profit)}</td>
                 </tr>
               ))}
             </tbody>
@@ -432,27 +400,16 @@ export default async function DashboardPage({
         </div>
 
         <div className="flex gap-2 mt-3">
-          <Link href="/sales" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">
-            Sales details
-          </Link>
-          <Link href="/expenses" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">
-            Expenses details
-          </Link>
+          <Link href="/sales" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">Sales details</Link>
+          <Link href="/expenses" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">Expenses details</Link>
         </div>
       </section>
     </main>
   );
 }
 
-function Card({
-  title,
-  extra,
-  children,
-}: {
-  title: React.ReactNode;
-  extra: React.ReactNode;
-  children: React.ReactNode;
-}) {
+/* ---- simple card shells ---- */
+function Card({ title, extra, children }: { title: React.ReactNode; extra: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="border rounded p-4">
       <div className="flex items-center justify-between mb-2">
@@ -463,7 +420,6 @@ function Card({
     </div>
   );
 }
-
 function Mini({ title, children }: { title: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="border rounded p-4">
