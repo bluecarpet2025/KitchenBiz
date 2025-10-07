@@ -144,14 +144,16 @@ async function topItems(
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams?: { [k: string]: string | string[] | undefined };
+  // Vercel’s checker wants a Promise here in this template
+  searchParams?: Promise<Record<string, string>>;
 }) {
   const supabase = await createServerClient();
   const tenantId = (await getTenantId()) ?? "";
 
   // range toggle
-  const sp = await searchParams;
-  const range = (typeof sp?.range === "string" ? sp.range : "month") as "today" | "week" | "month" | "ytd";
+  const sp = (await (searchParams ?? Promise.resolve({}))) as Record<string, string>;
+  const range = (sp.range ?? "month") as "today" | "week" | "month" | "ytd";
+
 
   // read goal cookie
   const c = await cookies();
