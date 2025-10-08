@@ -3,13 +3,25 @@ import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { money } from "@/lib/format";
 
+// ⬇️ import client chart components directly (charts.tsx has "use client")
+import {
+  SalesVsExpensesChart,
+  ExpenseDonut,
+  TopItemsChart,
+  WeekdayBars,
+} from "./charts";
+
 // Small server-safe date helpers
 const pad = (n: number) => String(n).padStart(2, "0");
-const todayStr = (d = new Date()) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
-const monthStr = (d = new Date()) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}`;
+const todayStr = (d = new Date()) =>
+  `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+const monthStr = (d = new Date()) =>
+  `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}`;
 const yearStr = (d = new Date()) => String(d.getUTCFullYear());
 const weekKey = (d = new Date()) => {
-  const dt = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const dt = new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+  );
   dt.setUTCDate(dt.getUTCDate() + 4 - (dt.getUTCDay() || 7)); // ISO Thu
   const yearStart = new Date(Date.UTC(dt.getUTCFullYear(), 0, 1));
   const w = Math.ceil(((+dt - +yearStart) / 86400000 + 1) / 7);
@@ -26,7 +38,11 @@ async function getTenantId(supabase: any): Promise<string | null> {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return null;
-  const { data: prof } = await supabase.from("profiles").select("tenant_id").eq("id", user.id).maybeSingle();
+  const { data: prof } = await supabase
+    .from("profiles")
+    .select("tenant_id")
+    .eq("id", user.id)
+    .maybeSingle();
   return (prof?.tenant_id as string | null) ?? null;
 }
 
@@ -151,12 +167,16 @@ async function topItemsForRange(
 function periodWindow(range: Period, now = new Date()) {
   if (range === "today") {
     const s = todayStr(now);
-    const e = todayStr(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)));
+    const e = todayStr(
+      new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1))
+    );
     return { label: "day", key: s, startIso: s, endIso: e };
   }
   if (range === "week") {
     // ISO week: we still query by day window
-    const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const start = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+    );
     start.setUTCDate(start.getUTCDate() - ((start.getUTCDay() || 7) - 1)); // Monday
     const end = new Date(start);
     end.setUTCDate(start.getUTCDate() + 7);
@@ -181,7 +201,11 @@ export default async function DashboardPage({
   const supabase = await createServerClient(await cookies());
   const tenantId = await getTenantId(supabase);
   const range = coerceRange(
-    typeof searchParams?.range === "string" ? searchParams?.range : Array.isArray(searchParams?.range) ? searchParams?.range[0] : undefined
+    typeof searchParams?.range === "string"
+      ? searchParams?.range
+      : Array.isArray(searchParams?.range)
+      ? searchParams?.range[0]
+      : undefined
   );
 
   if (!tenantId) {
@@ -267,7 +291,9 @@ export default async function DashboardPage({
     // last 12 weeks (labels = ISO IYYY-Www)
     const base = new Date();
     for (let i = seriesLimit - 1; i >= 0; i--) {
-      const d = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate() - i * 7));
+      const d = new Date(
+        Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate() - i * 7)
+      );
       const k = weekKey(d);
       const [s, e] = await Promise.all([
         sumOne(supabase, "v_sales_week_totals", "week", k, tenantId, "revenue"),
@@ -279,7 +305,9 @@ export default async function DashboardPage({
     // today: last 12 days
     const base = new Date();
     for (let i = seriesLimit - 1; i >= 0; i--) {
-      const d = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate() - i));
+      const d = new Date(
+        Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate() - i)
+      );
       const k = todayStr(d);
       const [s, e] = await Promise.all([
         sumOne(supabase, "v_sales_day_totals", "day", k, tenantId, "revenue"),
@@ -303,10 +331,30 @@ export default async function DashboardPage({
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-semibold">Dashboard</h1>
         <div className="flex gap-2">
-          <Link href="/dashboard?range=today" className={`px-2 py-1 border rounded ${range === "today" ? "bg-neutral-900" : ""}`}>Today</Link>
-          <Link href="/dashboard?range=week" className={`px-2 py-1 border rounded ${range === "week" ? "bg-neutral-900" : ""}`}>Week</Link>
-          <Link href="/dashboard?range=month" className={`px-2 py-1 border rounded ${range === "month" ? "bg-neutral-900" : ""}`}>Month</Link>
-          <Link href="/dashboard?range=ytd" className={`px-2 py-1 border rounded ${range === "ytd" ? "bg-neutral-900" : ""}`}>YTD</Link>
+          <Link
+            href="/dashboard?range=today"
+            className={`px-2 py-1 border rounded ${range === "today" ? "bg-neutral-900" : ""}`}
+          >
+            Today
+          </Link>
+          <Link
+            href="/dashboard?range=week"
+            className={`px-2 py-1 border rounded ${range === "week" ? "bg-neutral-900" : ""}`}
+          >
+            Week
+          </Link>
+          <Link
+            href="/dashboard?range=month"
+            className={`px-2 py-1 border rounded ${range === "month" ? "bg-neutral-900" : ""}`}
+          >
+            Month
+          </Link>
+          <Link
+            href="/dashboard?range=ytd"
+            className={`px-2 py-1 border rounded ${range === "ytd" ? "bg-neutral-900" : ""}`}
+          >
+            YTD
+          </Link>
         </div>
       </div>
 
@@ -315,24 +363,44 @@ export default async function DashboardPage({
         <div className="border rounded p-4">
           <div className="text-xs opacity-70">MONTH — SALES</div>
           <div className="text-2xl font-semibold">{money(sales)}</div>
-          {range === "month" && <div className="text-emerald-400 text-xs mt-1"> {deltaSales >= 0 ? "+" : ""}{deltaSales.toFixed(1)}% MoM</div>}
+          {range === "month" && (
+            <div className="text-emerald-400 text-xs mt-1">
+              {deltaSales >= 0 ? "+" : ""}
+              {deltaSales.toFixed(1)}% MoM
+            </div>
+          )}
         </div>
         <div className="border rounded p-4">
           <div className="text-xs opacity-70">MONTH — EXPENSES</div>
           <div className="text-2xl font-semibold">{money(expenses)}</div>
-          {range === "month" && <div className="text-emerald-400 text-xs mt-1"> {deltaExp >= 0 ? "+" : ""}{deltaExp.toFixed(1)}% MoM</div>}
+          {range === "month" && (
+            <div className="text-emerald-400 text-xs mt-1">
+              {deltaExp >= 0 ? "+" : ""}
+              {deltaExp.toFixed(1)}% MoM
+            </div>
+          )}
         </div>
         <div className="border rounded p-4">
           <div className="text-xs opacity-70">MONTH — PROFIT / LOSS</div>
-          <div className={`text-2xl font-semibold ${profit < 0 ? "text-rose-400" : ""}`}>{money(profit)}</div>
-          {range === "month" && <div className="text-emerald-400 text-xs mt-1"> {deltaProfit >= 0 ? "+" : ""}{deltaProfit.toFixed(1)}% MoM</div>}
+          <div className={`text-2xl font-semibold ${profit < 0 ? "text-rose-400" : ""}`}>
+            {money(profit)}
+          </div>
+          {range === "month" && (
+            <div className="text-emerald-400 text-xs mt-1">
+              {deltaProfit >= 0 ? "+" : ""}
+              {deltaProfit.toFixed(1)}% MoM
+            </div>
+          )}
         </div>
         <form action="/api/set-goal" method="post" className="border rounded p-4">
           <div className="text-xs opacity-70">SALES vs GOAL</div>
           <div className="text-2xl font-semibold">{money(sales)}</div>
           <div className="text-xs opacity-70 mt-1">Goal {money(goal)}</div>
           <div className="h-1 bg-neutral-800 rounded mt-2">
-            <div className="h-1 bg-pink-500 rounded" style={{ width: `${Math.min(100, (sales / (goal || 1)) * 100)}%` }} />
+            <div
+              className="h-1 bg-pink-500 rounded"
+              style={{ width: `${Math.min(100, (sales / (goal || 1)) * 100)}%` }}
+            />
           </div>
           <div className="flex gap-2 mt-2">
             <input name="goal" defaultValue={goal} className="w-24 px-2 py-1 rounded bg-black border" />
@@ -388,7 +456,6 @@ export default async function DashboardPage({
           <div className="text-sm opacity-70 mb-2">
             Sales vs Expenses — last 12 {range === "today" ? "days" : range === "week" ? "weeks" : "months"}
           </div>
-          {/* client chart */}
           <SalesVsExpensesChart data={series} />
         </div>
         {/* Expense donut */}
@@ -428,21 +495,28 @@ export default async function DashboardPage({
               </tr>
             </thead>
             <tbody>
-              {series.slice(-4).map((r) => {
-                const p = r.sales - r.expenses;
-                const o = r.sales > 0 ? Math.round(r.sales / (aov || 1)) : 0; // estimate when we only have totals in series
-                const a = o > 0 ? r.sales / o : 0;
-                return (
-                  <tr key={r.key} className="border-t">
-                    <td className="px-4 py-2">{r.key}</td>
-                    <td className="px-4 py-2 text-right">{money(a)}</td>
-                    <td className="px-4 py-2 text-right">{o}</td>
-                    <td className="px-4 py-2 text-right">{money(r.sales)}</td>
-                    <td className="px-4 py-2 text-right">{money(r.expenses)}</td>
-                    <td className={`px-4 py-2 text-right ${p < 0 ? "text-rose-400" : ""}`}>{money(p)}</td>
-                  </tr>
-                );
-              })}
+             {series.slice(-4).map((r) => {
+  const p = r.sales - r.expenses;
+  // ❌ old (bad): used money() inside math, returns string
+  // const o = r.sales > 0 ? Math.round(r.sales / (money(1) && (aov || 1))) : 0;
+  // const a = o > 0 ? r.sales / o : 0;
+
+  // ✅ new (good): use the numeric AOV we already have for the current view
+  const o = aov > 0 ? Math.round(r.sales / aov) : 0;
+  const a = o > 0 ? r.sales / o : 0;
+
+  return (
+    <tr key={r.key} className="border-t">
+      <td className="px-4 py-2">{r.key}</td>
+      <td className="px-4 py-2 text-right">{money(a)}</td>
+      <td className="px-4 py-2 text-right">{o}</td>
+      <td className="px-4 py-2 text-right">{money(r.sales)}</td>
+      <td className="px-4 py-2 text-right">{money(r.expenses)}</td>
+      <td className={`px-4 py-2 text-right ${p < 0 ? "text-rose-400" : ""}`}>{money(p)}</td>
+    </tr>
+  );
+})}
+
             </tbody>
           </table>
         </div>
@@ -458,10 +532,3 @@ export default async function DashboardPage({
     </main>
   );
 }
-
-/* ==================== CLIENT CHARTS (islands) ==================== */
-import dynamic from "next/dynamic";
-const SalesVsExpensesChart = dynamic(() => import("./charts").then(m => m.SalesVsExpensesChart), { ssr: false });
-const ExpenseDonut = dynamic(() => import("./charts").then(m => m.ExpenseDonut), { ssr: false });
-const TopItemsChart = dynamic(() => import("./charts").then(m => m.TopItemsChart), { ssr: false });
-const WeekdayBars = dynamic(() => import("./charts").then(m => m.WeekdayBars), { ssr: false });
