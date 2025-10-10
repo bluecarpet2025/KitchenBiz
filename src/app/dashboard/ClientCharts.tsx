@@ -1,5 +1,4 @@
 "use client";
-
 import React from "react";
 import {
   LineChart,
@@ -17,28 +16,27 @@ import {
   Bar,
 } from "recharts";
 
-/* ----------------------------- shared helpers ----------------------------- */
+/* shared visuals */
 const currency = (n: number) =>
   (Number(n) || 0).toLocaleString(undefined, { style: "currency", currency: "USD" });
-
 const defaultTick = { fontSize: 12, fill: "var(--neutral-400, #aaa)" };
 const gridStroke = "var(--neutral-800, #2a2a2a)";
 const stroke1 = "var(--chart-1, #16a085)"; // sales
 const stroke2 = "var(--chart-2, #3b82f6)"; // expenses
-const stroke3 = "var(--chart-3, #ef476f)"; // extra
-const piePalette = [stroke1, stroke2, stroke3, "#22c55e", "#eab308", "#38bdf8", "#c084fc", "#f97316"];
+const piePalette = [stroke1, stroke2, "#22c55e", "#eab308", "#38bdf8", "#c084fc", "#f97316", "#f43f5e"];
 
-/* ---------------------- Sales vs Expenses (line chart) ---------------------- */
+/* Sales vs Expenses (line) */
 export function SalesVsExpenses({
   data,
 }: {
   data: Array<{ key: string; sales: number; expenses: number; profit: number }>;
 }) {
+  const rows = data?.length ? data : [{ key: "—", sales: 0, expenses: 0, profit: 0 }];
   return (
     <div className="text-sm opacity-80">
       <div className="h-64 w-full">
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data}>
+          <LineChart data={rows}>
             <CartesianGrid stroke={gridStroke} strokeDasharray="3 3" />
             <XAxis dataKey="key" tick={defaultTick} />
             <YAxis tick={defaultTick} />
@@ -53,21 +51,21 @@ export function SalesVsExpenses({
   );
 }
 
-/* -------------------------- Expense breakdown (donut) ----------------------- */
+/* Expense breakdown (donut) */
 export function ExpenseDonut({
   data,
 }: {
   data: Array<{ name: string; value: number }>;
 }) {
-  const total = data.reduce((a, b) => a + (Number(b.value) || 0), 0);
-
+  const safe = data?.length ? data : [{ name: "No expenses", value: 0 }];
+  const total = safe.reduce((a, b) => a + (Number(b.value) || 0), 0);
   return (
     <div className="text-sm opacity-80">
       <div className="h-64 w-full">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie
-              data={data}
+              data={safe}
               dataKey="value"
               nameKey="name"
               innerRadius={60}
@@ -78,10 +76,11 @@ export function ExpenseDonut({
                 return `${e.name}: ${currency(val)} (${pct}%)`;
               }}
             >
-              {data.map((_, i) => (
+              {safe.map((_, i) => (
                 <Cell key={i} fill={piePalette[i % piePalette.length]} />
               ))}
             </Pie>
+            <Tooltip formatter={(v: any) => currency(v as number)} />
           </PieChart>
         </ResponsiveContainer>
       </div>
@@ -89,7 +88,7 @@ export function ExpenseDonut({
   );
 }
 
-/* ------------------------------- Weekday bars ------------------------------- */
+/* Weekday bars */
 export function WeekdayBars({
   labels,
   values,
@@ -97,12 +96,13 @@ export function WeekdayBars({
   labels: string[];
   values: number[];
 }) {
-  const rows = labels.map((l, i) => ({ name: l, value: values[i] || 0 }));
+  const rows = (labels || []).map((l, i) => ({ name: l, value: Number(values?.[i] || 0) }));
+  const safe = rows.length ? rows : [{ name: "—", value: 0 }];
   return (
     <div className="text-sm opacity-80">
       <div className="h-64 w-full">
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={rows}>
+          <BarChart data={safe}>
             <CartesianGrid stroke={gridStroke} strokeDasharray="3 3" />
             <XAxis dataKey="name" tick={defaultTick} />
             <YAxis tick={defaultTick} />
@@ -115,17 +115,18 @@ export function WeekdayBars({
   );
 }
 
-/* -------------------------------- Top items -------------------------------- */
+/* Top items */
 export function TopItems({
   data,
 }: {
   data: Array<{ name: string; value: number }>;
 }) {
+  const safe = data?.length ? data : [{ name: "No items", value: 0 }];
   return (
     <div className="text-sm opacity-80">
       <div className="h-64 w-full">
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data}>
+          <BarChart data={safe}>
             <CartesianGrid stroke={gridStroke} strokeDasharray="3 3" />
             <XAxis dataKey="name" tick={defaultTick} />
             <YAxis tick={defaultTick} />
