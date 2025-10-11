@@ -16,12 +16,6 @@ function addMonths(ymStr: string, delta: number) {
   d.setUTCMonth(d.getUTCMonth() + delta);
   return ym(d);
 }
-function monthStartIso(ymStr: string) {
-  return `${ymStr}-01`;
-}
-function endExclusiveIso(ymStr: string) {
-  return monthStartIso(addMonths(ymStr, 1));
-}
 
 type SalesMonthRow = { month: string; revenue: number; orders: number };
 type IncomeRow = {
@@ -38,7 +32,17 @@ type IncomeRow = {
 };
 
 /* =============================== PAGE =============================== */
-export default async function FinancialPage(props: { searchParams?: Record<string, string> }) {
+/** Accepts both Next 15 promise-style and plain-object style searchParams */
+export default async function FinancialPage(props: {
+  searchParams?: Promise<Record<string, string>> | Record<string, string>;
+}) {
+  // Normalize search params (works in both runtimes)
+  const spRaw =
+    (props?.searchParams && typeof (props.searchParams as any)?.then === "function"
+      ? await (props.searchParams as Promise<Record<string, string>>)
+      : props?.searchParams) ?? {};
+  const sp = (spRaw ?? {}) as Record<string, string>;
+
   const supabase = await createServerClient();
 
   // tenant
@@ -50,28 +54,26 @@ export default async function FinancialPage(props: { searchParams?: Record<strin
   const tenantId = (prof?.tenant_id as string | undefined) ?? "";
 
   // resolve filter
-  const sp = props?.searchParams ?? {};
   const now = new Date();
 
   // Defaults: current-year YTD
   const defaultStart = `${now.getUTCFullYear()}-01-01`;
   const defaultEnd = `${now.getUTCFullYear() + 1}-01-01`;
 
-  const startIso = (sp.start && /^\d{4}-\d{2}-\d{2}$/.test(sp.start) ? sp.start : defaultStart)!;
-  const endIso = (sp.end && /^\d{4}-\d{2}-\d{2}$/.test(sp.end) ? sp.end : defaultEnd)!;
+  const startIso = sp.start && /^\d{4}-\d{2}-\d{2}$/.test(sp.start) ? sp.start : defaultStart;
+  const endIso = sp.end && /^\d{4}-\d{2}-\d{2}$/.test(sp.end) ? sp.end : defaultEnd;
 
   const startMonth = startIso.slice(0, 7);
-  const endMonthEx = endIso.slice(0, 7); // exclusive
+  const endMonthExcl = endIso.slice(0, 7); // exclusive
 
-  // build list of months [startMonth ... <endMonthEx)
+  // build list of months [startMonth ... <endMonthExcl)
   const months: string[] = [];
-  for (let m = startMonth; m < endMonthEx; m = addMonths(m, 1)) {
+  for (let m = startMonth; m < endMonthExcl; m = addMonths(m, 1)) {
     months.push(m);
     if (months.length > 120) break; // safety cap (10 years)
   }
 
   /* ---------------------------- fetch sales ---------------------------- */
-  // Pull sales by month within [startMonth .. <endMonthEx]
   let salesRows: SalesMonthRow[] = [];
   if (tenantId && months.length) {
     const { data } = await supabase
@@ -79,7 +81,7 @@ export default async function FinancialPage(props: { searchParams?: Record<strin
       .select("month, revenue, orders")
       .eq("tenant_id", tenantId)
       .gte("month", startMonth)
-      .lt("month", endMonthEx)
+      .lt("month", endMonthExcl)
       .order("month", { ascending: true });
     salesRows =
       (data ?? []).map((r: any) => ({
@@ -88,13 +90,10 @@ export default async function FinancialPage(props: { searchParams?: Record<strin
         orders: Number(r.orders ?? 0),
       })) ?? [];
   }
-
-  // Quick lookups
   const salesByMonth = new Map(salesRows.map((r) => [r.month, r.revenue]));
   const ordersByMonth = new Map(salesRows.map((r) => [r.month, r.orders]));
 
   /* -------------------------- fetch expenses -------------------------- */
-  // Pull all expenses rows once in the window; aggregate here to avoid N roundtrips.
   const { data: expRows } = await supabase
     .from("expenses")
     .select("occurred_at, amount_usd, category")
@@ -102,7 +101,6 @@ export default async function FinancialPage(props: { searchParams?: Record<strin
     .gte("occurred_at", `${startIso}T00:00:00Z`)
     .lt("occurred_at", `${endIso}T00:00:00Z`);
 
-  // Group expenses: by month (YYYY-MM) and by category
   const expByMonth = new Map<
     string,
     { Food: number; Labor: number; Rent: number; Utilities: number; Marketing: number; Misc: number }
@@ -121,16 +119,17 @@ export default async function FinancialPage(props: { searchParams?: Record<strin
 
   for (const r of expRows ?? []) {
     const dt = new Date((r as any).occurred_at);
-    const k = ym(dt);
+    const k = `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}`;
     const c = catKey((r as any).category);
     const amt = Number((r as any).amount_usd || 0);
     if (!expByMonth.has(k)) expByMonth.set(k, { Food: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 });
     expByMonth.get(k)![c] += amt;
+    // Aggregate the same window (selected range) for “YTD” mix shown on the right
     ytdBucket[c] += amt;
   }
 
-  /* -------------------- “This Month” and “YTD” cards ------------------- */
-  const thisMonth = ym(now);
+  /* ---------------- This Month & YTD (calendar) cards ----------------- */
+  const thisMonth = `${now.getUTCFullYear()}-${pad2(now.getUTCMonth() + 1)}`;
   const thisYear = String(now.getUTCFullYear());
 
   const cardMonthKey = thisMonth;
@@ -140,7 +139,6 @@ export default async function FinancialPage(props: { searchParams?: Record<strin
   const cardMonthProfit = cardMonthSales - cardMonthExp;
   const cardMonthAOV = cardMonthOrders > 0 ? cardMonthSales / cardMonthOrders : 0;
 
-  // YTD (calendar year of now, but still clipped to selected window)
   const ytdMonths = months.filter((m) => m.startsWith(thisYear));
   const ytdSales = ytdMonths.reduce((a, m) => a + Number(salesByMonth.get(m) || 0), 0);
   const ytdOrders = ytdMonths.reduce((a, m) => a + Number(ordersByMonth.get(m) || 0), 0);
@@ -176,7 +174,6 @@ export default async function FinancialPage(props: { searchParams?: Record<strin
     };
   });
 
-  // Small helpers for UI
   const q = new URLSearchParams({ start: startIso, end: endIso }).toString();
 
   return (
@@ -230,7 +227,14 @@ export default async function FinancialPage(props: { searchParams?: Record<strin
           <div className="text-xs mt-1 opacity-80">
             Food + Labor share:{" "}
             {(() => {
-              const exp = expByMonth.get(cardMonthKey) ?? { Food: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 };
+              const exp = expByMonth.get(cardMonthKey) ?? {
+                Food: 0,
+                Labor: 0,
+                Rent: 0,
+                Utilities: 0,
+                Marketing: 0,
+                Misc: 0,
+              };
               const pct = (exp.Food + exp.Labor) / Math.max(1, cardMonthSales);
               return `${Math.round(pct * 100)}%`;
             })()}
@@ -276,7 +280,6 @@ export default async function FinancialPage(props: { searchParams?: Record<strin
         <div className="border rounded p-4">
           <div className="text-sm opacity-80 mb-2">Trailing months — Sales vs Expenses</div>
           <div className="h-48">
-            {/* simple inline SVG chart (keeps it server-only / no client bundle) */}
             {(() => {
               const width = 600;
               const height = 180;
@@ -298,10 +301,8 @@ export default async function FinancialPage(props: { searchParams?: Record<strin
 
               return (
                 <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full">
-                  {/* axes */}
                   <line x1={left} y1={top} x2={left} y2={top + H} stroke="#2a2a2a" />
                   <line x1={left} y1={top + H} x2={left + W} y2={top + H} stroke="#2a2a2a" />
-                  {/* lines */}
                   <path d={path("expenses")} fill="none" stroke="#4da3ff" strokeWidth="2" />
                   <path d={path("sales")} fill="none" stroke="#3ea65f" strokeWidth="2" />
                 </svg>
