@@ -101,7 +101,7 @@ async function weekdayRevenueThisMonth(supabase: any): Promise<{ labels: string[
   return { labels, values: vals };
 }
 
-/* ---------- Top items that match view logic (coalesce on order timestamps) ---------- */
+/* ---------- Top items with batched .in() to avoid URL/param limits ---------- */
 async function topItemsForRange(
   supabase: any,
   tenantId: string | null,
@@ -110,36 +110,41 @@ async function topItemsForRange(
 ): Promise<Array<{ name: string; value: number }>> {
   if (!tenantId) return [];
 
-  // 1) Pull order ids in-range using OR that mirrors COALESCE(occurred_at, created_at)
+  // 1) Order ids for range using the same COALESCE logic as views
   const start = `${startIso}T00:00:00Z`;
   const end = `${endIso}T00:00:00Z`;
-  const orExpr = [
-    `and(occurred_at.gte.${start},occurred_at.lt.${end})`,
-    `and(occurred_at.is.null,created_at.gte.${start},created_at.lt.${end})`,
-  ].join(",");
   const { data: orders, error: ordErr } = await supabase
     .from("sales_orders")
-    .select("id")
+    .select("id, occurred_at, created_at")
     .eq("tenant_id", tenantId)
-    .or(orExpr);
+    .or(
+      [
+        `and(occurred_at.gte.${start},occurred_at.lt.${end})`,
+        `and(occurred_at.is.null,created_at.gte.${start},created_at.lt.${end})`,
+      ].join(",")
+    );
 
   if (ordErr || !orders?.length) return [];
 
-  const ids = (orders as any[]).map((o) => o.id as string);
+  const ids = (orders as any[]).map((o) => String(o.id));
 
-  // 2) Fetch lines for those orders and aggregate by trimmed name
-  const { data: lines, error: lineErr } = await supabase
-    .from("sales_order_lines")
-    .select("product_name, qty, unit_price, total, order_id")
-    .in("order_id", ids);
-
-  if (lineErr || !lines?.length) return [];
-
+  // 2) Batch the line fetch to avoid long URLs
+  const CHUNK = 200;
   const bucket = new Map<string, number>();
-  for (const row of lines as any[]) {
-    const name = String(row.product_name ?? "Unknown").trim();
-    const lineTotal = Number(row.total ?? 0) || (Number(row.qty || 0) * Number(row.unit_price || 0)) || 0;
-    bucket.set(name, (bucket.get(name) || 0) + lineTotal);
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const slice = ids.slice(i, i + CHUNK);
+    const { data: lines, error: lineErr } = await supabase
+      .from("sales_order_lines")
+      .select("product_name, qty, unit_price, total, order_id")
+      .in("order_id", slice);
+
+    if (lineErr || !lines?.length) continue;
+
+    for (const row of lines as any[]) {
+      const name = String(row.product_name ?? "Unknown").trim();
+      const lineTotal = Number(row.total ?? 0) || (Number(row.qty || 0) * Number(row.unit_price || 0)) || 0;
+      bucket.set(name, (bucket.get(name) || 0) + lineTotal);
+    }
   }
 
   return [...bucket.entries()]
@@ -291,13 +296,11 @@ export default async function DashboardPage(props: any) {
     }
   }
 
-  /* deltas vs previous period (kept simple) */
+  /* simple deltas vs previous period */
   const pct = (nowV: number, prevV: number) =>
     prevV === 0 ? (nowV > 0 ? 100 : 0) : Math.round(((nowV - prevV) / prevV) * 100);
 
-  let salesDelta = 0,
-    expDelta = 0,
-    profDelta = 0;
+  let salesDelta = 0, expDelta = 0, profDelta = 0;
   if (range === "today") {
     const prevKey = fmtDay(addDays(now, -1));
     const [ps, pe] = await Promise.all([
@@ -305,8 +308,8 @@ export default async function DashboardPage(props: any) {
       sumOne(supabase, "v_expense_day_totals", "day", prevKey, "total"),
     ]);
     salesDelta = pct(salesVal, ps);
-    expDelta = pct(expVal, pe);
-    profDelta = pct(profitVal, ps - pe);
+    expDelta   = pct(expVal,  pe);
+    profDelta  = pct(profitVal, ps - pe);
   } else if (range === "week") {
     const prevKey = isoWeekString(addDays(now, -7));
     const [ps, pe] = await Promise.all([
@@ -314,8 +317,8 @@ export default async function DashboardPage(props: any) {
       sumOne(supabase, "v_expense_week_totals", "week", prevKey, "total"),
     ]);
     salesDelta = pct(salesVal, ps);
-    expDelta = pct(expVal, pe);
-    profDelta = pct(profitVal, ps - pe);
+    expDelta   = pct(expVal,  pe);
+    profDelta  = pct(profitVal, ps - pe);
   } else if (range === "ytd") {
     const prevYear = String(now.getUTCFullYear() - 1);
     const [ps, pe] = await Promise.all([
@@ -323,8 +326,8 @@ export default async function DashboardPage(props: any) {
       sumOne(supabase, "v_expense_year_totals", "year", prevYear, "total"),
     ]);
     salesDelta = pct(salesVal, ps);
-    expDelta = pct(expVal, pe);
-    profDelta = pct(profitVal, ps - pe);
+    expDelta   = pct(expVal,  pe);
+    profDelta  = pct(profitVal, ps - pe);
   } else {
     const prevMonth = fmtMonth(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)));
     const [ps, pe] = await Promise.all([
@@ -332,8 +335,8 @@ export default async function DashboardPage(props: any) {
       sumOne(supabase, "v_expense_month_totals", "month", prevMonth, "total"),
     ]);
     salesDelta = pct(salesVal, ps);
-    expDelta = pct(expVal, pe);
-    profDelta = pct(profitVal, ps - pe);
+    expDelta   = pct(expVal,  pe);
+    profDelta  = pct(profitVal, ps - pe);
   }
 
   return (
@@ -360,27 +363,19 @@ export default async function DashboardPage(props: any) {
             SALES — {range.toUpperCase()} <span title="Sum of sales (∑ line totals; falls back to qty×unit price) in the selected range.">ⓘ</span>
           </div>
           <div className="text-2xl font-semibold mt-1">{usd(salesVal)}</div>
-          <div className={`text-xs mt-1 ${salesDelta >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-            {salesDelta >= 0 ? `+${salesDelta}%` : `${salesDelta}%`} vs prev
-          </div>
+          <div className={`text-xs mt-1 ${/* just keep the space for layout */ ""}`}></div>
         </div>
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 tracking-wide flex items-center gap-1">
             EXPENSES — {range.toUpperCase()} <span title="Sum of expenses (∑ amount_usd) in the selected range.">ⓘ</span>
           </div>
           <div className="text-2xl font-semibold mt-1">{usd(expVal)}</div>
-          <div className={`text-xs mt-1 ${expDelta >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-            {expDelta >= 0 ? `+${expDelta}%` : `${expDelta}%`} vs prev
-          </div>
         </div>
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 tracking-wide flex items-center gap-1">
             PROFIT / LOSS — {range.toUpperCase()} <span title="Profit = Sales − Expenses for the selected range.">ⓘ</span>
           </div>
           <div className={`text-2xl font-semibold mt-1 ${profitVal < 0 ? "text-rose-400" : ""}`}>{usd(profitVal)}</div>
-          <div className={`text-xs mt-1 ${profDelta >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-            {profDelta >= 0 ? `+${profDelta}%` : `${profDelta}%`} vs prev
-          </div>
         </div>
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 tracking-wide">SALES vs GOAL</div>
