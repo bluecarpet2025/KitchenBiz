@@ -8,7 +8,7 @@ import { SalesVsExpenses, ExpenseDonut, TopItems, WeekdayBars } from "./ClientCh
 const pad2 = (n: number) => String(n).padStart(2, "0");
 const fmtDay = (d: Date) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
 const fmtMonth = (d: Date) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}`;
-const fmtYear  = (d: Date) => String(d.getUTCFullYear());
+const fmtYear = (d: Date) => String(d.getUTCFullYear());
 const usd = (n: number) =>
   new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(Number(n) || 0);
 
@@ -56,7 +56,7 @@ async function sumOne(
   return Number((data as any)?.[col] ?? 0);
 }
 
-/* Grouped expenses within [start,end) in SQL (still summed client-side, but scoped) */
+/* Expense breakdown within [start,end) */
 async function expenseBreakdownSQL(
   supabase: any,
   tenantId: string | null,
@@ -79,7 +79,7 @@ async function expenseBreakdownSQL(
   return [...bucket.entries()].map(([name, value]) => ({ name, value }));
 }
 
-/* Weekday totals for the current calendar month (UTC) via view */
+/* Weekday totals for current calendar month (UTC) via view */
 async function weekdayRevenueThisMonth(supabase: any): Promise<{ labels: string[]; values: number[] }> {
   const now = new Date();
   const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
@@ -101,37 +101,44 @@ async function weekdayRevenueThisMonth(supabase: any): Promise<{ labels: string[
   return { labels, values: vals };
 }
 
-/* Top items aggregated by joining sales_order_lines -> sales_orders (YTD skew fix)
-   - Trim product names to collapse variants
-   - Revenue = COALESCE(line.total, line.qty * line.unit_price)
-*/
-async function topItemsForRangeSQL(
+/* ---------- Top items that match view logic (coalesce on order timestamps) ---------- */
+async function topItemsForRange(
   supabase: any,
   tenantId: string | null,
   startIso: string,
   endIso: string
 ): Promise<Array<{ name: string; value: number }>> {
   if (!tenantId) return [];
-  const { data, error } = await supabase
-    .from("sales_order_lines")
-    .select(
-      "product_name, qty, unit_price, total, sales_orders!inner(tenant_id, occurred_at)"
-    )
-    .eq("sales_orders.tenant_id", tenantId)
-    .gte("sales_orders.occurred_at", `${startIso}T00:00:00Z`)
-    .lt("sales_orders.occurred_at", `${endIso}T00:00:00Z`);
 
-  if (error) {
-    console.error("topItems join error", error);
-    return [];
-  }
+  // 1) Pull order ids in-range using OR that mirrors COALESCE(occurred_at, created_at)
+  const start = `${startIso}T00:00:00Z`;
+  const end = `${endIso}T00:00:00Z`;
+  const orExpr = [
+    `and(occurred_at.gte.${start},occurred_at.lt.${end})`,
+    `and(occurred_at.is.null,created_at.gte.${start},created_at.lt.${end})`,
+  ].join(",");
+  const { data: orders, error: ordErr } = await supabase
+    .from("sales_orders")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .or(orExpr);
+
+  if (ordErr || !orders?.length) return [];
+
+  const ids = (orders as any[]).map((o) => o.id as string);
+
+  // 2) Fetch lines for those orders and aggregate by trimmed name
+  const { data: lines, error: lineErr } = await supabase
+    .from("sales_order_lines")
+    .select("product_name, qty, unit_price, total, order_id")
+    .in("order_id", ids);
+
+  if (lineErr || !lines?.length) return [];
 
   const bucket = new Map<string, number>();
-  for (const row of (data ?? []) as any[]) {
-    const name = String((row.product_name ?? "Unknown")).trim();
-    const lineTotal =
-      Number(row?.total ?? 0) ||
-      ((Number(row?.qty ?? 0) * Number(row?.unit_price ?? 0)) || 0);
+  for (const row of lines as any[]) {
+    const name = String(row.product_name ?? "Unknown").trim();
+    const lineTotal = Number(row.total ?? 0) || (Number(row.qty || 0) * Number(row.unit_price || 0)) || 0;
     bucket.set(name, (bucket.get(name) || 0) + lineTotal);
   }
 
@@ -149,9 +156,7 @@ async function setGoal(formData: FormData) {
   const supabase = await createServerClient();
   const { data: u } = await supabase.auth.getUser();
   const uid = u?.user?.id;
-  if (uid) {
-    await supabase.from("profiles").update({ goal_month_usd: newGoal }).eq("id", uid);
-  }
+  if (uid) await supabase.from("profiles").update({ goal_month_usd: newGoal }).eq("id", uid);
   const c = await cookies();
   c.set("_kb_goal", String(newGoal), { path: "/", maxAge: 60 * 60 * 24 * 365 });
 }
@@ -161,15 +166,14 @@ export default async function DashboardPage(props: any) {
   const supabase = await createServerClient();
   const { tenantId, goal: profileGoal } = await getProfileAndTenant(supabase);
 
-  // range
   const sp = (await props?.searchParams) ?? props?.searchParams ?? {};
   const range = (typeof sp.range === "string" ? sp.range : Array.isArray(sp.range) ? sp.range[0] : null) ?? "month";
 
   const now = new Date();
-  const today     = fmtDay(now);
-  const thisWeek  = isoWeekString(now);
+  const today = fmtDay(now);
+  const thisWeek = isoWeekString(now);
   const thisMonth = fmtMonth(now);
-  const thisYear  = fmtYear(now);
+  const thisYear = fmtYear(now);
 
   // canonical [start, end)
   let startIso = today;
@@ -189,7 +193,7 @@ export default async function DashboardPage(props: any) {
     endIsoExcl = fmtDay(e);
   }
 
-  // headline aggregates (from views)
+  /* headline aggregates */
   const [salesVal, expVal, ordersVal] = await (async () => {
     if (range === "today") {
       return Promise.all([
@@ -221,16 +225,16 @@ export default async function DashboardPage(props: any) {
   const profitVal = salesVal - expVal;
   const aov = ordersVal > 0 ? salesVal / ordersVal : 0;
 
-  // breakdowns & charts
+  /* breakdowns & charts */
   const breakdown = await expenseBreakdownSQL(supabase, tenantId, startIso, endIsoExcl);
-  const weekday   = await weekdayRevenueThisMonth(supabase);
-  const topItems  = await topItemsForRangeSQL(supabase, tenantId, startIso, endIsoExcl);
+  const weekday = await weekdayRevenueThisMonth(supabase);
+  const topItems = await topItemsForRange(supabase, tenantId, startIso, endIsoExcl);
 
-  // goal (profile first, cookie override second)
+  /* goal (profile first, cookie override second) */
   const goalCookie = (await cookies()).get("_kb_goal")?.value;
   const goal = Math.max(0, Math.round(Number(goalCookie ?? profileGoal ?? 0)));
 
-  // last 4 months table
+  /* last 4 months table */
   const months: string[] = [];
   for (let i = 3; i >= 0; i--) {
     const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
@@ -247,7 +251,7 @@ export default async function DashboardPage(props: any) {
     })
   );
 
-  // line series
+  /* line series for big chart */
   const series: Array<{ key: string; sales: number; expenses: number; profit: number }> = [];
   if (range === "today") {
     for (let i = 11; i >= 0; i--) {
@@ -287,11 +291,13 @@ export default async function DashboardPage(props: any) {
     }
   }
 
-  // deltas — compare to previous matching period
+  /* deltas vs previous period (kept simple) */
   const pct = (nowV: number, prevV: number) =>
     prevV === 0 ? (nowV > 0 ? 100 : 0) : Math.round(((nowV - prevV) / prevV) * 100);
 
-  let salesDelta = 0, expDelta = 0, profDelta = 0;
+  let salesDelta = 0,
+    expDelta = 0,
+    profDelta = 0;
   if (range === "today") {
     const prevKey = fmtDay(addDays(now, -1));
     const [ps, pe] = await Promise.all([
@@ -299,8 +305,8 @@ export default async function DashboardPage(props: any) {
       sumOne(supabase, "v_expense_day_totals", "day", prevKey, "total"),
     ]);
     salesDelta = pct(salesVal, ps);
-    expDelta   = pct(expVal,  pe);
-    profDelta  = pct(profitVal, ps - pe);
+    expDelta = pct(expVal, pe);
+    profDelta = pct(profitVal, ps - pe);
   } else if (range === "week") {
     const prevKey = isoWeekString(addDays(now, -7));
     const [ps, pe] = await Promise.all([
@@ -308,8 +314,8 @@ export default async function DashboardPage(props: any) {
       sumOne(supabase, "v_expense_week_totals", "week", prevKey, "total"),
     ]);
     salesDelta = pct(salesVal, ps);
-    expDelta   = pct(expVal,  pe);
-    profDelta  = pct(profitVal, ps - pe);
+    expDelta = pct(expVal, pe);
+    profDelta = pct(profitVal, ps - pe);
   } else if (range === "ytd") {
     const prevYear = String(now.getUTCFullYear() - 1);
     const [ps, pe] = await Promise.all([
@@ -317,8 +323,8 @@ export default async function DashboardPage(props: any) {
       sumOne(supabase, "v_expense_year_totals", "year", prevYear, "total"),
     ]);
     salesDelta = pct(salesVal, ps);
-    expDelta   = pct(expVal,  pe);
-    profDelta  = pct(profitVal, ps - pe);
+    expDelta = pct(expVal, pe);
+    profDelta = pct(profitVal, ps - pe);
   } else {
     const prevMonth = fmtMonth(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)));
     const [ps, pe] = await Promise.all([
@@ -326,19 +332,19 @@ export default async function DashboardPage(props: any) {
       sumOne(supabase, "v_expense_month_totals", "month", prevMonth, "total"),
     ]);
     salesDelta = pct(salesVal, ps);
-    expDelta   = pct(expVal,  pe);
-    profDelta  = pct(profitVal, ps - pe);
+    expDelta = pct(expVal, pe);
+    profDelta = pct(profitVal, ps - pe);
   }
 
   return (
     <main className="max-w-6xl mx-auto px-4 py-6">
-      {/* header row: range tabs + quick links */}
+      {/* header: range + quick links */}
       <div className="flex items-center justify-between mb-4 gap-3">
         <div className="flex items-center gap-2">
           <Link href="/dashboard?range=today" className={`rounded border px-3 py-1 ${range === "today" ? "bg-neutral-900" : ""}`}>Today</Link>
-          <Link href="/dashboard?range=week"  className={`rounded border px-3 py-1 ${range === "week"  ? "bg-neutral-900" : ""}`}>Week</Link>
+          <Link href="/dashboard?range=week"  className={`rounded border px-3 py-1 ${range === "week" ? "bg-neutral-900" : ""}`}>Week</Link>
           <Link href="/dashboard?range=month" className={`rounded border px-3 py-1 ${range === "month" ? "bg-neutral-900" : ""}`}>Month</Link>
-          <Link href="/dashboard?range=ytd"   className={`rounded border px-3 py-1 ${range === "ytd"   ? "bg-neutral-900" : ""}`}>YTD</Link>
+          <Link href="/dashboard?range=ytd"   className={`rounded border px-3 py-1 ${range === "ytd" ? "bg-neutral-900" : ""}`}>YTD</Link>
           <span className="text-xs px-2 py-1 rounded border opacity-70">Range: {startIso} → {endIsoExcl}</span>
         </div>
         <div className="flex gap-2">
@@ -351,22 +357,30 @@ export default async function DashboardPage(props: any) {
       <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 tracking-wide flex items-center gap-1">
-            SALES — {range.toUpperCase()} <span title="Sum of sales (∑ of line total; falls back to qty×unit price) in the selected range.">ⓘ</span>
+            SALES — {range.toUpperCase()} <span title="Sum of sales (∑ line totals; falls back to qty×unit price) in the selected range.">ⓘ</span>
           </div>
           <div className="text-2xl font-semibold mt-1">{usd(salesVal)}</div>
-          <div className="text-xs mt-1 text-emerald-400">{/* delta shown below for clarity */}</div>
+          <div className={`text-xs mt-1 ${salesDelta >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+            {salesDelta >= 0 ? `+${salesDelta}%` : `${salesDelta}%`} vs prev
+          </div>
         </div>
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 tracking-wide flex items-center gap-1">
             EXPENSES — {range.toUpperCase()} <span title="Sum of expenses (∑ amount_usd) in the selected range.">ⓘ</span>
           </div>
           <div className="text-2xl font-semibold mt-1">{usd(expVal)}</div>
+          <div className={`text-xs mt-1 ${expDelta >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+            {expDelta >= 0 ? `+${expDelta}%` : `${expDelta}%`} vs prev
+          </div>
         </div>
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 tracking-wide flex items-center gap-1">
             PROFIT / LOSS — {range.toUpperCase()} <span title="Profit = Sales − Expenses for the selected range.">ⓘ</span>
           </div>
           <div className={`text-2xl font-semibold mt-1 ${profitVal < 0 ? "text-rose-400" : ""}`}>{usd(profitVal)}</div>
+          <div className={`text-xs mt-1 ${profDelta >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+            {profDelta >= 0 ? `+${profDelta}%` : `${profDelta}%`} vs prev
+          </div>
         </div>
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 tracking-wide">SALES vs GOAL</div>
@@ -424,7 +438,7 @@ export default async function DashboardPage(props: any) {
           </div>
           <div className="text-2xl font-semibold">
             {(() => {
-              const food  = breakdown.find((x) => x.name?.toLowerCase() === "food")?.value ?? 0;
+              const food = breakdown.find((x) => x.name?.toLowerCase() === "food")?.value ?? 0;
               const labor = breakdown.find((x) => x.name?.toLowerCase() === "labor")?.value ?? 0;
               return `${Math.round(((food + labor) / Math.max(1, salesVal)) * 100)}%`;
             })()}
@@ -438,18 +452,18 @@ export default async function DashboardPage(props: any) {
           <div className="text-xs opacity-70 mb-2">
             Sales vs Expenses — {range === "today" ? "last 12 days" : range === "week" ? "last 12 weeks" : range === "ytd" ? "YTD (by month)" : "last 12 months"}
           </div>
-          <SalesVsExpenses data={[]} />
+          <SalesVsExpenses data={series} />
         </div>
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 mb-2">Expense breakdown — current range</div>
-          <ExpenseDonut data={[]} />
+          <ExpenseDonut data={breakdown} />
         </div>
       </section>
 
       <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 mb-2">Weekday revenue (this month)</div>
-          <WeekdayBars labels={[]} values={[]} />
+          <WeekdayBars labels={weekday.labels} values={weekday.values} />
         </div>
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 mb-2">Top items — current range</div>
