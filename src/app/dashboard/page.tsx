@@ -82,23 +82,23 @@ async function expenseBreakdownSQL(
 /* Weekday totals for current calendar month (UTC) via view */
 async function weekdayRevenueThisMonth(supabase: any): Promise<{ labels: string[]; values: number[] }> {
   const now = new Date();
-  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const endExcl = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
-
-  const { data } = await supabase
-    .from("v_sales_day_totals")
-    .select("day, revenue")
-    .gte("day", fmtDay(start))
-    .lt("day", fmtDay(endExcl))
-    .order("day", { ascending: true });
-
-  const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const vals = [0, 0, 0, 0, 0, 0, 0];
-  for (const r of (data ?? []) as any[]) {
-    const d = new Date(`${r.day}T00:00:00Z`);
-    vals[d.getUTCDay()] += Number(r.revenue || 0);
+  theStart: {
+    const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const endExcl = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+    const { data } = await supabase
+      .from("v_sales_day_totals")
+      .select("day, revenue")
+      .gte("day", fmtDay(start))
+      .lt("day", fmtDay(endExcl))
+      .order("day", { ascending: true });
+    const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const vals = [0, 0, 0, 0, 0, 0, 0];
+    for (const r of (data ?? []) as any[]) {
+      const d = new Date(`${r.day}T00:00:00Z`);
+      vals[d.getUTCDay()] += Number(r.revenue || 0);
+    }
+    return { labels, values: vals };
   }
-  return { labels, values: vals };
 }
 
 /* ---------- Top items with batched .in() to avoid URL/param limits ---------- */
@@ -110,7 +110,6 @@ async function topItemsForRange(
 ): Promise<Array<{ name: string; value: number }>> {
   if (!tenantId) return [];
 
-  // 1) Order ids for range using the same COALESCE logic as views
   const start = `${startIso}T00:00:00Z`;
   const end = `${endIso}T00:00:00Z`;
   const { data: orders, error: ordErr } = await supabase
@@ -128,19 +127,16 @@ async function topItemsForRange(
 
   const ids = (orders as any[]).map((o) => String(o.id));
 
-  // 2) Batch the line fetch to avoid long URLs
   const CHUNK = 200;
   const bucket = new Map<string, number>();
   for (let i = 0; i < ids.length; i += CHUNK) {
     const slice = ids.slice(i, i + CHUNK);
-    const { data: lines, error: lineErr } = await supabase
+    const { data: lines } = await supabase
       .from("sales_order_lines")
       .select("product_name, qty, unit_price, total, order_id")
       .in("order_id", slice);
 
-    if (lineErr || !lines?.length) continue;
-
-    for (const row of lines as any[]) {
+    for (const row of (lines ?? []) as any[]) {
       const name = String(row.product_name ?? "Unknown").trim();
       const lineTotal = Number(row.total ?? 0) || (Number(row.qty || 0) * Number(row.unit_price || 0)) || 0;
       bucket.set(name, (bucket.get(name) || 0) + lineTotal);
@@ -296,48 +292,38 @@ export default async function DashboardPage(props: any) {
     }
   }
 
-  /* simple deltas vs previous period */
+  /* --------- small extras for the KPI green lines --------- */
   const pct = (nowV: number, prevV: number) =>
     prevV === 0 ? (nowV > 0 ? 100 : 0) : Math.round(((nowV - prevV) / prevV) * 100);
 
-  let salesDelta = 0, expDelta = 0, profDelta = 0;
-  if (range === "today") {
-    const prevKey = fmtDay(addDays(now, -1));
-    const [ps, pe] = await Promise.all([
-      sumOne(supabase, "v_sales_day_totals", "day", prevKey, "revenue"),
-      sumOne(supabase, "v_expense_day_totals", "day", prevKey, "total"),
-    ]);
-    salesDelta = pct(salesVal, ps);
-    expDelta   = pct(expVal,  pe);
-    profDelta  = pct(profitVal, ps - pe);
-  } else if (range === "week") {
-    const prevKey = isoWeekString(addDays(now, -7));
-    const [ps, pe] = await Promise.all([
-      sumOne(supabase, "v_sales_week_totals", "week", prevKey, "revenue"),
-      sumOne(supabase, "v_expense_week_totals", "week", prevKey, "total"),
-    ]);
-    salesDelta = pct(salesVal, ps);
-    expDelta   = pct(expVal,  pe);
-    profDelta  = pct(profitVal, ps - pe);
-  } else if (range === "ytd") {
-    const prevYear = String(now.getUTCFullYear() - 1);
-    const [ps, pe] = await Promise.all([
-      sumOne(supabase, "v_sales_year_totals", "year", prevYear, "revenue"),
-      sumOne(supabase, "v_expense_year_totals", "year", prevYear, "total"),
-    ]);
-    salesDelta = pct(salesVal, ps);
-    expDelta   = pct(expVal,  pe);
-    profDelta  = pct(profitVal, ps - pe);
-  } else {
-    const prevMonth = fmtMonth(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)));
-    const [ps, pe] = await Promise.all([
-      sumOne(supabase, "v_sales_month_totals", "month", prevMonth, "revenue"),
-      sumOne(supabase, "v_expense_month_totals", "month", prevMonth, "total"),
-    ]);
-    salesDelta = pct(salesVal, ps);
-    expDelta   = pct(expVal,  pe);
-    profDelta  = pct(profitVal, ps - pe);
+  // previous month values (for MoM % on all three KPIs)
+  const prevMonthKey = fmtMonth(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)));
+  const [prevSales, prevExp] = await Promise.all([
+    sumOne(supabase, "v_sales_month_totals", "month", prevMonthKey, "revenue"),
+    sumOne(supabase, "v_expense_month_totals", "month", prevMonthKey, "total"),
+  ]);
+  const prevProfit = prevSales - prevExp;
+  const salesMoM = pct(salesVal, prevSales);
+  const expMoM = pct(expVal, prevExp);
+  const profMoM = pct(profitVal, prevProfit);
+
+  // 3 most recent COMPLETED months (exclude current month)
+  const last3Months: string[] = [];
+  for (let i = 1; i <= 3; i++) {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    last3Months.push(fmtMonth(d));
   }
+  const [last3Sales, last3Exp] = await Promise.all([
+    Promise.all(last3Months.map((m) => sumOne(supabase, "v_sales_month_totals", "month", m, "revenue"))),
+    Promise.all(last3Months.map((m) => sumOne(supabase, "v_expense_month_totals", "month", m, "total"))),
+  ]);
+  const last3AvgSales = last3Sales.reduce((a, b) => a + b, 0) / Math.max(1, last3Sales.length);
+  const last3AvgExp = last3Exp.reduce((a, b) => a + b, 0) / Math.max(1, last3Exp.length);
+  const last3AvgProfit = last3AvgSales - last3AvgExp;
+
+  // expense ratio and profit margin for the current selected range
+  const expensePctOfSales = Math.round((expVal / Math.max(1, salesVal)) * 100);
+  const marginPct = Math.round((profitVal / Math.max(1, salesVal)) * 100);
 
   return (
     <main className="max-w-6xl mx-auto px-4 py-6">
@@ -356,27 +342,38 @@ export default async function DashboardPage(props: any) {
         </div>
       </div>
 
-      {/* headline */}
+      {/* headline with green sublines */}
       <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 tracking-wide flex items-center gap-1">
             SALES — {range.toUpperCase()} <span title="Sum of sales (∑ line totals; falls back to qty×unit price) in the selected range.">ⓘ</span>
           </div>
           <div className="text-2xl font-semibold mt-1">{usd(salesVal)}</div>
-          <div className={`text-xs mt-1 ${/* just keep the space for layout */ ""}`}></div>
+          <div className="text-xs text-emerald-400 mt-1">MoM: {salesMoM >= 0 ? `+${salesMoM}%` : `${salesMoM}%`}</div>
+          <div className="text-xs text-emerald-400">3-mo avg: {usd(last3AvgSales)}</div>
+          <div className="text-xs text-emerald-400">AOV: {usd(aov)}</div>
         </div>
+
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 tracking-wide flex items-center gap-1">
             EXPENSES — {range.toUpperCase()} <span title="Sum of expenses (∑ amount_usd) in the selected range.">ⓘ</span>
           </div>
           <div className="text-2xl font-semibold mt-1">{usd(expVal)}</div>
+          <div className="text-xs text-emerald-400 mt-1">MoM: {expMoM >= 0 ? `+${expMoM}%` : `${expMoM}%`}</div>
+          <div className="text-xs text-emerald-400">3-mo avg: {usd(last3AvgExp)}</div>
+          <div className="text-xs text-emerald-400">Exp % of sales: {expensePctOfSales}%</div>
         </div>
+
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 tracking-wide flex items-center gap-1">
             PROFIT / LOSS — {range.toUpperCase()} <span title="Profit = Sales − Expenses for the selected range.">ⓘ</span>
           </div>
           <div className={`text-2xl font-semibold mt-1 ${profitVal < 0 ? "text-rose-400" : ""}`}>{usd(profitVal)}</div>
+          <div className="text-xs text-emerald-400 mt-1">MoM: {profMoM >= 0 ? `+${profMoM}%` : `${profMoM}%`}</div>
+          <div className="text-xs text-emerald-400">3-mo avg: {usd(last3AvgProfit)}</div>
+          <div className="text-xs text-emerald-400">Margin: {marginPct}%</div>
         </div>
+
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 tracking-wide">SALES vs GOAL</div>
           <div className="text-2xl font-semibold mt-1">{usd(salesVal)}</div>
@@ -393,22 +390,16 @@ export default async function DashboardPage(props: any) {
 
       {/* KPI row with visible tooltips */}
       <section className="grid grid-cols-1 md:grid-cols-5 gap-4 mt-4">
-        <div className="border rounded-2xl p-4">
-          <div className="text-xs opacity-70 flex items-center gap-1">
-            ORDERS (∑) <span title="Number of distinct sales orders in the selected range.">ⓘ</span>
-          </div>
+        <div className="border rounded-2xl p-4" title="Number of distinct sales orders in the selected range.">
+          <div className="text-xs opacity-70">ORDERS (∑)</div>
           <div className="text-2xl font-semibold">{ordersVal}</div>
         </div>
-        <div className="border rounded-2xl p-4">
-          <div className="text-xs opacity-70 flex items-center gap-1">
-            AOV (∑) <span title="Average Order Value = Sales / Orders (selected range).">ⓘ</span>
-          </div>
+        <div className="border rounded-2xl p-4" title="Average Order Value = Sales / Orders (selected range).">
+          <div className="text-xs opacity-70">AOV (∑)</div>
           <div className="text-2xl font-semibold">{usd(aov)}</div>
         </div>
-        <div className="border rounded-2xl p-4">
-          <div className="text-xs opacity-70 flex items-center gap-1">
-            FOOD % <span title="Food % = Food expenses ÷ Sales (selected range).">ⓘ</span>
-          </div>
+        <div className="border rounded-2xl p-4" title="Food % = Food expenses ÷ Sales (selected range).">
+          <div className="text-xs opacity-70">FOOD %</div>
           <div className="text-2xl font-semibold">
             {(() => {
               const food = breakdown.find((x) => x.name?.toLowerCase() === "food")?.value ?? 0;
@@ -416,10 +407,8 @@ export default async function DashboardPage(props: any) {
             })()}
           </div>
         </div>
-        <div className="border rounded-2xl p-4">
-          <div className="text-xs opacity-70 flex items-center gap-1">
-            LABOR % <span title="Labor % = Labor expenses ÷ Sales (selected range).">ⓘ</span>
-          </div>
+        <div className="border rounded-2xl p-4" title="Labor % = Labor expenses ÷ Sales (selected range).">
+          <div className="text-xs opacity-70">LABOR %</div>
           <div className="text-2xl font-semibold">
             {(() => {
               const labor = breakdown.find((x) => x.name?.toLowerCase() === "labor")?.value ?? 0;
@@ -427,10 +416,8 @@ export default async function DashboardPage(props: any) {
             })()}
           </div>
         </div>
-        <div className="border rounded-2xl p-4">
-          <div className="text-xs opacity-70 flex items-center gap-1">
-            PRIME % <span title="Prime % = Food % + Labor % (selected range).">ⓘ</span>
-          </div>
+        <div className="border rounded-2xl p-4" title="Prime % = Food % + Labor % (selected range).">
+          <div className="text-xs opacity-70">PRIME %</div>
           <div className="text-2xl font-semibold">
             {(() => {
               const food = breakdown.find((x) => x.name?.toLowerCase() === "food")?.value ?? 0;
