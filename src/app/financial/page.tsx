@@ -32,11 +32,9 @@ type IncomeRow = {
 };
 
 /* =============================== PAGE =============================== */
-/** Accepts both Next 15 promise-style and plain-object style searchParams */
-export default async function FinancialPage(props: {
-  searchParams?: Promise<Record<string, string>> | Record<string, string>;
-}) {
-  // Normalize search params (works in both runtimes)
+/** Use `any` to satisfy Next's PageProps constraint; normalize inside */
+export default async function FinancialPage(props: any) {
+  // Normalize search params for both Next 15 (Promise) and older (object)
   const spRaw =
     (props?.searchParams && typeof (props.searchParams as any)?.then === "function"
       ? await (props.searchParams as Promise<Record<string, string>>)
@@ -124,7 +122,6 @@ export default async function FinancialPage(props: {
     const amt = Number((r as any).amount_usd || 0);
     if (!expByMonth.has(k)) expByMonth.set(k, { Food: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 });
     expByMonth.get(k)![c] += amt;
-    // Aggregate the same window (selected range) for “YTD” mix shown on the right
     ytdBucket[c] += amt;
   }
 
