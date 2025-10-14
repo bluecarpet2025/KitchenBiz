@@ -1,3 +1,4 @@
+// src/app/financial/page.tsx
 import "server-only";
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
@@ -13,13 +14,11 @@ const ymd = (d: Date) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${p
 const ym = (d: Date) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}`;
 
 /* --------------------------------- page --------------------------------- */
-export default async function FinancialPage({
-  searchParams,
-}: {
-  searchParams?: Record<string, string | string[]>;
-}) {
-  // 👇 NOT a Promise — use directly
-  const sp = searchParams ?? {};
+// NOTE: `searchParams` may be a Promise in your project types.
+// Use the flexible pattern so both Promise and plain object work.
+export default async function FinancialPage(props: any) {
+  const raw = (await props?.searchParams) ?? props?.searchParams ?? {};
+  const sp: Record<string, string | string[]> = raw;
 
   const supabase = await createServerClient();
   const { tenantId } = await effectiveTenantId(supabase);
@@ -60,7 +59,7 @@ export default async function FinancialPage({
   const mProfit = mSales - mExp;
   const yProfit = ySales - yExp;
 
-  // YTD expense mix (from view)
+  // YTD expense mix (view)
   const { data: expenseMixRows } = await supabase
     .from("v_expense_category_totals_ytd")
     .select("category, total, tenant_id");
@@ -154,7 +153,7 @@ export default async function FinancialPage({
           </a>
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
           <Link href="/sales" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">Sales details</Link>
           <Link href="/expenses" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">Expenses details</Link>
           <a className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm" href={`/api/accounting/export?label=${encodeURIComponent(`${start}_${end}`)}`}>
@@ -194,7 +193,7 @@ export default async function FinancialPage({
         </div>
       </section>
 
-      {/* charts (tabular fallback server-side) */}
+      {/* tabular “chart” fallbacks */}
       <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
         <div className="border rounded p-4">
           <div className="text-sm opacity-80 mb-2">Trailing months — Sales vs Expenses</div>
