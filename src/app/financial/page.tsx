@@ -1,7 +1,7 @@
 import "server-only";
+import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { effectiveTenantId } from "@/lib/effective-tenant";
-import Link from "next/link";
 
 /* ------------------------------ formatting ------------------------------ */
 const fmtUSD = (n: number) =>
@@ -16,13 +16,15 @@ const ym = (d: Date) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}`;
 export default async function FinancialPage({
   searchParams,
 }: {
-  searchParams?: Promise<Record<string, string>> | Record<string, string>;
+  searchParams?: Record<string, string | string[]>;
 }) {
-  const sp = (await searchParams) ?? {};
-  const supabase = await createServerClient();
-  const { tenantId } = await effectiveTenantId(supabase); // <<<<<< DEMO-AWARE
+  // 👇 NOT a Promise — use directly
+  const sp = searchParams ?? {};
 
-  // default: current year
+  const supabase = await createServerClient();
+  const { tenantId } = await effectiveTenantId(supabase);
+
+  // default to current year
   const now = new Date();
   const startDefault = `${now.getUTCFullYear()}-01-01`;
   const endDefault = `${now.getUTCFullYear()}-12-31`;
@@ -30,11 +32,15 @@ export default async function FinancialPage({
   const start = (typeof sp.start === "string" && sp.start) || startDefault;
   const end = (typeof sp.end === "string" && sp.end) || endDefault;
 
-  // headline: this month + ytd
   const thisMonth = ym(now);
   const thisYear = String(now.getUTCFullYear());
 
-  async function sumOne(view: string, periodCol: "month" | "year", key: string, col: "revenue" | "total") {
+  async function sumOne(
+    view: string,
+    periodCol: "month" | "year",
+    key: string,
+    col: "revenue" | "total"
+  ) {
     if (!tenantId) return 0;
     const { data } = await supabase
       .from(view)
@@ -54,24 +60,23 @@ export default async function FinancialPage({
   const mProfit = mSales - mExp;
   const yProfit = ySales - yExp;
 
-  // YTD expense mix by category view
+  // YTD expense mix (from view)
   const { data: expenseMixRows } = await supabase
     .from("v_expense_category_totals_ytd")
     .select("category, total, tenant_id");
-
   const expenseMix =
     (expenseMixRows ?? [])
       .filter((r: any) => r.tenant_id === tenantId)
       .map((r: any) => ({ name: r.category as string, value: Number(r.total || 0) })) ?? [];
 
-  // trailing series (12 months) – use view aggregates
-  const trailingMonthsKeys: string[] = [];
+  // trailing 12 months
+  const trailingKeys: string[] = [];
   for (let i = 11; i >= 0; i--) {
     const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
-    trailingMonthsKeys.push(ym(d));
+    trailingKeys.push(ym(d));
   }
   const trailing = await Promise.all(
-    trailingMonthsKeys.map(async (key) => {
+    trailingKeys.map(async (key) => {
       const [{ data: s }, { data: e }] = await Promise.all([
         supabase.from("v_sales_month_totals").select("revenue").eq("tenant_id", tenantId).eq("month", key).maybeSingle(),
         supabase.from("v_expense_month_totals").select("total").eq("tenant_id", tenantId).eq("month", key).maybeSingle(),
@@ -82,7 +87,7 @@ export default async function FinancialPage({
     })
   );
 
-  // Income statement table: month rows within filter [start..end]
+  // income statement rows inside filter window
   const startD = new Date(start + "T00:00:00Z");
   const endD = new Date(end + "T00:00:00Z");
   const months: string[] = [];
@@ -101,10 +106,8 @@ export default async function FinancialPage({
         supabase.from("v_expense_month_totals").select("total").eq("tenant_id", tenantId).eq("month", key).maybeSingle(),
       ]);
 
-      // Pull category splits for the month from base table (filtered by month window)
       const monthStart = new Date(key + "-01T00:00:00Z");
       const monthEnd = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 1));
-
       const { data: expRows } = await supabase
         .from("expenses")
         .select("category, amount_usd, occurred_at, tenant_id")
@@ -191,12 +194,10 @@ export default async function FinancialPage({
         </div>
       </section>
 
-      {/* charts row */}
+      {/* charts (tabular fallback server-side) */}
       <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
         <div className="border rounded p-4">
           <div className="text-sm opacity-80 mb-2">Trailing months — Sales vs Expenses</div>
-          {/* reuse recharts from dashboard if you prefer; here we keep layout-only to stay server-safe */}
-          <div className="text-xs opacity-70">Use dashboard chart components if needed.</div>
           <div className="mt-2 overflow-x-auto">
             <table className="text-sm w-full">
               <thead className="opacity-80">
