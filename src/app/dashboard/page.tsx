@@ -2,8 +2,8 @@ import "server-only";
 import { cookies } from "next/headers";
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
-import { SalesVsExpenses, ExpenseDonut, TopItems, WeekdayBars } from "./ClientCharts";
 import { effectiveTenantId } from "@/lib/effective-tenant";
+import { SalesVsExpenses, ExpenseDonut, TopItems, WeekdayBars } from "./ClientCharts";
 
 /* ---------------- server action: set sales goal in a cookie ---------------- */
 async function setGoal(formData: FormData) {
@@ -21,7 +21,6 @@ const fmtMonth = (d: Date) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)
 const fmtYear = (d: Date) => `${d.getUTCFullYear()}`;
 const fmtUSD = (n: number) =>
   new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(Number(n) || 0);
-
 function addDays(d: Date, n: number) {
   const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
   x.setUTCDate(x.getUTCDate() + n);
@@ -36,6 +35,7 @@ function isoWeekString(d: Date) {
 }
 
 /* --------------------------- DB helper functions --------------------------- */
+/** Sum a single metric from an aggregate view for one period key */
 async function sumOne(
   supabase: any,
   view: string,
@@ -45,12 +45,7 @@ async function sumOne(
   col: "revenue" | "total" | "orders"
 ): Promise<number> {
   if (!tenantId) return 0;
-  const { data } = await supabase
-    .from(view)
-    .select(col)
-    .eq("tenant_id", tenantId)
-    .eq(periodCol, key)
-    .maybeSingle();
+  const { data } = await supabase.from(view).select(col).eq("tenant_id", tenantId).eq(periodCol, key).maybeSingle();
   return Number((data as any)?.[col] ?? 0);
 }
 
@@ -64,13 +59,12 @@ async function expenseBreakdown(
   const { data } = await supabase
     .from("expenses")
     .select("category, amount_usd, occurred_at, created_at, tenant_id")
-  ;
+    .eq("tenant_id", tenantId);
   if (!data) return [];
   const start = new Date(startIso + "T00:00:00Z").getTime();
   const end = new Date(endIso + "T00:00:00Z").getTime();
   const bucket = new Map<string, number>();
   for (const row of data as any[]) {
-    if (row.tenant_id !== tenantId) continue; // ensure right tenant
     const ts = new Date(row.occurred_at ?? row.created_at).getTime();
     if (ts >= start && ts < end) {
       const k = String(row.category ?? "Misc");
@@ -90,7 +84,7 @@ async function weekdayRevenueThisMonth(
   const endExcl = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
   const { data } = await supabase
     .from("v_sales_day_totals")
-    .select("day, revenue")
+    .select("day, revenue, tenant_id")
     .eq("tenant_id", tenantId)
     .gte("day", fmtDay(start))
     .lt("day", fmtDay(endExcl))
@@ -113,29 +107,21 @@ async function topItemsForRange(
   if (!tenantId) return [];
   const start = new Date(startIso + "T00:00:00Z").getTime();
   const end = new Date(endIso + "T00:00:00Z").getTime();
-
-  // Limit to this tenant’s orders in the range
   const { data: orders } = await supabase
     .from("sales_orders")
     .select("id, occurred_at, created_at, tenant_id")
     .eq("tenant_id", tenantId);
-
   const keep = new Set(
     (orders ?? [])
       .filter((o: any) => {
         const t = new Date(o.occurred_at ?? o.created_at).getTime();
-        return t >= start && t < end && o.tenant_id === tenantId;
+        return t >= start && t < end;
       })
       .map((o: any) => o.id as string)
   );
-
-  if (keep.size === 0) return [];
-
-  // Pull only lines that belong to those orders
   const { data: lines } = await supabase
     .from("sales_order_lines")
     .select("product_name, qty, unit_price, order_id");
-
   const bucket = new Map<string, number>();
   for (const row of (lines ?? []) as any[]) {
     if (!keep.has(row.order_id)) continue;
@@ -151,12 +137,14 @@ async function topItemsForRange(
 
 /* ================================== PAGE ================================== */
 export default async function DashboardPage(props: any) {
+  // Accept both server-provided and direct object searchParams
   const sp = (await props?.searchParams) ?? props?.searchParams ?? {};
   const range =
     (typeof sp.range === "string" ? sp.range : Array.isArray(sp.range) ? sp.range[0] : null) ?? "month";
 
   const supabase = await createServerClient();
-  const { tenantId } = await effectiveTenantId(supabase); // <<<<<< DEMO-AWARE
+  // IMPORTANT: new helper takes NO arguments
+  const { tenantId } = await effectiveTenantId(); // demo-aware tenant id
 
   const now = new Date();
   const today = fmtDay(now);
@@ -279,7 +267,7 @@ export default async function DashboardPage(props: any) {
     }
   }
 
-  // simple MoM deltas (always by month)
+  // simple MoM deltas
   const prevMonth = fmtMonth(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)));
   const [prevS, prevE] = await Promise.all([
     sumOne(supabase, "v_sales_month_totals", "month", prevMonth, tenantId, "revenue"),
@@ -300,6 +288,10 @@ export default async function DashboardPage(props: any) {
           <Link href="/dashboard?range=week" className={`rounded border px-3 py-1 ${range === "week" ? "bg-neutral-900" : ""}`}>Week</Link>
           <Link href="/dashboard?range=month" className={`rounded border px-3 py-1 ${range === "month" ? "bg-neutral-900" : ""}`}>Month</Link>
           <Link href="/dashboard?range=ytd" className={`rounded border px-3 py-1 ${range === "ytd" ? "bg-neutral-900" : ""}`}>YTD</Link>
+        </div>
+        <div className="flex gap-2">
+          <Link href="/sales" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">Sales details</Link>
+          <Link href="/expenses" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">Expenses details</Link>
         </div>
         <div className="text-sm opacity-80">Roman</div>
       </div>
@@ -335,7 +327,7 @@ export default async function DashboardPage(props: any) {
         </div>
       </section>
 
-      {/* KPI row */}
+      {/* KPI row (titles serve as tooltips) */}
       <section className="grid grid-cols-1 md:grid-cols-5 gap-4 mt-4">
         <div className="border rounded p-4" title="Orders (this range). Number of distinct sales orders recorded.">
           <div className="text-sm opacity-80">ORDERS (∑)</div>
