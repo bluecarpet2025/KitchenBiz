@@ -1,6 +1,8 @@
+// src/app/financial/page.tsx
 import "server-only";
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
+import { effectiveTenantId } from "@/lib/effective-tenant";
 
 /* ----------------------------- helpers ----------------------------- */
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -42,22 +44,22 @@ export default async function FinancialPage(props: any) {
   const sp = (spRaw ?? {}) as Record<string, string>;
 
   const supabase = await createServerClient();
+  const { tenantId } = await effectiveTenantId(); // << DEMO-AWARE TENANT
 
-  // tenant
-  const { data: u } = await supabase.auth.getUser();
-  const uid = u?.user?.id;
-  const { data: prof } = uid
-    ? await supabase.from("profiles").select("tenant_id").eq("id", uid).maybeSingle()
-    : { data: null as any };
-  const tenantId = (prof?.tenant_id as string | undefined) ?? "";
-
-  // resolve filter
-  const now = new Date();
+  // If no tenant at all (not signed in), render empty shell
+  if (!tenantId) {
+    return (
+      <main className="max-w-6xl mx-auto px-4 py-6">
+        <div className="text-xl font-semibold mb-4">Financials</div>
+        <div className="text-sm opacity-70">Sign in to view financials.</div>
+      </main>
+    );
+  }
 
   // Defaults: current-year YTD
+  const now = new Date();
   const defaultStart = `${now.getUTCFullYear()}-01-01`;
   const defaultEnd = `${now.getUTCFullYear() + 1}-01-01`;
-
   const startIso = sp.start && /^\d{4}-\d{2}-\d{2}$/.test(sp.start) ? sp.start : defaultStart;
   const endIso = sp.end && /^\d{4}-\d{2}-\d{2}$/.test(sp.end) ? sp.end : defaultEnd;
 
@@ -73,14 +75,15 @@ export default async function FinancialPage(props: any) {
 
   /* ---------------------------- fetch sales ---------------------------- */
   let salesRows: SalesMonthRow[] = [];
-  if (tenantId && months.length) {
+  if (months.length) {
     const { data } = await supabase
       .from("v_sales_month_totals")
       .select("month, revenue, orders")
-      .eq("tenant_id", tenantId)
+      .eq("tenant_id", tenantId)               // << tenant filter
       .gte("month", startMonth)
       .lt("month", endMonthExcl)
       .order("month", { ascending: true });
+
     salesRows =
       (data ?? []).map((r: any) => ({
         month: String(r.month),
@@ -95,7 +98,7 @@ export default async function FinancialPage(props: any) {
   const { data: expRows } = await supabase
     .from("expenses")
     .select("occurred_at, amount_usd, category")
-    .eq("tenant_id", tenantId)
+    .eq("tenant_id", tenantId)                // << tenant filter
     .gte("occurred_at", `${startIso}T00:00:00Z`)
     .lt("occurred_at", `${endIso}T00:00:00Z`);
 
@@ -178,26 +181,15 @@ export default async function FinancialPage(props: any) {
       {/* Filter row */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <div className="text-xl font-semibold mr-4">Financials</div>
-
         <label className="text-xs opacity-70">Start (UTC)</label>
         <form action="/financial" className="contents">
-          <input
-            type="date"
-            name="start"
-            defaultValue={startIso}
-            className="border rounded px-2 h-10 bg-transparent"
-          />
+          <input type="date" name="start" defaultValue={startIso} className="border rounded px-2 h-10 bg-transparent" />
           <label className="text-xs opacity-70 ml-2">End (UTC)</label>
           <input type="date" name="end" defaultValue={endIso} className="border rounded px-2 h-10 bg-transparent" />
           <button className="border rounded px-3 h-10 hover:bg-neutral-900 ml-2">Apply</button>
         </form>
-
         <div className="flex-1" />
-
-        <a
-          href={`/api/accounting/export?${q}`}
-          className="border rounded px-3 h-10 flex items-center hover:bg-neutral-900"
-        >
+        <a href={`/api/accounting/export?${q}`} className="border rounded px-3 h-10 flex items-center hover:bg-neutral-900">
           Download Tax Pack
         </a>
         <Link href="/sales" className="border rounded px-3 h-10 flex items-center hover:bg-neutral-900">
@@ -213,11 +205,8 @@ export default async function FinancialPage(props: any) {
         <div className="border rounded p-4">
           <div className="opacity-70 text-xs">THIS MONTH — SALES</div>
           <div className="text-2xl font-semibold">{fmtUSD(cardMonthSales)}</div>
-          <div className="text-xs mt-1 opacity-80">
-            Orders: {cardMonthOrders} · AOV: {fmtUSD(cardMonthAOV)}
-          </div>
+          <div className="text-xs mt-1 opacity-80">Orders: {cardMonthOrders} · AOV: {fmtUSD(cardMonthAOV)}</div>
         </div>
-
         <div className="border rounded p-4">
           <div className="opacity-70 text-xs">THIS MONTH — EXPENSES</div>
           <div className="text-2xl font-semibold">{fmtUSD(cardMonthExp)}</div>
@@ -225,24 +214,16 @@ export default async function FinancialPage(props: any) {
             Food + Labor share:{" "}
             {(() => {
               const exp = expByMonth.get(cardMonthKey) ?? {
-                Food: 0,
-                Labor: 0,
-                Rent: 0,
-                Utilities: 0,
-                Marketing: 0,
-                Misc: 0,
+                Food: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0,
               };
               const pct = (exp.Food + exp.Labor) / Math.max(1, cardMonthSales);
               return `${Math.round(pct * 100)}%`;
             })()}
           </div>
         </div>
-
         <div className="border rounded p-4">
           <div className="opacity-70 text-xs">THIS MONTH — PROFIT / LOSS</div>
-          <div className={`text-2xl font-semibold ${cardMonthProfit < 0 ? "text-rose-400" : ""}`}>
-            {fmtUSD(cardMonthProfit)}
-          </div>
+          <div className={`text-2xl font-semibold ${cardMonthProfit < 0 ? "text-rose-400" : ""}`}>{fmtUSD(cardMonthProfit)}</div>
           <div className="text-xs mt-1 opacity-80">
             Margin: {Math.round((cardMonthSales > 0 ? (cardMonthProfit / cardMonthSales) * 100 : 0))}%
           </div>
@@ -251,11 +232,8 @@ export default async function FinancialPage(props: any) {
         <div className="border rounded p-4">
           <div className="opacity-70 text-xs">YEAR TO DATE — SALES</div>
           <div className="text-2xl font-semibold">{fmtUSD(ytdSales)}</div>
-          <div className="text-xs mt-1 opacity-80">
-            Orders: {ytdOrders} · AOV: {fmtUSD(ytdAOV)}
-          </div>
+          <div className="text-xs mt-1 opacity-80">Orders: {ytdOrders} · AOV: {fmtUSD(ytdAOV)}</div>
         </div>
-
         <div className="border rounded p-4">
           <div className="opacity-70 text-xs">YEAR TO DATE — EXPENSES</div>
           <div className="text-2xl font-semibold">{fmtUSD(ytdExpenses)}</div>
@@ -264,7 +242,6 @@ export default async function FinancialPage(props: any) {
             {Math.round((ytdSales > 0 ? ((ytdBucket.Food + ytdBucket.Labor) / ytdSales) * 100 : 0))}%
           </div>
         </div>
-
         <div className="border rounded p-4">
           <div className="opacity-70 text-xs">YEAR TO DATE — PROFIT / LOSS</div>
           <div className={`text-2xl font-semibold ${ytdProfit < 0 ? "text-rose-400" : ""}`}>{fmtUSD(ytdProfit)}</div>
@@ -278,24 +255,14 @@ export default async function FinancialPage(props: any) {
           <div className="text-sm opacity-80 mb-2">Trailing months — Sales vs Expenses</div>
           <div className="h-48">
             {(() => {
-              const width = 600;
-              const height = 180;
-              const left = 36;
-              const right = 6;
-              const top = 10;
-              const bottom = 22;
-              const W = width - left - right;
-              const H = height - top - bottom;
+              const width = 600, height = 180, left = 36, right = 6, top = 10, bottom = 22;
+              const W = width - left - right, H = height - top - bottom;
               const max = Math.max(1, ...lineSeries.flatMap((r) => [r.sales, r.expenses]));
               const dx = lineSeries.length > 1 ? W / (lineSeries.length - 1) : 0;
               const scaleY = (v: number) => top + H - (v / max) * H;
               const xs = lineSeries.map((_, i) => left + i * dx);
-
               const path = (key: "sales" | "expenses") =>
-                lineSeries
-                  .map((r, i) => `${i ? "L" : "M"} ${xs[i].toFixed(1)} ${scaleY(r[key]).toFixed(1)}`)
-                  .join(" ");
-
+                lineSeries.map((r, i) => `${i ? "L" : "M"} ${xs[i].toFixed(1)} ${scaleY(r[key]).toFixed(1)}`).join(" ");
               return (
                 <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full">
                   <line x1={left} y1={top} x2={left} y2={top + H} stroke="#2a2a2a" />
@@ -311,24 +278,12 @@ export default async function FinancialPage(props: any) {
         <div className="border rounded p-4">
           <div className="text-sm opacity-80 mb-2">YTD expense mix</div>
           <div className="grid grid-cols-2 gap-2 text-sm">
-            <div className="flex justify-between border rounded px-2 py-1">
-              <span>Marketing</span> <span>{fmtUSD(ytdBucket.Marketing)}</span>
-            </div>
-            <div className="flex justify-between border rounded px-2 py-1">
-              <span>Rent</span> <span>{fmtUSD(ytdBucket.Rent)}</span>
-            </div>
-            <div className="flex justify-between border rounded px-2 py-1">
-              <span>Food</span> <span>{fmtUSD(ytdBucket.Food)}</span>
-            </div>
-            <div className="flex justify-between border rounded px-2 py-1">
-              <span>Labor</span> <span>{fmtUSD(ytdBucket.Labor)}</span>
-            </div>
-            <div className="flex justify-between border rounded px-2 py-1">
-              <span>Misc</span> <span>{fmtUSD(ytdBucket.Misc)}</span>
-            </div>
-            <div className="flex justify-between border rounded px-2 py-1">
-              <span>Utilities</span> <span>{fmtUSD(ytdBucket.Utilities)}</span>
-            </div>
+            <div className="flex justify-between border rounded px-2 py-1"><span>Marketing</span><span>{fmtUSD(ytdBucket.Marketing)}</span></div>
+            <div className="flex justify-between border rounded px-2 py-1"><span>Rent</span><span>{fmtUSD(ytdBucket.Rent)}</span></div>
+            <div className="flex justify-between border rounded px-2 py-1"><span>Food</span><span>{fmtUSD(ytdBucket.Food)}</span></div>
+            <div className="flex justify-between border rounded px-2 py-1"><span>Labor</span><span>{fmtUSD(ytdBucket.Labor)}</span></div>
+            <div className="flex justify-between border rounded px-2 py-1"><span>Misc</span><span>{fmtUSD(ytdBucket.Misc)}</span></div>
+            <div className="flex justify-between border rounded px-2 py-1"><span>Utilities</span><span>{fmtUSD(ytdBucket.Utilities)}</span></div>
           </div>
         </div>
       </section>

@@ -1,14 +1,16 @@
+// src/app/dashboard/page.tsx
 import "server-only";
 import Link from "next/link";
 import { cookies } from "next/headers";
 import { createServerClient } from "@/lib/supabase/server";
+import { effectiveTenantId } from "@/lib/effective-tenant";
 import { SalesVsExpenses, ExpenseDonut, TopItems, WeekdayBars } from "./ClientCharts";
 
 /* ------------------------------ small utils ------------------------------ */
 const pad2 = (n: number) => String(n).padStart(2, "0");
-const fmtDay = (d: Date) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+const fmtDay   = (d: Date) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
 const fmtMonth = (d: Date) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}`;
-const fmtYear = (d: Date) => String(d.getUTCFullYear());
+const fmtYear  = (d: Date) => String(d.getUTCFullYear());
 const usd = (n: number) =>
   new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(Number(n) || 0);
 
@@ -26,23 +28,16 @@ function isoWeekString(d: Date) {
 }
 
 /* ------------------------------ helpers (DB) ------------------------------ */
-async function getProfileAndTenant(supabase: any) {
+async function getProfileGoal(supabase: any): Promise<number> {
   const { data: u } = await supabase.auth.getUser();
   const uid = u?.user?.id;
-  if (!uid) return { uid: null, tenantId: null, goal: 0, use_demo: false };
-
+  if (!uid) return 0;
   const { data: prof } = await supabase
     .from("profiles")
-    .select("tenant_id, use_demo, goal_month_usd")
+    .select("goal_month_usd")
     .eq("id", uid)
     .maybeSingle();
-
-  return {
-    uid,
-    tenantId: prof?.tenant_id ?? null,
-    goal: Number(prof?.goal_month_usd ?? 0),
-    use_demo: !!prof?.use_demo,
-  };
+  return Number(prof?.goal_month_usd ?? 0);
 }
 
 async function sumOne(
@@ -50,27 +45,31 @@ async function sumOne(
   view: string,
   periodCol: "day" | "week" | "month" | "year",
   key: string,
-  col: "revenue" | "total" | "orders"
+  col: "revenue" | "total" | "orders",
+  tenantId: string
 ): Promise<number> {
-  const { data } = await supabase.from(view).select(col).eq(periodCol, key).maybeSingle();
+  const { data } = await supabase
+    .from(view)
+    .select(col)
+    .eq("tenant_id", tenantId)      // << tenant filter
+    .eq(periodCol, key)
+    .maybeSingle();
   return Number((data as any)?.[col] ?? 0);
 }
 
 /* Expense breakdown within [start,end) */
 async function expenseBreakdownSQL(
   supabase: any,
-  tenantId: string | null,
+  tenantId: string,
   startIso: string,
   endIso: string
 ): Promise<Array<{ name: string; value: number }>> {
-  if (!tenantId) return [];
   const { data } = await supabase
     .from("expenses")
     .select("category, amount_usd")
     .eq("tenant_id", tenantId)
     .gte("occurred_at", `${startIso}T00:00:00Z`)
     .lt("occurred_at", `${endIso}T00:00:00Z`);
-
   const bucket = new Map<string, number>();
   for (const r of (data ?? []) as any[]) {
     const k = (r.category?.trim() || "Misc") as string;
@@ -79,54 +78,46 @@ async function expenseBreakdownSQL(
   return [...bucket.entries()].map(([name, value]) => ({ name, value }));
 }
 
-/* Weekday totals for current calendar month (UTC) via view */
-async function weekdayRevenueThisMonth(supabase: any): Promise<{ labels: string[]; values: number[] }> {
+/* Weekday totals for current calendar month (UTC) via view (tenant-scoped) */
+async function weekdayRevenueThisMonth(supabase: any, tenantId: string): Promise<{ labels: string[]; values: number[] }> {
   const now = new Date();
-  theStart: {
-    const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-    const endExcl = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
-    const { data } = await supabase
-      .from("v_sales_day_totals")
-      .select("day, revenue")
-      .gte("day", fmtDay(start))
-      .lt("day", fmtDay(endExcl))
-      .order("day", { ascending: true });
-    const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    const vals = [0, 0, 0, 0, 0, 0, 0];
-    for (const r of (data ?? []) as any[]) {
-      const d = new Date(`${r.day}T00:00:00Z`);
-      vals[d.getUTCDay()] += Number(r.revenue || 0);
-    }
-    return { labels, values: vals };
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const endExcl = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  const { data } = await supabase
+    .from("v_sales_day_totals")
+    .select("day, revenue")
+    .eq("tenant_id", tenantId)       // << tenant filter
+    .gte("day", fmtDay(start))
+    .lt("day", fmtDay(endExcl))
+    .order("day", { ascending: true });
+  const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const vals = [0, 0, 0, 0, 0, 0, 0];
+  for (const r of (data ?? []) as any[]) {
+    const d = new Date(`${r.day}T00:00:00Z`);
+    vals[d.getUTCDay()] += Number(r.revenue || 0);
   }
+  return { labels, values: vals };
 }
 
-/* ---------- Top items with batched .in() to avoid URL/param limits ---------- */
+/* ---------- Top items with batched .in() ---------- */
 async function topItemsForRange(
   supabase: any,
-  tenantId: string | null,
+  tenantId: string,
   startIso: string,
   endIso: string
 ): Promise<Array<{ name: string; value: number }>> {
-  if (!tenantId) return [];
-
   const start = `${startIso}T00:00:00Z`;
   const end = `${endIso}T00:00:00Z`;
   const { data: orders, error: ordErr } = await supabase
     .from("sales_orders")
     .select("id, occurred_at, created_at")
     .eq("tenant_id", tenantId)
-    .or(
-      [
-        `and(occurred_at.gte.${start},occurred_at.lt.${end})`,
-        `and(occurred_at.is.null,created_at.gte.${start},created_at.lt.${end})`,
-      ].join(",")
-    );
-
+    .or([
+      `and(occurred_at.gte.${start},occurred_at.lt.${end})`,
+      `and(occurred_at.is.null,created_at.gte.${start},created_at.lt.${end})`,
+    ].join(","));
   if (ordErr || !orders?.length) return [];
-
   const ids = (orders as any[]).map((o) => String(o.id));
-
   const CHUNK = 200;
   const bucket = new Map<string, number>();
   for (let i = 0; i < ids.length; i += CHUNK) {
@@ -135,14 +126,12 @@ async function topItemsForRange(
       .from("sales_order_lines")
       .select("product_name, qty, unit_price, total, order_id")
       .in("order_id", slice);
-
     for (const row of (lines ?? []) as any[]) {
       const name = String(row.product_name ?? "Unknown").trim();
       const lineTotal = Number(row.total ?? 0) || (Number(row.qty || 0) * Number(row.unit_price || 0)) || 0;
       bucket.set(name, (bucket.get(name) || 0) + lineTotal);
     }
   }
-
   return [...bucket.entries()]
     .map(([name, value]) => ({ name, value }))
     .sort((a, b) => b.value - a.value)
@@ -165,7 +154,16 @@ async function setGoal(formData: FormData) {
 /* ================================== PAGE ================================== */
 export default async function DashboardPage(props: any) {
   const supabase = await createServerClient();
-  const { tenantId, goal: profileGoal } = await getProfileAndTenant(supabase);
+  const { tenantId } = await effectiveTenantId(); // << DEMO-AWARE TENANT
+
+  if (!tenantId) {
+    return (
+      <main className="max-w-6xl mx-auto px-4 py-6">
+        <div className="text-xl font-semibold mb-4">Dashboard</div>
+        <div className="text-sm opacity-70">Sign in to view dashboard.</div>
+      </main>
+    );
+  }
 
   const sp = (await props?.searchParams) ?? props?.searchParams ?? {};
   const range = (typeof sp.range === "string" ? sp.range : Array.isArray(sp.range) ? sp.range[0] : null) ?? "month";
@@ -194,31 +192,31 @@ export default async function DashboardPage(props: any) {
     endIsoExcl = fmtDay(e);
   }
 
-  /* headline aggregates */
+  /* headline aggregates (tenant-scoped) */
   const [salesVal, expVal, ordersVal] = await (async () => {
     if (range === "today") {
       return Promise.all([
-        sumOne(supabase, "v_sales_day_totals", "day", today, "revenue"),
-        sumOne(supabase, "v_expense_day_totals", "day", today, "total"),
-        sumOne(supabase, "v_sales_day_totals", "day", today, "orders"),
+        sumOne(supabase, "v_sales_day_totals", "day", today, "revenue", tenantId),
+        sumOne(supabase, "v_expense_day_totals", "day", today, "total", tenantId),
+        sumOne(supabase, "v_sales_day_totals", "day", today, "orders", tenantId),
       ]);
     } else if (range === "week") {
       return Promise.all([
-        sumOne(supabase, "v_sales_week_totals", "week", thisWeek, "revenue"),
-        sumOne(supabase, "v_expense_week_totals", "week", thisWeek, "total"),
-        sumOne(supabase, "v_sales_week_totals", "week", thisWeek, "orders"),
+        sumOne(supabase, "v_sales_week_totals", "week", thisWeek, "revenue", tenantId),
+        sumOne(supabase, "v_expense_week_totals", "week", thisWeek, "total", tenantId),
+        sumOne(supabase, "v_sales_week_totals", "week", thisWeek, "orders", tenantId),
       ]);
     } else if (range === "ytd") {
       return Promise.all([
-        sumOne(supabase, "v_sales_year_totals", "year", thisYear, "revenue"),
-        sumOne(supabase, "v_expense_year_totals", "year", thisYear, "total"),
-        sumOne(supabase, "v_sales_year_totals", "year", thisYear, "orders"),
+        sumOne(supabase, "v_sales_year_totals", "year", thisYear, "revenue", tenantId),
+        sumOne(supabase, "v_expense_year_totals", "year", thisYear, "total", tenantId),
+        sumOne(supabase, "v_sales_year_totals", "year", thisYear, "orders", tenantId),
       ]);
     } else {
       return Promise.all([
-        sumOne(supabase, "v_sales_month_totals", "month", thisMonth, "revenue"),
-        sumOne(supabase, "v_expense_month_totals", "month", thisMonth, "total"),
-        sumOne(supabase, "v_sales_month_totals", "month", thisMonth, "orders"),
+        sumOne(supabase, "v_sales_month_totals", "month", thisMonth, "revenue", tenantId),
+        sumOne(supabase, "v_expense_month_totals", "month", thisMonth, "total", tenantId),
+        sumOne(supabase, "v_sales_month_totals", "month", thisMonth, "orders", tenantId),
       ]);
     }
   })();
@@ -226,13 +224,14 @@ export default async function DashboardPage(props: any) {
   const profitVal = salesVal - expVal;
   const aov = ordersVal > 0 ? salesVal / ordersVal : 0;
 
-  /* breakdowns & charts */
+  /* breakdowns & charts (tenant-scoped) */
   const breakdown = await expenseBreakdownSQL(supabase, tenantId, startIso, endIsoExcl);
-  const weekday = await weekdayRevenueThisMonth(supabase);
+  const weekday = await weekdayRevenueThisMonth(supabase, tenantId);
   const topItems = await topItemsForRange(supabase, tenantId, startIso, endIsoExcl);
 
   /* goal (profile first, cookie override second) */
   const goalCookie = (await cookies()).get("_kb_goal")?.value;
+  const profileGoal = await getProfileGoal(supabase);
   const goal = Math.max(0, Math.round(Number(goalCookie ?? profileGoal ?? 0)));
 
   /* last 4 months table */
@@ -244,22 +243,22 @@ export default async function DashboardPage(props: any) {
   const last4 = await Promise.all(
     months.map(async (m) => {
       const [s, e, o] = await Promise.all([
-        sumOne(supabase, "v_sales_month_totals", "month", m, "revenue"),
-        sumOne(supabase, "v_expense_month_totals", "month", m, "total"),
-        sumOne(supabase, "v_sales_month_totals", "month", m, "orders"),
+        sumOne(supabase, "v_sales_month_totals", "month", m, "revenue", tenantId),
+        sumOne(supabase, "v_expense_month_totals", "month", m, "total", tenantId),
+        sumOne(supabase, "v_sales_month_totals", "month", m, "orders", tenantId),
       ]);
       return { key: m, aov: o > 0 ? s / o : 0, orders: o, sales: s, expenses: e, profit: s - e };
     })
   );
 
-  /* line series for big chart */
+  /* line series for big chart (tenant-scoped) */
   const series: Array<{ key: string; sales: number; expenses: number; profit: number }> = [];
   if (range === "today") {
     for (let i = 11; i >= 0; i--) {
       const d = fmtDay(addDays(now, -i));
       const [s, e] = await Promise.all([
-        sumOne(supabase, "v_sales_day_totals", "day", d, "revenue"),
-        sumOne(supabase, "v_expense_day_totals", "day", d, "total"),
+        sumOne(supabase, "v_sales_day_totals", "day", d, "revenue", tenantId),
+        sumOne(supabase, "v_expense_day_totals", "day", d, "total", tenantId),
       ]);
       series.push({ key: d, sales: s, expenses: e, profit: s - e });
     }
@@ -267,8 +266,8 @@ export default async function DashboardPage(props: any) {
     for (let i = 11; i >= 0; i--) {
       const wk = isoWeekString(addDays(now, -7 * i));
       const [s, e] = await Promise.all([
-        sumOne(supabase, "v_sales_week_totals", "week", wk, "revenue"),
-        sumOne(supabase, "v_expense_week_totals", "week", wk, "total"),
+        sumOne(supabase, "v_sales_week_totals", "week", wk, "revenue", tenantId),
+        sumOne(supabase, "v_expense_week_totals", "week", wk, "total", tenantId),
       ]);
       series.push({ key: wk, sales: s, expenses: e, profit: s - e });
     }
@@ -276,8 +275,8 @@ export default async function DashboardPage(props: any) {
     for (let m = 0; m <= now.getUTCMonth(); m++) {
       const mk = fmtMonth(new Date(Date.UTC(now.getUTCFullYear(), m, 1)));
       const [s, e] = await Promise.all([
-        sumOne(supabase, "v_sales_month_totals", "month", mk, "revenue"),
-        sumOne(supabase, "v_expense_month_totals", "month", mk, "total"),
+        sumOne(supabase, "v_sales_month_totals", "month", mk, "revenue", tenantId),
+        sumOne(supabase, "v_expense_month_totals", "month", mk, "total", tenantId),
       ]);
       series.push({ key: mk, sales: s, expenses: e, profit: s - e });
     }
@@ -285,43 +284,41 @@ export default async function DashboardPage(props: any) {
     for (let i = 11; i >= 0; i--) {
       const mk = fmtMonth(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1)));
       const [s, e] = await Promise.all([
-        sumOne(supabase, "v_sales_month_totals", "month", mk, "revenue"),
-        sumOne(supabase, "v_expense_month_totals", "month", mk, "total"),
+        sumOne(supabase, "v_sales_month_totals", "month", mk, "revenue", tenantId),
+        sumOne(supabase, "v_expense_month_totals", "month", mk, "total", tenantId),
       ]);
       series.push({ key: mk, sales: s, expenses: e, profit: s - e });
     }
   }
 
-  /* --------- small extras for the KPI green lines --------- */
+  /* extras for KPI sublines */
   const pct = (nowV: number, prevV: number) =>
     prevV === 0 ? (nowV > 0 ? 100 : 0) : Math.round(((nowV - prevV) / prevV) * 100);
 
-  // previous month values (for MoM % on all three KPIs)
   const prevMonthKey = fmtMonth(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)));
   const [prevSales, prevExp] = await Promise.all([
-    sumOne(supabase, "v_sales_month_totals", "month", prevMonthKey, "revenue"),
-    sumOne(supabase, "v_expense_month_totals", "month", prevMonthKey, "total"),
+    sumOne(supabase, "v_sales_month_totals", "month", prevMonthKey, "revenue", tenantId),
+    sumOne(supabase, "v_expense_month_totals", "month", prevMonthKey, "total", tenantId),
   ]);
   const prevProfit = prevSales - prevExp;
+
   const salesMoM = pct(salesVal, prevSales);
   const expMoM = pct(expVal, prevExp);
   const profMoM = pct(profitVal, prevProfit);
 
-  // 3 most recent COMPLETED months (exclude current month)
   const last3Months: string[] = [];
   for (let i = 1; i <= 3; i++) {
     const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
     last3Months.push(fmtMonth(d));
   }
   const [last3Sales, last3Exp] = await Promise.all([
-    Promise.all(last3Months.map((m) => sumOne(supabase, "v_sales_month_totals", "month", m, "revenue"))),
-    Promise.all(last3Months.map((m) => sumOne(supabase, "v_expense_month_totals", "month", m, "total"))),
+    Promise.all(last3Months.map((m) => sumOne(supabase, "v_sales_month_totals", "month", m, "revenue", tenantId))),
+    Promise.all(last3Months.map((m) => sumOne(supabase, "v_expense_month_totals", "month", m, "total", tenantId))),
   ]);
   const last3AvgSales = last3Sales.reduce((a, b) => a + b, 0) / Math.max(1, last3Sales.length);
   const last3AvgExp = last3Exp.reduce((a, b) => a + b, 0) / Math.max(1, last3Exp.length);
   const last3AvgProfit = last3AvgSales - last3AvgExp;
 
-  // expense ratio and profit margin for the current selected range
   const expensePctOfSales = Math.round((expVal / Math.max(1, salesVal)) * 100);
   const marginPct = Math.round((profitVal / Math.max(1, salesVal)) * 100);
 
@@ -346,34 +343,31 @@ export default async function DashboardPage(props: any) {
       <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 tracking-wide flex items-center gap-1">
-            SALES — {range.toUpperCase()} <span title="Sum of sales (∑ line totals; falls back to qty×unit price) in the selected range.">ⓘ</span>
+            SALES — {range.toUpperCase()} <span title="Sum of sales in the selected range.">ⓘ</span>
           </div>
           <div className="text-2xl font-semibold mt-1">{usd(salesVal)}</div>
           <div className="text-xs text-emerald-400 mt-1">MoM: {salesMoM >= 0 ? `+${salesMoM}%` : `${salesMoM}%`}</div>
           <div className="text-xs text-emerald-400">3-mo avg: {usd(last3AvgSales)}</div>
           <div className="text-xs text-emerald-400">AOV: {usd(aov)}</div>
         </div>
-
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 tracking-wide flex items-center gap-1">
-            EXPENSES — {range.toUpperCase()} <span title="Sum of expenses (∑ amount_usd) in the selected range.">ⓘ</span>
+            EXPENSES — {range.toUpperCase()} <span title="Sum of expenses in the selected range.">ⓘ</span>
           </div>
           <div className="text-2xl font-semibold mt-1">{usd(expVal)}</div>
           <div className="text-xs text-emerald-400 mt-1">MoM: {expMoM >= 0 ? `+${expMoM}%` : `${expMoM}%`}</div>
           <div className="text-xs text-emerald-400">3-mo avg: {usd(last3AvgExp)}</div>
           <div className="text-xs text-emerald-400">Exp % of sales: {expensePctOfSales}%</div>
         </div>
-
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 tracking-wide flex items-center gap-1">
-            PROFIT / LOSS — {range.toUpperCase()} <span title="Profit = Sales − Expenses for the selected range.">ⓘ</span>
+            PROFIT / LOSS — {range.toUpperCase()} <span title="Profit = Sales − Expenses.">ⓘ</span>
           </div>
           <div className={`text-2xl font-semibold mt-1 ${profitVal < 0 ? "text-rose-400" : ""}`}>{usd(profitVal)}</div>
           <div className="text-xs text-emerald-400 mt-1">MoM: {profMoM >= 0 ? `+${profMoM}%` : `${profMoM}%`}</div>
           <div className="text-xs text-emerald-400">3-mo avg: {usd(last3AvgProfit)}</div>
           <div className="text-xs text-emerald-400">Margin: {marginPct}%</div>
         </div>
-
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 tracking-wide">SALES vs GOAL</div>
           <div className="text-2xl font-semibold mt-1">{usd(salesVal)}</div>
@@ -388,7 +382,7 @@ export default async function DashboardPage(props: any) {
         </div>
       </section>
 
-      {/* KPI row with visible tooltips */}
+      {/* KPI row */}
       <section className="grid grid-cols-1 md:grid-cols-5 gap-4 mt-4">
         <div className="border rounded-2xl p-4" title="Number of distinct sales orders in the selected range.">
           <div className="text-xs opacity-70">ORDERS (∑)</div>
