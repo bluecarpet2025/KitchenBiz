@@ -9,53 +9,47 @@ const FALLBACK_DEMO_TENANT =
 /**
  * Single source of truth for the effective tenant.
  * - If profile.use_demo = true: always return the demo tenant id
- * - Else: return the user’s own tenant id (from profiles.tenants join or your existing logic)
+ * - Else: return the user’s real tenant id
  */
-async function _computeEffectiveTenant(): Promise<EffTenant> {
+async function computeEffectiveTenant(): Promise<EffTenant> {
   const supabase = await createServerClient();
-
-  // Who am I?
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { tenantId: null, useDemo: false };
 
-  // Profile (has use_demo and tenant_id reference)
   const { data: profile } = await supabase
     .from("profiles")
-    .select("use_demo, tenant_id")
+    .select("tenant_id, use_demo")
     .eq("id", user.id)
     .maybeSingle();
 
   const useDemo = !!profile?.use_demo;
+  if (useDemo) return { tenantId: FALLBACK_DEMO_TENANT, useDemo: true };
 
-  if (useDemo) {
-    return { tenantId: FALLBACK_DEMO_TENANT, useDemo: true };
-  }
-
-  // Your real tenant id
   const realTenant = (profile as any)?.tenant_id ?? null;
   return { tenantId: realTenant, useDemo: false };
 }
 
 /**
- * New API (no args)
+ * New API (no args): returns { tenantId, useDemo }
  */
 export async function effectiveTenantId(): Promise<EffTenant> {
-  return _computeEffectiveTenant();
+  return computeEffectiveTenant();
 }
 
 /**
- * Legacy alias some files may be importing.
+ * Legacy helper some routes expect to return just the tenantId string.
+ * Accepts any args (ignored) to stay source-compatible with older calls.
+ * Example legacy call: getEffectiveTenant(supabase)
  */
-export async function getEffectiveTenant(): Promise<EffTenant> {
-  return _computeEffectiveTenant();
+export async function getEffectiveTenant(..._ignored: any[]): Promise<string | null> {
+  const { tenantId } = await computeEffectiveTenant();
+  return tenantId;
 }
 
 /**
- * Backwards-compatible wrapper: tolerate any arguments.
- * This prevents “Expected 0 arguments, but got 1” build errors.
- * We ignore the argument and compute from the server session/profile.
+ * Default export: also tolerate any args; returns { tenantId, useDemo }.
+ * This lets older code call effectiveTenantId(supabase) without type errors.
  */
-const effectiveTenantIdCompat = async (..._ignored: any[]): Promise<EffTenant> =>
-  _computeEffectiveTenant();
-
-export default effectiveTenantIdCompat;
+export default async function effectiveTenantIdCompat(..._ignored: any[]): Promise<EffTenant> {
+  return computeEffectiveTenant();
+}
