@@ -16,7 +16,7 @@ export default function SignOutButton() {
   return (
     <button
       onClick={() => start(doSignOut)}
-      className="text-sm rounded border px-3 py-1 hover:bg-neutral-900 disabled:opacity-50"
+      className="rounded border border-neutral-500 px-3 py-1 text-sm hover:bg-neutral-900 hover:border-neutral-400 transition-colors disabled:opacity-50"
       disabled={pending}
       aria-label="Sign out"
     >
