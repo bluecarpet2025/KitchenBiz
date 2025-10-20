@@ -62,10 +62,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               </Link>
             )}
 
-            {/* Help / FAQ converted into button style */}
+            {/* Help / FAQ button (matching Sign Out style) */}
             <Link
               href="/help"
-              className="rounded border border-neutral-700 px-3 py-1 text-sm hover:bg-neutral-900 transition-colors"
+              className="rounded border border-neutral-500 px-3 py-1 text-sm hover:bg-neutral-900 hover:border-neutral-400 transition-colors"
             >
               Help / FAQ
             </Link>
