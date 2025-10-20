@@ -2,6 +2,7 @@ import "./globals.css";
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import SignOutButton from "@/components/SignOutButton";
+import TopNavButton from "@/components/TopNavButton";
 
 export const metadata = {
   title: "Kitchen Biz",
@@ -62,13 +63,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               </Link>
             )}
 
-            {/* Help / FAQ button (matching Sign Out style) */}
-            <Link
-              href="/help"
-              className="rounded border border-neutral-500 px-3 py-1 text-sm hover:bg-neutral-900 hover:border-neutral-400 transition-colors"
-            >
-              Help / FAQ
-            </Link>
+            {/* Shared button component for Help / FAQ */}
+            <TopNavButton href="/help" label="Help / FAQ" />
           </nav>
         </header>
 
