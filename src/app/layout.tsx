@@ -25,10 +25,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   return (
     <html lang="en">
       <body>
-        {/* Hides on print + can be hidden by /share/* using [data-kb-topnav] */}
+        {/* Sticky Header (visible while scrolling) */}
         <header
           data-kb-topnav
-          className="print:hidden flex items-center justify-between px-4 sm:px-6 py-3 border-b border-neutral-800"
+          className="print:hidden sticky top-0 z-50 flex items-center justify-between px-4 sm:px-6 py-3 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur supports-[backdrop-filter]:bg-neutral-950/75"
         >
           <nav className="flex items-center gap-4">
             <Link href="/" className="font-semibold">Kitchen Biz</Link>
@@ -45,15 +45,30 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           <nav className="flex items-center gap-4">
             {user ? (
               <>
-                <Link href="/profile" className="text-sm opacity-80 hover:opacity-100">{display}</Link>
+                <Link
+                  href="/profile"
+                  className="text-sm opacity-80 hover:opacity-100"
+                >
+                  {display}
+                </Link>
                 <SignOutButton />
               </>
             ) : (
-              <Link href="/login" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">
+              <Link
+                href="/login"
+                className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm"
+              >
                 Log in / Sign up
               </Link>
             )}
-            <Link href="/help" className="text-sm hover:underline">Help / FAQ</Link>
+
+            {/* Help / FAQ converted into button style */}
+            <Link
+              href="/help"
+              className="rounded border border-neutral-700 px-3 py-1 text-sm hover:bg-neutral-900 transition-colors"
+            >
+              Help / FAQ
+            </Link>
           </nav>
         </header>
 
