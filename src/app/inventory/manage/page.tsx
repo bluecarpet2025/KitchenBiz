@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { createServerClient } from "@/lib/supabase/server";
+import createBrowserClient from "@/lib/supabase/client"; // ✅ changed here
 import { effectiveTenantId } from "@/lib/effective-tenant";
 import DeleteInventoryItemButton from "@/components/DeleteInventoryItemButton";
 
@@ -27,7 +27,7 @@ export default function ManageInventoryPage() {
 
   useEffect(() => {
     async function fetchItems() {
-      const supabase = await createServerClient();
+      const supabase = createBrowserClient(); // ✅ browser-safe
       const { tenantId, useDemo } = await effectiveTenantId();
 
       if (!tenantId) {
