@@ -1,3 +1,6 @@
+"use client";
+
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { effectiveTenantId } from "@/lib/effective-tenant";
@@ -17,15 +20,72 @@ type Item = {
   deleted_at?: string | null;
 };
 
-export default async function ManageInventoryPage() {
-  const supabase = await createServerClient();
-  const { tenantId, useDemo } = await effectiveTenantId();
+export default function ManageInventoryPage() {
+  const [items, setItems] = useState<Item[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState<string>("");
 
-  if (!tenantId) {
+  useEffect(() => {
+    async function fetchItems() {
+      const supabase = await createServerClient();
+      const { tenantId, useDemo } = await effectiveTenantId();
+
+      if (!tenantId) {
+        setMessage("Sign in required, or tenant not configured.");
+        setLoading(false);
+        return;
+      }
+
+      const { data: itemsRaw, error } = await supabase
+        .from("inventory_items")
+        .select(
+          "id, tenant_id, name, base_unit, purchase_unit, pack_to_base_factor, sku, par_level, deleted_at"
+        )
+        .eq("tenant_id", tenantId)
+        .is("deleted_at", null)
+        .order("name");
+
+      if (error) {
+        console.error("Inventory fetch error:", error);
+        setMessage("Error loading inventory.");
+      } else {
+        setItems(itemsRaw ?? []);
+      }
+
+      setLoading(false);
+    }
+
+    fetchItems();
+  }, []);
+
+  async function handleSeed() {
+    try {
+      setMessage("⏳ Seeding default ingredients...");
+      const res = await fetch("/api/seed-default-ingredients", { method: "POST" });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setMessage(`✅ Seeded ${data.count} default ingredients`);
+      window.location.reload();
+    } catch (err: any) {
+      console.error(err);
+      setMessage("❌ Error seeding defaults");
+    }
+  }
+
+  if (loading) {
     return (
       <main className="max-w-5xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Manage items</h1>
-        <p className="mt-4">Sign in required, or tenant not configured.</p>
+        <p className="mt-4">Loading...</p>
+      </main>
+    );
+  }
+
+  if (message && items.length === 0 && message.includes("Sign in")) {
+    return (
+      <main className="max-w-5xl mx-auto p-6">
+        <h1 className="text-2xl font-semibold">Manage items</h1>
+        <p className="mt-4">{message}</p>
         <Link className="underline" href="/login?redirect=/inventory/manage">
           Go to login
         </Link>
@@ -33,26 +93,10 @@ export default async function ManageInventoryPage() {
     );
   }
 
-  // 🔹 Fetch inventory items
-  const { data: itemsRaw, error } = await supabase
-    .from("inventory_items")
-    .select(
-      "id, tenant_id, name, base_unit, purchase_unit, pack_to_base_factor, sku, par_level, deleted_at"
-    )
-    .eq("tenant_id", tenantId)
-    .is("deleted_at", null)
-    .order("name");
-
-  if (error) console.error("Inventory fetch error:", error);
-
-  const rows = (itemsRaw ?? []) as Item[];
-
   return (
     <main className="max-w-5xl mx-auto p-6 space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">
-          Manage items {useDemo && <span className="text-sm text-green-400">(Demo)</span>}
-        </h1>
+        <h1 className="text-2xl font-semibold">Manage items</h1>
         <div className="flex gap-2">
           <Link
             href="/inventory/items/new"
@@ -60,14 +104,16 @@ export default async function ManageInventoryPage() {
           >
             New item
           </Link>
-          <Link
-            href="/api/seed-default-ingredients"
+          <button
+            onClick={handleSeed}
             className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
           >
             Seed Defaults
-          </Link>
+          </button>
         </div>
       </div>
+
+      {message && <p className="text-sm text-neutral-400">{message}</p>}
 
       <div className="border rounded-lg overflow-hidden">
         <table className="w-full text-sm">
@@ -83,14 +129,14 @@ export default async function ManageInventoryPage() {
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
+            {items.length === 0 ? (
               <tr>
                 <td className="p-3 text-neutral-400 text-center" colSpan={7}>
                   No items yet.
                 </td>
               </tr>
             ) : (
-              rows.map((r) => (
+              items.map((r) => (
                 <tr key={r.id} className="border-t">
                   <td className="p-2">{r.name}</td>
                   <td className="p-2">{r.base_unit ?? "—"}</td>
