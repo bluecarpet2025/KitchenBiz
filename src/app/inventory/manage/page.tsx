@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import createBrowserClient from "@/lib/supabase/client"; // ✅ changed here
-import { effectiveTenantId } from "@/lib/effective-tenant";
+import { effectiveTenantIdClient } from "@/lib/effective-tenant-client";
 import DeleteInventoryItemButton from "@/components/DeleteInventoryItemButton";
 
 export const dynamic = "force-dynamic";
@@ -28,7 +28,7 @@ export default function ManageInventoryPage() {
   useEffect(() => {
     async function fetchItems() {
       const supabase = createBrowserClient(); // ✅ browser-safe
-      const { tenantId, useDemo } = await effectiveTenantId();
+      const { tenantId, useDemo } = await effectiveTenantIdClient();
 
       if (!tenantId) {
         setMessage("Sign in required, or tenant not configured.");
