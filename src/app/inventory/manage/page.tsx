@@ -60,6 +60,12 @@ export default async function ManageInventoryPage() {
           >
             New item
           </Link>
+          <Link
+            href="/api/seed-default-ingredients"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
+            Seed Defaults
+          </Link>
         </div>
       </div>
 
