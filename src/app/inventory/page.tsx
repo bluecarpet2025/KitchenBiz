@@ -244,10 +244,10 @@ export default async function InventoryLanding({
     <main className="max-w-6xl mx-auto p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Inventory</h1>
-        <div className="flex gap-2">
+        <div className="flex gap-2">          
+          <Link href="/inventory/manage" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900" prefetch={false}>Manage items</Link>
           <Link href="/inventory/counts/new" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900" prefetch={false}>New count</Link>
           <Link href="/inventory/counts" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900" prefetch={false}>Counts history</Link>
-          <Link href="/inventory/manage" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900" prefetch={false}>Manage items</Link>
           <Link href="/inventory/purchase" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900" prefetch={false}>Purchase</Link>
           <Link href="/inventory/receipts" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900" prefetch={false}>Receipts</Link>
         </div>
