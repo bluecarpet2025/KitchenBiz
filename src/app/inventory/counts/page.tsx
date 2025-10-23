@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
+import { effectiveTenantId } from "@/lib/effective-tenant";
 import { fmtUSD } from "@/lib/costing";
 
 export const dynamic = "force-dynamic";
@@ -8,30 +9,18 @@ type CountRow = { id: string; note: string | null; created_at: string };
 type LineRow = { count_id: string; item_id: string; delta_base: number | null };
 type ReceiptRow = { item_id: string; total_cost_usd: number | null; qty_base: number | null };
 
-async function getTenant() {
-  const supabase = await createServerClient();
-  const { data: u } = await supabase.auth.getUser();
-  const uid = u.user?.id ?? null;
-  if (!uid) return { supabase, tenantId: null };
-
-  const { data: prof } = await supabase
-    .from("profiles")
-    .select("tenant_id")
-    .eq("id", uid)
-    .maybeSingle();
-
-  return { supabase, tenantId: prof?.tenant_id ?? null };
-}
-
 export default async function CountsListPage() {
-  const { supabase, tenantId } = await getTenant();
+  const supabase = await createServerClient();
+  const { tenantId, useDemo } = await effectiveTenantId();
 
   if (!tenantId) {
     return (
       <main className="max-w-5xl mx-auto p-6">
         <h1 className="text-2xl font-semibold">Inventory Counts</h1>
         <p className="mt-4">Sign in required or profile missing tenant.</p>
-        <Link className="underline" href="/login?redirect=/inventory/counts">Go to login</Link>
+        <Link className="underline" href="/login?redirect=/inventory/counts">
+          Go to login
+        </Link>
       </main>
     );
   }
@@ -51,15 +40,15 @@ export default async function CountsListPage() {
     .eq("tenant_id", tenantId)
     .in("count_id", countIds);
 
-  const lines: LineRow[] = (linesRaw ?? []) as any[];
-
   const { data: receiptsRaw } = await supabase
     .from("inventory_receipts")
     .select("item_id,total_cost_usd,qty_base")
     .eq("tenant_id", tenantId);
 
+  const lines: LineRow[] = (linesRaw ?? []) as any[];
   const receipts: ReceiptRow[] = (receiptsRaw ?? []) as any[];
 
+  // Aggregations unchanged
   const costAgg = new Map<string, { cost: number; qty: number }>();
   for (const r of receipts) {
     const id = r.item_id;
@@ -70,6 +59,7 @@ export default async function CountsListPage() {
     a.qty += qty;
     costAgg.set(id, a);
   }
+
   const avgCost = new Map<string, number>();
   for (const [id, a] of costAgg.entries()) {
     avgCost.set(id, a.qty > 0 ? a.cost / a.qty : 0);
@@ -88,7 +78,9 @@ export default async function CountsListPage() {
   return (
     <main className="max-w-5xl mx-auto p-6 space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Inventory Counts</h1>
+        <h1 className="text-2xl font-semibold">
+          Inventory Counts {useDemo && <span className="text-sm text-green-400">(Demo)</span>}
+        </h1>
         <div className="flex gap-2">
           <a
             href="/inventory/counts/export"
@@ -117,7 +109,11 @@ export default async function CountsListPage() {
           </thead>
           <tbody>
             {counts.length === 0 ? (
-              <tr><td className="p-2" colSpan={4}>No counts yet.</td></tr>
+              <tr>
+                <td className="p-2" colSpan={4}>
+                  No counts yet.
+                </td>
+              </tr>
             ) : (
               counts.map((r) => {
                 const t = totals.get(r.id) ?? { units: 0, dollars: 0 };
