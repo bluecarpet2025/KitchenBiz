@@ -151,23 +151,10 @@ async function setGoal(formData: FormData) {
   c.set("_kb_goal", String(newGoal), { path: "/", maxAge: 60 * 60 * 24 * 365 });
 }
 
-/* --------------------- server action: toggle demo/real --------------------- */
-async function setUseDemo(formData: FormData) {
-  "use server";
-  const target = String(formData.get("use_demo") ?? "0") === "1";
-  const supabase = await createServerClient();
-  const { data: u } = await supabase.auth.getUser();
-  const uid = u?.user?.id;
-  if (uid) {
-    await supabase.from("profiles").update({ use_demo: target }).eq("id", uid);
-  }
-  // no redirect needed; server action submission will refresh the page
-}
-
 /* ================================== PAGE ================================== */
 export default async function DashboardPage(props: any) {
   const supabase = await createServerClient();
-  const { tenantId, useDemo } = await effectiveTenantId(); // << DEMO-AWARE TENANT + flag
+  const { tenantId } = await effectiveTenantId(); // << DEMO-AWARE TENANT
 
   if (!tenantId) {
     return (
@@ -346,17 +333,7 @@ export default async function DashboardPage(props: any) {
           <Link href="/dashboard?range=ytd"   className={`rounded border px-3 py-1 ${range === "ytd" ? "bg-neutral-900" : ""}`}>YTD</Link>
           <span className="text-xs px-2 py-1 rounded border opacity-70">Range: {startIso} → {endIsoExcl}</span>
         </div>
-        <div className="flex gap-2 items-center">
-          {/* Demo / Real toggle (server action) */}
-          <form action={setUseDemo}>
-            <input type="hidden" name="use_demo" value={useDemo ? "0" : "1"} />
-            <button
-              className={`rounded border px-3 py-1 text-sm hover:bg-neutral-900 ${useDemo ? "border-emerald-500/70" : ""}`}
-              title={useDemo ? "Currently showing shared demo data. Click to switch to your real tenant data." : "Currently showing your real data. Click to switch to demo data."}
-            >
-              {useDemo ? "Demo: ON" : "Demo: OFF"}
-            </button>
-          </form>
+        <div className="flex gap-2">
           <Link href="/sales"    className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">Sales details</Link>
           <Link href="/expenses" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">Expenses details</Link>
         </div>
