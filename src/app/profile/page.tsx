@@ -15,7 +15,7 @@ export default async function ProfilePage() {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("display_name, use_demo, tenant_id")
+    .select("display_name, use_demo, tenant_id, role, plan, branding_tier")
     .eq("id", user.id)
     .maybeSingle();
 
@@ -40,6 +40,9 @@ export default async function ProfilePage() {
         initialBusinessName={businessName}
         initialBusinessBlurb={businessBlurb}
         tenantId={(profile?.tenant_id as string) ?? null}
+        role={profile?.role ?? "owner"}
+        initialPlan={profile?.plan ?? "starter"}
+        initialBrandingTier={profile?.branding_tier ?? "none"}
       />
       <p className="mt-6 text-sm text-neutral-400">
         When <strong>Use demo data</strong> is on, you’ll see the read-only
