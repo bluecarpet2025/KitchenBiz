@@ -1,8 +1,7 @@
 "use client";
-
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import createBrowserClient from "@/lib/supabase/client"; // ✅ changed here
+import createBrowserClient from "@/lib/supabase/client"; // ✅ browser-safe
 import { effectiveTenantIdClient } from "@/lib/effective-tenant-client";
 import DeleteInventoryItemButton from "@/components/DeleteInventoryItemButton";
 
@@ -27,9 +26,8 @@ export default function ManageInventoryPage() {
 
   useEffect(() => {
     async function fetchItems() {
-      const supabase = createBrowserClient(); // ✅ browser-safe
-      const { tenantId, useDemo } = await effectiveTenantIdClient();
-
+      const supabase = createBrowserClient();
+      const { tenantId } = await effectiveTenantIdClient();
       if (!tenantId) {
         setMessage("Sign in required, or tenant not configured.");
         setLoading(false);
@@ -51,10 +49,8 @@ export default function ManageInventoryPage() {
       } else {
         setItems(itemsRaw ?? []);
       }
-
       setLoading(false);
     }
-
     fetchItems();
   }, []);
 

@@ -11,15 +11,14 @@ async function getTenant() {
   const supabase = await createServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { supabase, user: null, tenantId: null };
-
   const { data: prof } = await supabase
     .from("profiles").select("tenant_id").eq("id", user.id).maybeSingle();
-
   return { supabase, user, tenantId: prof?.tenant_id ?? null };
 }
 
 export default async function NewCountPage() {
   const { supabase, user, tenantId } = await getTenant();
+
   if (!user || !tenantId) {
     return (
       <main className="max-w-5xl mx-auto p-6">
@@ -49,7 +48,6 @@ export default async function NewCountPage() {
     <main className="max-w-5xl mx-auto p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">New Inventory Count</h1>
-        {/* Keep only History — removed Inventory button */}
         <div className="flex gap-2">
           <Link href="/inventory/counts" className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900">
             History

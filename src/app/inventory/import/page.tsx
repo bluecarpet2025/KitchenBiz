@@ -29,6 +29,7 @@ function parseCSV(text: string): Row[] {
     }
     cells.push(cur);
     if (cells.every(x => x.trim() === '')) continue;
+
     const get = (h: string) => (cells[idx(h)] ?? '').trim();
     out.push({
       name: get('name'),
@@ -148,7 +149,6 @@ export default function ImportInventory() {
               ))}
             </tbody>
           </table>
-
           <button disabled={busy} onClick={importNow} className="bg-white text-black font-medium rounded px-4 py-2">
             {busy ? 'Importing…' : 'Import all'}
           </button>

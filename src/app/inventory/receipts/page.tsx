@@ -8,6 +8,7 @@ export const dynamic = 'force-dynamic';
 export default async function ReceiptsListPage() {
   const supabase = await createServerClient();
   const { data: { user } } = await supabase.auth.getUser();
+
   if (!user) {
     return (
       <main className="max-w-6xl mx-auto p-6">
@@ -33,6 +34,7 @@ export default async function ReceiptsListPage() {
     .select('*')
     .eq('tenant_id', tenantId)
     .order('purchased_at', { ascending: false });
+
   if (error) console.error(error);
 
   return (

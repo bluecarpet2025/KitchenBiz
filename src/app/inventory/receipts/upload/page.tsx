@@ -60,6 +60,7 @@ export default async function ImportReceiptsUploadPage() {
           <code className="px-1 rounded bg-neutral-900">unit</code>,{" "}
           <code className="px-1 rounded bg-neutral-900">cost_total</code>.
         </p>
+
         <div className="border rounded-lg p-4">
           <form
             action="/inventory/receipts/import"
@@ -80,7 +81,6 @@ export default async function ImportReceiptsUploadPage() {
                 className="block w-full text-sm file:mr-4 file:rounded-md file:border file:px-3 file:py-2 file:bg-neutral-950 file:hover:bg-neutral-900"
               />
             </div>
-
             <button
               type="submit"
               className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"

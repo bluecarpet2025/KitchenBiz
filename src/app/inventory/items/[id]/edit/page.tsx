@@ -24,9 +24,9 @@ export default async function EditItemPage({
   const { id } = await params;
 
   const supabase = await createServerClient();
-
   const { data: u } = await supabase.auth.getUser();
   const user = u.user ?? null;
+
   if (!user) {
     return (
       <main className="max-w-5xl mx-auto p-6">
@@ -46,6 +46,7 @@ export default async function EditItemPage({
     .maybeSingle();
 
   const tenantId = prof?.tenant_id ?? null;
+
   if (!tenantId) {
     return (
       <main className="max-w-5xl mx-auto p-6">
