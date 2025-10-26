@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { getEffectiveTenant } from "@/lib/effective-tenant";
+import { effectivePlan, canUseFeature } from "@/lib/plan"; // 🆕 Added import
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,26 @@ export default async function StaffPage() {
         <Link className="underline" href="/login?redirect=/staff">
           Go to login
         </Link>
+      </main>
+    );
+  }
+
+  // 🆕 Get user plan and enforce access
+  const plan = await effectivePlan();
+  if (!canUseFeature(plan, "staff_accounts")) {
+    return (
+      <main className="max-w-6xl mx-auto p-6">
+        <h1 className="text-2xl font-semibold mb-3">Upgrade Required</h1>
+        <p className="opacity-80">
+          The Staff module is available starting with the{" "}
+          <strong>Basic plan</strong>.
+        </p>
+        <p className="mt-3">
+          <Link href="/profile" className="underline">
+            Go to Profile
+          </Link>{" "}
+          to upgrade your plan.
+        </p>
       </main>
     );
   }
@@ -113,3 +134,4 @@ export default async function StaffPage() {
     </main>
   );
 }
+ 

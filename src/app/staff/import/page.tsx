@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { effectivePlan, canUseFeature } from "@/lib/plan"; // 🆕
 
 export default function StaffImportPage() {
   return (
@@ -50,3 +51,4 @@ export default function StaffImportPage() {
     </main>
   );
 }
+
