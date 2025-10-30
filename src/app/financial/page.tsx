@@ -198,9 +198,6 @@ export default async function FinancialPage(props: any) {
         <Link href="/expenses" className="border rounded px-3 h-10 flex items-center hover:bg-neutral-900">
           Expenses details
         </Link>
-        <Link href="/dashboard/insights" className="border rounded px-3 h-10 flex items-center hover:bg-neutral-900">
-          Insights
-        </Link>
       </div>
 
       {/* Top cards */}
