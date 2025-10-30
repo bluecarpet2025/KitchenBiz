@@ -174,7 +174,7 @@ export async function GET(req: NextRequest) {
   const zip = new JSZip();
   zip.file(
     "README.txt",
-    `KitchenBiz — Accountant Pack (${label})
+    `KioriSolutions — Accountant Pack (${label})
 This ZIP contains CSV exports suitable for bookkeeping and tax prep.
 
 Files:
@@ -252,7 +252,7 @@ All amounts in USD. Dates are UTC.`
   const u8 = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
   const buf = Buffer.from(u8.buffer, u8.byteOffset, u8.byteLength); // Node Buffer
 
-  const filename = `kitchenbiz_accountant_pack_${label}.zip`;
+  const filename = `KioriSolutions_accountant_pack_${label}.zip`;
   return new Response(buf as unknown as BodyInit, {
     headers: {
       "Content-Type": "application/zip",

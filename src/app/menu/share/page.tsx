@@ -67,7 +67,7 @@ export default async function Page({
     .eq("id", tenantId)
     .maybeSingle();
 
-  const bizName = String(tenant?.name ?? "Kitchen Biz");
+  const bizName = String(tenant?.name ?? "Kiori Solutions");
   const bizBlurb = String(tenant?.short_description ?? "");
 
   // menu

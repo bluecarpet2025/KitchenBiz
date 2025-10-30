@@ -1,6 +1,6 @@
 // Shared helper to read the business header (name + short description) for a tenant.
 export async function fetchTenantHeader(supabase: any, tenantId?: string | null) {
-  if (!tenantId) return { bizName: "Kitchen Biz", bizBlurb: "" };
+  if (!tenantId) return { bizName: "Kiori Solutions", bizBlurb: "" };
 
   const { data } = await supabase
     .from("tenants")
@@ -9,7 +9,7 @@ export async function fetchTenantHeader(supabase: any, tenantId?: string | null)
     .maybeSingle();
 
   return {
-    bizName: String(data?.business_name ?? data?.name ?? "Kitchen Biz"),
+    bizName: String(data?.business_name ?? data?.name ?? "Kiori Solutions"),
     bizBlurb: String(data?.business_blurb ?? ""),
   };
 }

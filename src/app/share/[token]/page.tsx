@@ -52,7 +52,7 @@ export default async function PublicSharePage(
     .select("name, short_description")
     .eq("id", tenantId)
     .maybeSingle();
-  const bizName = String(tenant?.name ?? "Kitchen Biz");
+  const bizName = String(tenant?.name ?? "Kiori Solutions");
   const bizBlurb = String(tenant?.short_description ?? "");
 
   // Menu

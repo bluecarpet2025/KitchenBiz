@@ -14,7 +14,7 @@ export default async function HomePage() {
     <main className="max-w-5xl mx-auto p-6">
       {/* Hero */}
       <section className="pt-6 pb-8">
-        <h1 className="text-4xl font-semibold tracking-tight">Kitchen Biz</h1>
+        <h1 className="text-4xl font-semibold tracking-tight">Kiori Solutions</h1>
         <p className="mt-3 text-neutral-300 leading-relaxed max-w-3xl">
           Simple back-of-house for small restaurants: inventory, purchases,
           recipes, menu costing, and sales &amp; expenses tracking. Built to make
@@ -102,7 +102,7 @@ export default async function HomePage() {
           <Link href="/terms" className="underline">Terms of service</Link>
           <a href="mailto:bluecarpetllc@gmail.com" className="underline">Contact us</a>
         </div>
-        <div className="mt-4">© {new Date().getFullYear()} Kitchen Biz</div>
+        <div className="mt-4">© {new Date().getFullYear()} Kiori Solutions</div>
       </footer>
     </main>
   );

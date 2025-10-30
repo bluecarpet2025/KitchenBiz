@@ -11,7 +11,7 @@ export default function Help() {
       <header>
         <h1 className="text-2xl font-semibold">Help / FAQ & Instructions</h1>
         <p className="text-sm text-neutral-300 mt-2">
-          Kitchen Biz is built for small food businesses. Every data-entry page supports create, edit, delete,
+          Kiori Solutions is built for small food businesses. Every data-entry page supports create, edit, delete,
           CSV upload, and a downloadable template. This guide explains each page and common workflows.
         </p>
       </header>

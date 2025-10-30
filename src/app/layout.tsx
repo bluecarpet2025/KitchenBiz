@@ -5,8 +5,19 @@ import SignOutButton from "@/components/SignOutButton";
 import TopNavButton from "@/components/TopNavButton";
 
 export const metadata = {
-  title: "Kitchen Biz",
-  description: "Back-of-house tools for small restaurants",
+  title: "Kiori Solutions",
+  description: "Smart kitchen management tools for food entrepreneurs",
+  openGraph: {
+    title: "Kiori Solutions",
+    description: "Smart kitchen management tools for food entrepreneurs",
+    url: "https://kiiorisolutions.com",
+    siteName: "Kiori Solutions",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Kiori Solutions",
+    description: "Smart kitchen management tools for food entrepreneurs",
+  },
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
@@ -32,7 +43,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           className="print:hidden sticky top-0 z-50 flex items-center justify-between px-4 sm:px-6 py-3 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur supports-[backdrop-filter]:bg-neutral-950/75"
         >
           <nav className="flex items-center gap-4">
-            <Link href="/" className="font-semibold">Kitchen Biz</Link>
+            <Link href="/" className="font-semibold">Kiori Solutions</Link>
 
             {/* ORDER: Inventory | Recipes | Menu | Financials | Staff | Dashboard */}
             <Link href="/inventory" className="hover:underline">Inventory</Link>

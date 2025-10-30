@@ -23,7 +23,7 @@ export default async function TopNav() {
       <nav className="max-w-6xl mx-auto flex items-center justify-between gap-4 px-4 py-3">
         {/* Left: brand + sections */}
         <div className="flex items-center gap-6">
-          <Link href="/" className="font-semibold">Kitchen Biz</Link>
+          <Link href="/" className="font-semibold">Kiori Solutions</Link>
 
           {/* ORDER: Inventory | Recipes | Menu | Financials | Staff | Dashboard */}
           <Link href="/inventory" className="hover:underline">Inventory</Link>

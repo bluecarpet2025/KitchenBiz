@@ -12,7 +12,7 @@ export async function GET() {
     status: 200,
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": 'attachment; filename="kitchenbiz-purchase-template.csv"',
+      "Content-Disposition": 'attachment; filename="KioriSolutions-purchase-template.csv"',
       "Cache-Control": "no-store",
     },
   });
