@@ -336,6 +336,7 @@ export default async function DashboardPage(props: any) {
         <div className="flex gap-2">
           <Link href="/sales"    className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">Sales details</Link>
           <Link href="/expenses" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">Expenses details</Link>
+          <Link href="/dashboard/insights" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">Insights</Link>
         </div>
       </div>
 

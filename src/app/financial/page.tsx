@@ -85,11 +85,11 @@ export default async function FinancialPage(props: any) {
       .order("month", { ascending: true });
 
     salesRows =
-      (data ?? []).map((r: any) => ({
-        month: String(r.month),
-        revenue: Number(r.revenue ?? 0),
-        orders: Number(r.orders ?? 0),
-      })) ?? [];
+      (data ?? []).map((r: any) => ([
+        String(r.month),
+        Number(r.revenue ?? 0),
+        Number(r.orders ?? 0),
+      ] as [string, number, number])).map(([month, revenue, orders]) => ({ month, revenue, orders })) ?? [];
   }
   const salesByMonth = new Map(salesRows.map((r) => [r.month, r.revenue]));
   const ordersByMonth = new Map(salesRows.map((r) => [r.month, r.orders]));
@@ -197,6 +197,9 @@ export default async function FinancialPage(props: any) {
         </Link>
         <Link href="/expenses" className="border rounded px-3 h-10 flex items-center hover:bg-neutral-900">
           Expenses details
+        </Link>
+        <Link href="/dashboard/insights" className="border rounded px-3 h-10 flex items-center hover:bg-neutral-900">
+          Insights
         </Link>
       </div>
 
