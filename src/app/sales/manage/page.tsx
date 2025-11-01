@@ -2,12 +2,30 @@ import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { getEffectiveTenant } from "@/lib/effective-tenant";
 import SalesEditorClient from "@/components/SalesEditorClient";
+import { effectivePlan, canUseFeature } from "@/lib/plan";
 
 export const dynamic = "force-dynamic";
 
 export default async function SalesManagePage() {
   const supabase = await createServerClient();
   const tenantId = await getEffectiveTenant(supabase);
+
+  // 🧩 GATE-KEEPING
+  const plan = await effectivePlan();
+  const canAccessSales = canUseFeature(plan, "sales_access");
+  if (!canAccessSales) {
+    return (
+      <main className="max-w-3xl mx-auto p-6 text-center">
+        <h1 className="text-2xl font-semibold mb-2">Sales</h1>
+        <p className="text-neutral-400">Your current plan doesn’t include Sales features.</p>
+        <p className="mt-2">
+          <Link href="/profile" className="text-blue-400 hover:underline">
+            Upgrade your plan →
+          </Link>
+        </p>
+      </main>
+    );
+  }
 
   if (!tenantId) {
     return (
