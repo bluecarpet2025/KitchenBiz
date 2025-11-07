@@ -50,3 +50,4 @@ export async function effectivePlan(): Promise<Plan> {
   // normalize any weird/legacy values
   return PLAN_ORDER.includes(raw) ? raw : "starter";
 }
+ 
