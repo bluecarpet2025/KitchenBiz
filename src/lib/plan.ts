@@ -1,50 +1,52 @@
-// /src/lib/plan.ts
-// Utilities for plan + feature gating across KitchenBiz
-
+// src/lib/plan.ts
+import "server-only";
 import { createServerClient } from "@/lib/supabase/server";
 
-/** Type safety for all supported plans */
-export type PlanType = "starter" | "basic" | "pro" | "enterprise";
+export type Plan = "starter" | "basic" | "pro" | "enterprise";
+export const PLAN_ORDER: Plan[] = ["starter", "basic", "pro", "enterprise"];
 
-/** Get the current user's effective plan from Supabase */
-export async function effectivePlan(): Promise<PlanType> {
-  const supabase = await createServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return "starter";
+/** All feature flags we gate in the app */
+export type FeatureKey =
+  | "inventory_access"
+  | "staff_accounts"
+  | "receipt_photo_upload"
+  | "sales_access"
+  | "expenses_access"     // ← added
+  | "menu_builder"
+  | "ai_reports"
+  | "custom_branding";
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("plan")
-    .eq("id", user.id)
-    .maybeSingle();
-
-  return (profile?.plan as PlanType) ?? "starter";
-}
-
-/** Simple static permission table */
-const featureMatrix: Record<
-  string,
-  PlanType[]
-> = {
-  demo_mode: ["starter", "basic", "pro", "enterprise"],
-  staff_accounts: ["basic", "pro", "enterprise"],
-  photo_upload: ["basic", "pro", "enterprise"],
-  ai_tools: ["pro", "enterprise"],
-  forecasting: ["pro", "enterprise"],
-  branding_ui: ["basic", "pro", "enterprise"],
-  pos_integration: ["pro", "enterprise"],
-  api_access: ["enterprise"],
+/** Minimum plan required for each feature */
+const FEATURE_MIN_PLAN: Record<FeatureKey, Plan> = {
+  inventory_access: "basic",
+  staff_accounts: "basic",
+  receipt_photo_upload: "basic", // Starter still allowed CSV-only flows elsewhere in UI logic
+  sales_access: "basic",
+  expenses_access: "basic",      // ← Basic+
+  menu_builder: "basic",
+  ai_reports: "pro",             // Financials/Insights gating
+  custom_branding: "pro",
 };
 
-/** Returns true if the feature is allowed for this plan */
-export function canUseFeature(plan: PlanType, feature: string): boolean {
-  const allowed = featureMatrix[feature];
-  if (!allowed) return false;
-  return allowed.includes(plan);
+export function canUseFeature(plan: Plan, feature: FeatureKey): boolean {
+  const need = FEATURE_MIN_PLAN[feature];
+  return PLAN_ORDER.indexOf(plan) >= PLAN_ORDER.indexOf(need);
 }
 
-/**
- * Example pattern:
- * const plan = await effectivePlan();
- * if (!canUseFeature(plan, "staff_accounts")) { redirect("/upgrade"); }
- */
+/** Read the user’s effective plan from profiles; defaults to starter if unknown */
+export async function effectivePlan(): Promise<Plan> {
+  const supabase = await createServerClient();
+  const { data: au } = await supabase.auth.getUser();
+  const uid = au.user?.id;
+  if (!uid) return "starter";
+
+  const { data: prof } = await supabase
+    .from("profiles")
+    .select("plan")
+    .eq("id", uid)
+    .maybeSingle();
+
+  const raw = (prof?.plan as Plan | null) ?? "starter";
+  // normalize any weird/legacy values
+  return PLAN_ORDER.includes(raw) ? raw : "starter";
+}
