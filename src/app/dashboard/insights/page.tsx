@@ -3,7 +3,7 @@ import { effectivePlan, canUseFeature } from "@/lib/plan";
 
 export default async function InsightsPage() {
   const plan = await effectivePlan();
-  const canUseAI = canUseFeature(plan, "ai_tools");
+const canUseAI = canUseFeature(plan, "ai_reports");
 
   if (!canUseAI) {
     return (
