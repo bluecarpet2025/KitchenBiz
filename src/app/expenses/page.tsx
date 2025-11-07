@@ -2,7 +2,7 @@ import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { getEffectiveTenant } from "@/lib/effective-tenant";
 import { fmtUSD } from "@/lib/costing";
-
+import { effectivePlan, canUseFeature } from "@/lib/plan";
 export const dynamic = "force-dynamic";
 
 type MonthRow = { tenant_id: string; month: string; entries: number; total: number | string };
@@ -30,7 +30,6 @@ function Section({
         <table className="w-full text-sm">
           <thead>
             <tr className="text-neutral-300">
-              {/* label col flexes, numeric cols are fixed so every section lines up */}
               <th className="px-3 py-2 text-left">Period / Category</th>
               <th className="px-3 py-2 text-center w-28">Entries</th>
               <th className="px-3 py-2 text-right w-36">Amount</th>
@@ -55,9 +54,24 @@ function Section({
 
 export default async function ExpensesPage() {
   const supabase = await createServerClient();
+
+  // PLAN GATE
+  const plan = await effectivePlan();
+  const canAccessExpenses = canUseFeature(plan, "expenses_access");
+  if (!canAccessExpenses) {
+    return (
+      <main className="max-w-3xl mx-auto p-6 text-center">
+        <h1 className="text-2xl font-semibold mb-2">Expenses</h1>
+        <p className="opacity-80">Your current plan doesn’t include Expenses features.</p>
+        <a href="/profile" className="inline-block mt-3 border rounded px-4 py-2 hover:bg-neutral-900">
+          Upgrade plan
+        </a>
+      </main>
+    );
+  }
+
   const { data: au } = await supabase.auth.getUser();
   const user = au.user ?? null;
-
   if (!user) {
     return (
       <main className="max-w-6xl mx-auto p-6">
@@ -80,7 +94,6 @@ export default async function ExpensesPage() {
     );
   }
 
-  // Pull the compact summary views we created in SQL
   const [{ data: months }, { data: weeks }, { data: days }, { data: qtrs }, { data: years }, { data: cats }] =
     await Promise.all([
       supabase.from("v_expense_month_totals").select("*").eq("tenant_id", tenantId).order("month", { ascending: false }),
@@ -126,7 +139,6 @@ export default async function ExpensesPage() {
           </tr>
         )}
       />
-
       <Section
         title="Week totals"
         rows={weekRows}
@@ -138,7 +150,6 @@ export default async function ExpensesPage() {
           </tr>
         )}
       />
-
       <Section
         title="Day totals"
         rows={dayRows}
@@ -152,7 +163,6 @@ export default async function ExpensesPage() {
           </tr>
         )}
       />
-
       <Section
         title="Quarter totals"
         rows={qtrRows}
@@ -164,7 +174,6 @@ export default async function ExpensesPage() {
           </tr>
         )}
       />
-
       <Section
         title="Year totals"
         rows={yearRows}
@@ -176,7 +185,6 @@ export default async function ExpensesPage() {
           </tr>
         )}
       />
-
       <Section
         title="Top categories (YTD)"
         rows={catRows}

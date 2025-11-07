@@ -2,11 +2,27 @@ import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { effectiveTenantId } from "@/lib/effective-tenant";
 import ExpensesEditorClient from "@/components/ExpensesEditorClient";
+import { effectivePlan, canUseFeature } from "@/lib/plan";
+export const dynamic = "force-dynamic";
 
 export default async function ExpensesManagePage() {
+  // PLAN GATE
+  const plan = await effectivePlan();
+  const canAccessExpenses = canUseFeature(plan, "expenses_access");
+  if (!canAccessExpenses) {
+    return (
+      <main className="max-w-3xl mx-auto p-6 text-center">
+        <h1 className="text-2xl font-semibold mb-2">Expenses</h1>
+        <p className="opacity-80">Your current plan doesn’t include Expenses features.</p>
+        <a href="/profile" className="inline-block mt-3 border rounded px-4 py-2 hover:bg-neutral-900">
+          Upgrade plan
+        </a>
+      </main>
+    );
+  }
+
   // Keep SSR client initialization (used elsewhere on page as needed)
   const _supabase = await createServerClient();
-
   // New helper takes NO arguments
   const { tenantId, useDemo } = await effectiveTenantId();
 
@@ -36,7 +52,6 @@ export default async function ExpensesManagePage() {
         </div>
       ) : (
         // NOTE: ExpensesEditorClient historically accepts a string tenantId.
-        // Pass the resolved id only when available to avoid type/runtime issues.
         <ExpensesEditorClient tenantId={tenantId} />
       )}
     </main>
