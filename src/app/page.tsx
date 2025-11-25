@@ -14,11 +14,16 @@ export default async function HomePage() {
     <main className="max-w-5xl mx-auto p-6">
       {/* Hero */}
       <section className="pt-6 pb-8">
-        <h1 className="text-4xl font-semibold tracking-tight">Kiori Solutions</h1>
+        <p className="inline-flex items-center gap-2 rounded-full border border-emerald-600/60 bg-emerald-900/20 px-3 py-1 text-xs font-medium text-emerald-300">
+          <span className="h-2 w-2 rounded-full bg-emerald-400" />
+          Beta • Core features ready • Starter is free while we collect feedback
+        </p>
+
+        <h1 className="mt-4 text-4xl font-semibold tracking-tight">Kiori Solutions</h1>
         <p className="mt-3 text-neutral-300 leading-relaxed max-w-3xl">
-          Simple back-of-house for small restaurants: inventory, purchases,
-          recipes, menu costing, and sales &amp; expenses tracking. Built to make
-          day-to-day kitchen math obvious—so owners can price confidently.
+          Back-of-house tools for small kitchens: inventory, recipes, menu costing,
+          sales &amp; expenses, and a built-in dashboard. Designed for owner-operators
+          who want numbers they can trust without hiring a data team.
         </p>
 
         <div className="mt-6 flex flex-wrap gap-3">
@@ -26,48 +31,117 @@ export default async function HomePage() {
             <CTAButton href="/dashboard" label="Go to dashboard" />
           ) : (
             <>
-              <CTAButton href="/login" label="Sign in / Create account" />
-              <GhostButton href="/menu" label="View demo: Menu →" />
+              <CTAButton href="/login" label="Start free • Sign in / Create account" />
+              <GhostButton href="/menu" label="View live demo menu →" />
             </>
           )}
           <GhostButton href="/help" label="How it works" />
         </div>
+
+        <p className="mt-3 text-xs text-neutral-400 max-w-2xl">
+          No credit card required for the Starter plan during beta. If you find a bug
+          or something feels confusing, you&apos;re helping shape the product—just let
+          us know and we&apos;ll fix it as soon as possible.
+        </p>
       </section>
 
       {/* Feature tiles */}
       <section className="mt-6">
-        <h2 className="text-xl font-semibold">What’s inside</h2>
+        <h2 className="text-xl font-semibold">What’s inside right now</h2>
+        <p className="mt-2 text-sm text-neutral-400 max-w-3xl">
+          All of these modules are wired together for a single tenant: import
+          your data once and see it reflected across recipes, menu pricing,
+          and the dashboard.
+        </p>
         <div className="grid md:grid-cols-3 gap-6 mt-4">
           <CTACard
             href="/inventory"
             title="Inventory →"
-            blurb="Track items, purchases, and daily counts. Inline $/base auto-calc."
+            blurb="Track items, purchases, and daily counts. Cost-per-base-unit auto-calculated from your last price."
           />
           <CTACard
             href="/recipes"
             title="Recipes →"
-            blurb="Per-serving costs and “Makeable” based on stock on hand."
+            blurb="Per-serving cost and Makeable count based on stock on hand, including sub-recipes."
           />
           <CTACard
             href="/menu"
-            title="Menu →"
-            blurb="Build menus, save/load, share read-only links, and print."
+            title="Menu builder →"
+            blurb="Build menus from recipes, set margins, round prices, save/load versions, and print or share read-only links."
           />
           <CTACard
             href="/sales"
             title="Sales →"
-            blurb="Import sales CSVs and see day/week/month/quarter/year totals."
+            blurb="Import sales CSVs and see day / week / month / quarter / year totals in one place."
           />
           <CTACard
             href="/expenses"
             title="Expenses →"
-            blurb="Log or import expenses. Category totals feed the dashboard."
+            blurb="Log or import expenses. Category and time-period totals feed straight into the dashboard."
           />
           <CTACard
             href="/staff/manage"
             title="Staff →"
-            blurb="Keep a simple roster for exports and admin tasks."
+            blurb="Keep a simple roster for exports and admin tasks (Basic plan and up)."
           />
+        </div>
+      </section>
+
+      {/* Plans snapshot */}
+      <section className="mt-10">
+        <h2 className="text-xl font-semibold">Plans &amp; tiers (beta snapshot)</h2>
+        <p className="mt-2 text-sm text-neutral-400 max-w-3xl">
+          Pricing and limits are still in motion, but this is the working model we&apos;re
+          testing with early users. You can start on Starter and upgrade later—your data
+          comes with you.
+        </p>
+        <div className="mt-4 grid gap-4 md:grid-cols-4 text-sm">
+          <div className="rounded-lg border border-neutral-800 p-4">
+            <div className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
+              Starter
+            </div>
+            <div className="mt-1 text-lg font-semibold">$0 / month</div>
+            <ul className="mt-3 space-y-1 text-xs text-neutral-300">
+              <li>• 1 location</li>
+              <li>• Core modules (Inventory, Recipes, Menu, Sales, Expenses)</li>
+              <li>• Limited history</li>
+              <li>• Manual data entry (no photo uploads)</li>
+            </ul>
+          </div>
+          <div className="rounded-lg border border-emerald-700 p-4 bg-emerald-900/10">
+            <div className="text-xs font-semibold uppercase tracking-wide text-emerald-300">
+              Basic
+            </div>
+            <div className="mt-1 text-lg font-semibold">$49 / month</div>
+            <ul className="mt-3 space-y-1 text-xs text-neutral-200">
+              <li>• Everything in Starter</li>
+              <li>• Staff accounts</li>
+              <li>• Receipt photo upload</li>
+              <li>• Longer data history &amp; exports</li>
+            </ul>
+          </div>
+          <div className="rounded-lg border border-neutral-800 p-4">
+            <div className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
+              Pro
+            </div>
+            <div className="mt-1 text-lg font-semibold">$99 / month</div>
+            <ul className="mt-3 space-y-1 text-xs text-neutral-300">
+              <li>• Everything in Basic</li>
+              <li>• AI-flavored reports &amp; suggestions (coming online)</li>
+              <li>• Custom branding options</li>
+            </ul>
+          </div>
+          <div className="rounded-lg border border-neutral-800 p-4">
+            <div className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
+              Enterprise
+            </div>
+            <div className="mt-1 text-lg font-semibold">$499 / month</div>
+            <ul className="mt-3 space-y-1 text-xs text-neutral-300">
+              <li>• Early access waitlist</li>
+              <li>• Multi-location support</li>
+              <li>• Whitelabel dashboards &amp; reports</li>
+            </ul>
+          </div>
         </div>
       </section>
 
@@ -75,32 +149,41 @@ export default async function HomePage() {
       <section className="mt-10">
         <h2 className="text-xl font-semibold">Built-in dashboard</h2>
         <ul className="list-disc pl-5 mt-3 space-y-2 text-neutral-300">
-          <li>Sales &amp; expenses cards: daily, weekly, monthly, YTD.</li>
-          <li>7-day mini tables for quick trend checks.</li>
-          <li>ISO week, YYYY-MM, and YYYY labels—exact view names expected by the UI.</li>
+          <li>Sales &amp; expenses cards for daily, weekly, monthly, and year-to-date.</li>
+          <li>Time-bucketed tables (day / ISO week / month / quarter / year) that match the UI labels.</li>
+          <li>Top / bottom products and expense categories so you know what&apos;s driving your numbers.</li>
         </ul>
         <div className="mt-4">
           <GhostButton href="/dashboard" label="Open dashboard" />
         </div>
       </section>
 
-      {/* Roadmap */}
+      {/* Beta status */}
       <section className="mt-10">
-        <h2 className="text-xl font-semibold">Near-term polish</h2>
-        <ul className="list-disc pl-5 mt-3 space-y-2">
-          <li>Copy &amp; empty-states cleanup across pages.</li>
-          <li>Consistent money/qty/date formatting.</li>
-          <li>Import flows: clearer errors and template parity.</li>
-          <li>Optional color/theme refresh (without structural changes).</li>
+        <h2 className="text-xl font-semibold">What “beta” means here</h2>
+        <ul className="list-disc pl-5 mt-3 space-y-2 text-neutral-300">
+          <li>Core flows are stable: Inventory → Recipes → Menu → Sales &amp; Expenses → Dashboard.</li>
+          <li>Some screens are still rough around the edges (copy / spacing / visuals).</li>
+          <li>AI reports, deeper staff tools, and multi-location features are on the roadmap.</li>
+          <li>
+            If something breaks, you&apos;ll see a clear error and we&apos;ll treat your report as a
+            top priority.
+          </li>
         </ul>
       </section>
 
       {/* Footer */}
       <footer className="pt-10 pb-6 text-sm text-neutral-400">
         <div className="flex flex-wrap gap-5">
-          <Link href="/privacy" className="underline">Privacy policy</Link>
-          <Link href="/terms" className="underline">Terms of service</Link>
-          <a href="mailto:bluecarpetllc@gmail.com" className="underline">Contact us</a>
+          <Link href="/privacy" className="underline">
+            Privacy policy
+          </Link>
+          <Link href="/terms" className="underline">
+            Terms of service
+          </Link>
+          <a href="mailto:bluecarpetllc@gmail.com" className="underline">
+            Contact us
+          </a>
         </div>
         <div className="mt-4">© {new Date().getFullYear()} Kiori Solutions</div>
       </footer>
