@@ -3,6 +3,7 @@ import "server-only";
 import { createServerClient } from "@/lib/supabase/server";
 
 export type Plan = "starter" | "basic" | "pro" | "enterprise";
+
 export const PLAN_ORDER: Plan[] = ["starter", "basic", "pro", "enterprise"];
 
 /** All feature flags we gate in the app */
@@ -11,20 +12,44 @@ export type FeatureKey =
   | "staff_accounts"
   | "receipt_photo_upload"
   | "sales_access"
-  | "expenses_access"     // ← added
+  | "expenses_access"
   | "menu_builder"
   | "ai_reports"
   | "custom_branding";
 
-/** Minimum plan required for each feature */
+/**
+ * Minimum plan required for each feature.
+ *
+ * IMPORTANT: This is the source of truth for tier gating.
+ * - Starter should have Inventory, Sales, Expenses, Recipes/Menu.
+ * - Basic unlocks receipt photos, trends, PDFs, etc.
+ * - Pro unlocks Staff, AI, Branding, POS, etc.
+ * - Enterprise extends Pro with multi-location & API (handled elsewhere).
+ */
 const FEATURE_MIN_PLAN: Record<FeatureKey, Plan> = {
-  inventory_access: "basic",
-  staff_accounts: "basic",
-  receipt_photo_upload: "basic", // Starter still allowed CSV-only flows elsewhere in UI logic
-  sales_access: "basic",
-  expenses_access: "basic",      // ← Basic+
-  menu_builder: "basic",
-  ai_reports: "pro",             // Financials/Insights gating
+  // Starter has full access to inventory flows
+  inventory_access: "starter",
+
+  // Staff module (tab, accounts, schedules, payroll) is Pro+
+  staff_accounts: "pro",
+
+  // Receipt photo upload is Basic+
+  // Starter can still use CSV-only flows handled in the UI.
+  receipt_photo_upload: "basic",
+
+  // Starter can use Sales flows (with 3-month history cap in UI logic)
+  sales_access: "starter",
+
+  // Starter can also track Expenses
+  expenses_access: "starter",
+
+  // Menu builder / recipes are Starter+
+  menu_builder: "starter",
+
+  // AI dashboards / AI financial insights are Pro+
+  ai_reports: "pro",
+
+  // Custom branding is Pro+
   custom_branding: "pro",
 };
 
@@ -47,7 +72,7 @@ export async function effectivePlan(): Promise<Plan> {
     .maybeSingle();
 
   const raw = (prof?.plan as Plan | null) ?? "starter";
-  // normalize any weird/legacy values
+
+  // Normalize any weird/legacy values
   return PLAN_ORDER.includes(raw) ? raw : "starter";
 }
- 
