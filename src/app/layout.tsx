@@ -18,6 +18,17 @@ export const metadata = {
     title: "Kiori Solutions",
     description: "Smart kitchen management tools for food entrepreneurs",
   },
+  icons: {
+    icon: "/kiori-icon-32.png",                 // browser tab
+    shortcut: "/kiori-favicon.ico",             // legacy fallback
+    apple: "/kiori-apple-touch-icon.png",       // iOS home screen
+    other: [
+      {
+        rel: "mask-icon",
+        url: "/kiori-maskable-icon-512.png",    // Android / PWA maskable icon
+      },
+    ],
+  },
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
