@@ -1,3 +1,4 @@
+// src/app/staff/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { getEffectiveTenant } from "@/lib/effective-tenant";
@@ -67,11 +68,19 @@ export default async function StaffPage() {
 
   const { data: rows } = await supabase
     .from("employees")
-    .select("id, display_name, role, pay_type, pay_rate_usd, is_active")
+    .select(
+      "id, display_name, role, pay_type, pay_rate_usd, is_active"
+    )
     .eq("tenant_id", tenantId)
     .order("display_name", { ascending: true });
 
   const emps = (rows ?? []) as Emp[];
+
+  // Simple at-a-glance stats (no schema guesses)
+  const totalCount = emps.length;
+  const activeCount = emps.filter((e) => e.is_active).length;
+  const hourlyCount = emps.filter((e) => e.pay_type === "hourly").length;
+  const salaryCount = emps.filter((e) => e.pay_type === "salary").length;
 
   return (
     <main className="max-w-6xl mx-auto p-6 space-y-4">
@@ -101,6 +110,36 @@ export default async function StaffPage() {
           </Link>
         </div>
       </div>
+
+      {/* At-a-glance metrics */}
+      <section className="grid gap-3 md:grid-cols-4 text-sm">
+        <div className="rounded-lg border border-neutral-800 p-3">
+          <div className="text-xs uppercase tracking-wide text-neutral-400">
+            Total staff
+          </div>
+          <div className="mt-1 text-lg font-semibold">{totalCount}</div>
+        </div>
+        <div className="rounded-lg border border-neutral-800 p-3">
+          <div className="text-xs uppercase tracking-wide text-neutral-400">
+            Active
+          </div>
+          <div className="mt-1 text-lg font-semibold">{activeCount}</div>
+        </div>
+        <div className="rounded-lg border border-neutral-800 p-3">
+          <div className="text-xs uppercase tracking-wide text-neutral-400">
+            Hourly
+          </div>
+          <div className="mt-1 text-lg font-semibold">{hourlyCount}</div>
+        </div>
+        <div className="rounded-lg border border-neutral-800 p-3">
+          <div className="text-xs uppercase tracking-wide text-neutral-400">
+            Salary
+          </div>
+          <div className="mt-1 text-lg font-semibold">{salaryCount}</div>
+        </div>
+      </section>
+
+      {/* Roster table (existing behavior) */}
       <div className="border rounded-lg overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-neutral-900/60">
