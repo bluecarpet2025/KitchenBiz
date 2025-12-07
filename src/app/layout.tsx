@@ -3,6 +3,7 @@ import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import SignOutButton from "@/components/SignOutButton";
 import TopNavButton from "@/components/TopNavButton";
+import { effectivePlan, canUseFeature } from "@/lib/plan";
 
 export const metadata = {
   title: "Kiori Solutions",
@@ -31,9 +32,15 @@ export const metadata = {
   },
 };
 
-export default async function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const supabase = await createServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   let display = "";
   if (user) {
@@ -45,6 +52,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     display = prof?.display_name || user.email || "";
   }
 
+  // Plan-based nav visibility
+  const plan = await effectivePlan();
+  const showStaff = canUseFeature(plan, "staff_accounts");
+
   return (
     <html lang="en">
       <body>
@@ -54,17 +65,31 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           className="print:hidden sticky top-0 z-50 flex items-center justify-between px-4 sm:px-6 py-3 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur supports-[backdrop-filter]:bg-neutral-950/75"
         >
           <nav className="flex items-center gap-4">
-            <Link href="/" className="font-semibold">Kiori Solutions</Link>
-
+            <Link href="/" className="font-semibold">
+              Kiori Solutions
+            </Link>
             {/* ORDER: Inventory | Recipes | Menu | Financials | Staff | Dashboard */}
-            <Link href="/inventory" className="hover:underline">Inventory</Link>
-            <Link href="/recipes" className="hover:underline">Recipes</Link>
-            <Link href="/menu" className="hover:underline">Menu</Link>
-            <Link href="/financial" className="hover:underline">Financials</Link>
-            <Link href="/staff" className="hover:underline">Staff</Link>
-            <Link href="/dashboard" className="hover:underline">Dashboard</Link>
+            <Link href="/inventory" className="hover:underline">
+              Inventory
+            </Link>
+            <Link href="/recipes" className="hover:underline">
+              Recipes
+            </Link>
+            <Link href="/menu" className="hover:underline">
+              Menu
+            </Link>
+            <Link href="/financial" className="hover:underline">
+              Financials
+            </Link>
+            {showStaff && (
+              <Link href="/staff" className="hover:underline">
+                Staff
+              </Link>
+            )}
+            <Link href="/dashboard" className="hover:underline">
+              Dashboard
+            </Link>
           </nav>
-
           <nav className="flex items-center gap-4">
             {user ? (
               <>
@@ -84,12 +109,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                 Log in / Sign up
               </Link>
             )}
-
             {/* Shared button component for Help / FAQ */}
             <TopNavButton href="/help" label="Help / FAQ" />
           </nav>
         </header>
-
         {children}
       </body>
     </html>

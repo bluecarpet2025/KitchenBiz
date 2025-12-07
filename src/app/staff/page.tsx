@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { getEffectiveTenant } from "@/lib/effective-tenant";
-import { effectivePlan, canUseFeature } from "@/lib/plan"; // 🆕 Added import
+import { effectivePlan, canUseFeature } from "@/lib/plan";
 
 export const dynamic = "force-dynamic";
 
@@ -31,21 +31,25 @@ export default async function StaffPage() {
     );
   }
 
-  // 🆕 Get user plan and enforce access
+  // Plan gating: Staff is Pro+ only
   const plan = await effectivePlan();
   if (!canUseFeature(plan, "staff_accounts")) {
     return (
       <main className="max-w-6xl mx-auto p-6">
         <h1 className="text-2xl font-semibold mb-3">Upgrade Required</h1>
         <p className="opacity-80">
-          The Staff module is available starting with the{" "}
-          <strong>Basic plan</strong>.
+          The Staff module (accounts, schedules, and payroll) is available
+          starting with the <strong>Pro plan</strong>.
         </p>
-        <p className="mt-3">
+        <p className="mt-2 opacity-80">
+          <strong>Enterprise</strong> includes everything in Pro plus unlimited
+          locations and users under a single account.
+        </p>
+        <p className="mt-4">
           <Link href="/profile" className="underline">
             Go to Profile
           </Link>{" "}
-          to upgrade your plan.
+          to view plans and upgrade your account.
         </p>
       </main>
     );
@@ -97,7 +101,6 @@ export default async function StaffPage() {
           </Link>
         </div>
       </div>
-
       <div className="border rounded-lg overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-neutral-900/60">
@@ -116,9 +119,14 @@ export default async function StaffPage() {
                 <td className="p-2">{e.role ?? "—"}</td>
                 <td className="p-2 text-center">{e.pay_type ?? "—"}</td>
                 <td className="p-2 text-right">
-                  {(Number(e.pay_rate_usd ?? 0)).toLocaleString(undefined, { style: "currency", currency: "USD" })}
+                  {Number(e.pay_rate_usd ?? 0).toLocaleString(undefined, {
+                    style: "currency",
+                    currency: "USD",
+                  })}
                 </td>
-                <td className="p-2 text-center">{e.is_active ? "✓" : "—"}</td>
+                <td className="p-2 text-center">
+                  {e.is_active ? "✓" : "—"}
+                </td>
               </tr>
             ))}
             {emps.length === 0 && (
@@ -134,4 +142,3 @@ export default async function StaffPage() {
     </main>
   );
 }
- 
