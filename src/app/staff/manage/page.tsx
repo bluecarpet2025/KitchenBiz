@@ -24,7 +24,7 @@ export default async function StaffManagePage() {
     );
   }
 
-  // Plan gating: Staff is Pro+ only
+  // Staff module is Pro+ only
   const plan = await effectivePlan();
   if (!canUseFeature(plan, "staff_accounts")) {
     return (

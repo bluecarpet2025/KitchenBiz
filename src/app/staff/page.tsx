@@ -15,6 +15,13 @@ type Emp = {
   is_active: boolean | null;
 };
 
+type LaborShift = {
+  id: string;
+  occurred_at: string;
+  hours: string | number;
+  wage_usd: string | number;
+};
+
 export default async function StaffPage() {
   const supabase = await createServerClient();
   const { data: au } = await supabase.auth.getUser();
@@ -32,7 +39,7 @@ export default async function StaffPage() {
     );
   }
 
-  // Plan gating: Staff is Pro+ only
+  // Staff module is Pro+ only
   const plan = await effectivePlan();
   if (!canUseFeature(plan, "staff_accounts")) {
     return (
@@ -59,28 +66,55 @@ export default async function StaffPage() {
   const tenantId = await getEffectiveTenant(supabase);
   if (!tenantId) {
     return (
-      <main className="max-w-6xl mx-auto p-6">
+      <main className="max-w-6xl mx_auto p-6">
         <h1 className="text-2xl font-semibold">Staff</h1>
         <p className="mt-3">Profile missing tenant.</p>
       </main>
     );
   }
 
-  const { data: rows } = await supabase
+  // Fetch staff roster
+  const { data: employeeRows } = await supabase
     .from("employees")
-    .select(
-      "id, display_name, role, pay_type, pay_rate_usd, is_active"
-    )
+    .select("id, display_name, role, pay_type, pay_rate_usd, is_active")
     .eq("tenant_id", tenantId)
     .order("display_name", { ascending: true });
 
-  const emps = (rows ?? []) as Emp[];
+  const emps = (employeeRows ?? []) as Emp[];
 
-  // Simple at-a-glance stats (no schema guesses)
   const totalCount = emps.length;
   const activeCount = emps.filter((e) => e.is_active).length;
   const hourlyCount = emps.filter((e) => e.pay_type === "hourly").length;
   const salaryCount = emps.filter((e) => e.pay_type === "salary").length;
+
+  // Fetch labor shifts for payroll overview
+  const { data: shiftRows } = await supabase
+    .from("labor_shifts")
+    .select("id, occurred_at, hours, wage_usd")
+    .eq("tenant_id", tenantId)
+    .order("occurred_at", { ascending: false })
+    .limit(50); // recent shifts only
+
+  const shifts = (shiftRows ?? []) as LaborShift[];
+
+  const now = new Date();
+  const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+  const recentShifts = shifts.filter((s) => {
+    const d = new Date(s.occurred_at);
+    return now.getTime() - d.getTime() <= THIRTY_DAYS_MS;
+  });
+
+  const totalHours30 = recentShifts.reduce(
+    (sum, s) => sum + Number(s.hours ?? 0),
+    0
+  );
+  const totalWages30 = recentShifts.reduce(
+    (sum, s) => sum + Number(s.hours ?? 0) * Number(s.wage_usd ?? 0),
+    0
+  );
+  const avgWage30 =
+    totalHours30 > 0 ? totalWages30 / totalHours30 : 0;
 
   return (
     <main className="max-w-6xl mx-auto p-6 space-y-4">
@@ -139,45 +173,146 @@ export default async function StaffPage() {
         </div>
       </section>
 
-      {/* Roster table (existing behavior) */}
-      <div className="border rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-neutral-900/60">
-            <tr>
-              <th className="p-2 text-left">Name</th>
-              <th className="p-2 text-left">Role</th>
-              <th className="p-2">Type</th>
-              <th className="p-2 text-right">Rate (USD)</th>
-              <th className="p-2 text-center">Active</th>
-            </tr>
-          </thead>
-          <tbody>
-            {emps.map((e) => (
-              <tr key={e.id} className="border-t">
-                <td className="p-2">{e.display_name ?? "—"}</td>
-                <td className="p-2">{e.role ?? "—"}</td>
-                <td className="p-2 text-center">{e.pay_type ?? "—"}</td>
-                <td className="p-2 text-right">
-                  {Number(e.pay_rate_usd ?? 0).toLocaleString(undefined, {
-                    style: "currency",
-                    currency: "USD",
-                  })}
-                </td>
-                <td className="p-2 text-center">
-                  {e.is_active ? "✓" : "—"}
-                </td>
-              </tr>
-            ))}
-            {emps.length === 0 && (
+      {/* Payroll overview - last 30 days */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">
+            Labor &amp; payroll (last 30 days)
+          </h2>
+          <p className="text-xs text-neutral-400">
+            Based on entries in <code>labor_shifts</code>.
+          </p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-3 text-sm">
+          <div className="rounded-lg border border-neutral-800 p-3">
+            <div className="text-xs uppercase tracking-wide text-neutral-400">
+              Total hours
+            </div>
+            <div className="mt-1 text-lg font-semibold">
+              {totalHours30.toFixed(2)}
+            </div>
+          </div>
+          <div className="rounded-lg border border-neutral-800 p-3">
+            <div className="text-xs uppercase tracking-wide text-neutral-400">
+              Labor cost
+            </div>
+            <div className="mt-1 text-lg font-semibold">
+              {totalWages30.toLocaleString(undefined, {
+                style: "currency",
+                currency: "USD",
+              })}
+            </div>
+          </div>
+          <div className="rounded-lg border border-neutral-800 p-3">
+            <div className="text-xs uppercase tracking-wide text-neutral-400">
+              Avg hourly wage
+            </div>
+            <div className="mt-1 text-lg font-semibold">
+              {avgWage30.toLocaleString(undefined, {
+                style: "currency",
+                currency: "USD",
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div className="border rounded-lg overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-neutral-900/60">
               <tr>
-                <td className="p-3 text-neutral-400" colSpan={5}>
-                  No employees yet.
-                </td>
+                <th className="p-2 text-left">Date</th>
+                <th className="p-2 text-right">Hours</th>
+                <th className="p-2 text-right">Wage (USD)</th>
+                <th className="p-2 text-right">Cost</th>
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {recentShifts.map((s) => {
+                const dt = new Date(s.occurred_at);
+                const hours = Number(s.hours ?? 0);
+                const wage = Number(s.wage_usd ?? 0);
+                const cost = hours * wage;
+                return (
+                  <tr key={s.id} className="border-t">
+                    <td className="p-2">
+                      {dt.toLocaleDateString(undefined, {
+                        year: "numeric",
+                        month: "short",
+                        day: "numeric",
+                      })}
+                    </td>
+                    <td className="p-2 text-right">
+                      {hours.toFixed(2)}
+                    </td>
+                    <td className="p-2 text-right">
+                      {wage.toLocaleString(undefined, {
+                        style: "currency",
+                        currency: "USD",
+                      })}
+                    </td>
+                    <td className="p-2 text-right">
+                      {cost.toLocaleString(undefined, {
+                        style: "currency",
+                        currency: "USD",
+                      })}
+                    </td>
+                  </tr>
+                );
+              })}
+              {recentShifts.length === 0 && (
+                <tr>
+                  <td className="p-3 text-neutral-400" colSpan={4}>
+                    No labor shifts recorded for the last 30 days.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* Roster table (existing behavior) */}
+      <section>
+        <h2 className="text-lg font-semibold mb-2">Staff roster</h2>
+        <div className="border rounded-lg overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-neutral-900/60">
+              <tr>
+                <th className="p-2 text-left">Name</th>
+                <th className="p-2 text-left">Role</th>
+                <th className="p-2">Type</th>
+                <th className="p-2 text-right">Rate (USD)</th>
+                <th className="p-2 text-center">Active</th>
+              </tr>
+            </thead>
+            <tbody>
+              {emps.map((e) => (
+                <tr key={e.id} className="border-t">
+                  <td className="p-2">{e.display_name ?? "—"}</td>
+                  <td className="p-2">{e.role ?? "—"}</td>
+                  <td className="p-2 text-center">{e.pay_type ?? "—"}</td>
+                  <td className="p-2 text-right">
+                    {Number(e.pay_rate_usd ?? 0).toLocaleString(undefined, {
+                      style: "currency",
+                      currency: "USD",
+                    })}
+                  </td>
+                  <td className="p-2 text-center">
+                    {e.is_active ? "✓" : "—"}
+                  </td>
+                </tr>
+              ))}
+              {emps.length === 0 && (
+                <tr>
+                  <td className="p-3 text-neutral-400" colSpan={5}>
+                    No employees yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </main>
   );
 }
