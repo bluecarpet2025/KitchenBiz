@@ -19,11 +19,14 @@ export default async function HomePage() {
           Beta • Core features ready • Starter is free while we collect feedback
         </p>
 
-        <h1 className="mt-4 text-4xl font-semibold tracking-tight">Kiori Solutions</h1>
+        <h1 className="mt-4 text-4xl font-semibold tracking-tight">
+          Kiori Solutions
+        </h1>
         <p className="mt-3 text-neutral-300 leading-relaxed max-w-3xl">
-          Back-of-house tools for small kitchens: inventory, recipes, menu costing,
-          sales &amp; expenses, and a built-in dashboard. Designed for owner-operators
-          who want numbers they can trust without hiring a data team.
+          Back-of-house tools for small kitchens: inventory, recipes, menu
+          costing, sales &amp; expenses, and a built-in dashboard. Designed for
+          owner-operators who want numbers they can trust without hiring a data
+          team.
         </p>
 
         <div className="mt-6 flex flex-wrap gap-3">
@@ -31,7 +34,10 @@ export default async function HomePage() {
             <CTAButton href="/dashboard" label="Go to dashboard" />
           ) : (
             <>
-              <CTAButton href="/login" label="Start free • Sign in / Create account" />
+              <CTAButton
+                href="/login"
+                label="Start free • Sign in / Create account"
+              />
               <GhostButton href="/menu" label="View live demo menu →" />
             </>
           )}
@@ -39,9 +45,9 @@ export default async function HomePage() {
         </div>
 
         <p className="mt-3 text-xs text-neutral-400 max-w-2xl">
-          No credit card required for the Starter plan during beta. If you find a bug
-          or something feels confusing, you&apos;re helping shape the product—just let
-          us know and we&apos;ll fix it as soon as possible.
+          No credit card required for the Starter plan during beta. If you find
+          a bug or something feels confusing, you&apos;re helping shape the
+          product—just let us know and we&apos;ll fix it as soon as possible.
         </p>
       </section>
 
@@ -50,8 +56,8 @@ export default async function HomePage() {
         <h2 className="text-xl font-semibold">What’s inside right now</h2>
         <p className="mt-2 text-sm text-neutral-400 max-w-3xl">
           All of these modules are wired together for a single tenant: import
-          your data once and see it reflected across recipes, menu pricing,
-          and the dashboard.
+          your data once and see it reflected across recipes, menu pricing, and
+          the dashboard.
         </p>
         <div className="grid md:grid-cols-3 gap-6 mt-4">
           <CTACard
@@ -82,7 +88,7 @@ export default async function HomePage() {
           <CTACard
             href="/staff/manage"
             title="Staff →"
-            blurb="Keep a simple roster for exports and admin tasks (Basic plan and up)."
+            blurb="Manage staff accounts, schedules, and payroll (Pro plan and up)."
           />
         </div>
       </section>
@@ -91,11 +97,12 @@ export default async function HomePage() {
       <section className="mt-10">
         <h2 className="text-xl font-semibold">Plans &amp; tiers (beta snapshot)</h2>
         <p className="mt-2 text-sm text-neutral-400 max-w-3xl">
-          Pricing and limits are still in motion, but this is the working model we&apos;re
-          testing with early users. You can start on Starter and upgrade later—your data
-          comes with you.
+          Pricing and limits are still in motion, but this is the working model
+          we&apos;re testing with early users. You can start on Starter and
+          upgrade later—your data comes with you.
         </p>
         <div className="mt-4 grid gap-4 md:grid-cols-4 text-sm">
+          {/* Starter */}
           <div className="rounded-lg border border-neutral-800 p-4">
             <div className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
               Starter
@@ -103,11 +110,13 @@ export default async function HomePage() {
             <div className="mt-1 text-lg font-semibold">$0 / month</div>
             <ul className="mt-3 space-y-1 text-xs text-neutral-300">
               <li>• 1 location</li>
-              <li>• Core modules (Inventory, Recipes, Menu, Sales, Expenses)</li>
-              <li>• Limited history</li>
-              <li>• Manual data entry (no photo uploads)</li>
+              <li>• Inventory, Recipes, Menu, Sales, Expenses</li>
+              <li>• Up to 3 months of history</li>
+              <li>• Manual data entry only (no photos)</li>
             </ul>
           </div>
+
+          {/* Basic */}
           <div className="rounded-lg border border-emerald-700 p-4 bg-emerald-900/10">
             <div className="text-xs font-semibold uppercase tracking-wide text-emerald-300">
               Basic
@@ -115,11 +124,13 @@ export default async function HomePage() {
             <div className="mt-1 text-lg font-semibold">$49 / month</div>
             <ul className="mt-3 space-y-1 text-xs text-neutral-200">
               <li>• Everything in Starter</li>
-              <li>• Staff accounts</li>
+              <li>• Unlimited history</li>
               <li>• Receipt photo upload</li>
-              <li>• Longer data history &amp; exports</li>
+              <li>• Trend views &amp; PDF/CSV exports</li>
             </ul>
           </div>
+
+          {/* Pro */}
           <div className="rounded-lg border border-neutral-800 p-4">
             <div className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
               Pro
@@ -127,10 +138,13 @@ export default async function HomePage() {
             <div className="mt-1 text-lg font-semibold">$99 / month</div>
             <ul className="mt-3 space-y-1 text-xs text-neutral-300">
               <li>• Everything in Basic</li>
-              <li>• AI-flavored reports &amp; suggestions (coming online)</li>
-              <li>• Custom branding options</li>
+              <li>• Staff module (accounts, schedules, payroll)</li>
+              <li>• AI analytics &amp; suggestions (rolling out)</li>
+              <li>• Custom branding &amp; POS integration</li>
             </ul>
           </div>
+
+          {/* Enterprise */}
           <div className="rounded-lg border border-neutral-800 p-4">
             <div className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
               Enterprise
@@ -138,8 +152,9 @@ export default async function HomePage() {
             <div className="mt-1 text-lg font-semibold">$499 / month</div>
             <ul className="mt-3 space-y-1 text-xs text-neutral-300">
               <li>• Early access waitlist</li>
-              <li>• Multi-location support</li>
-              <li>• Whitelabel dashboards &amp; reports</li>
+              <li>• Unlimited locations &amp; users</li>
+              <li>• White-label dashboard &amp; custom domain</li>
+              <li>• API access &amp; custom integrations</li>
             </ul>
           </div>
         </div>
@@ -149,9 +164,18 @@ export default async function HomePage() {
       <section className="mt-10">
         <h2 className="text-xl font-semibold">Built-in dashboard</h2>
         <ul className="list-disc pl-5 mt-3 space-y-2 text-neutral-300">
-          <li>Sales &amp; expenses cards for daily, weekly, monthly, and year-to-date.</li>
-          <li>Time-bucketed tables (day / ISO week / month / quarter / year) that match the UI labels.</li>
-          <li>Top / bottom products and expense categories so you know what&apos;s driving your numbers.</li>
+          <li>
+            Sales &amp; expenses cards for daily, weekly, monthly, and
+            year-to-date.
+          </li>
+          <li>
+            Time-bucketed tables (day / ISO week / month / quarter / year) that
+            match the UI labels.
+          </li>
+          <li>
+            Top / bottom products and expense categories so you know what&apos;s
+            driving your numbers.
+          </li>
         </ul>
         <div className="mt-4">
           <GhostButton href="/dashboard" label="Open dashboard" />
@@ -162,12 +186,21 @@ export default async function HomePage() {
       <section className="mt-10">
         <h2 className="text-xl font-semibold">What “beta” means here</h2>
         <ul className="list-disc pl-5 mt-3 space-y-2 text-neutral-300">
-          <li>Core flows are stable: Inventory → Recipes → Menu → Sales &amp; Expenses → Dashboard.</li>
-          <li>Some screens are still rough around the edges (copy / spacing / visuals).</li>
-          <li>AI reports, deeper staff tools, and multi-location features are on the roadmap.</li>
           <li>
-            If something breaks, you&apos;ll see a clear error and we&apos;ll treat your report as a
-            top priority.
+            Core flows are stable: Inventory → Recipes → Menu → Sales &amp;
+            Expenses → Dashboard.
+          </li>
+          <li>
+            Some screens are still rough around the edges (copy / spacing /
+            visuals).
+          </li>
+          <li>
+            AI reports, deeper staff tools, and multi-location features are on
+            the roadmap and will arrive tiered by plan.
+          </li>
+          <li>
+            If something breaks, you&apos;ll see a clear error and we&apos;ll
+            treat your report as a top priority.
           </li>
         </ul>
       </section>
@@ -181,11 +214,13 @@ export default async function HomePage() {
           <Link href="/terms" className="underline">
             Terms of service
           </Link>
-          <a href="mailto:bluecarpetllc@gmail.com" className="underline">
+          <a href="mailto:support@kiorisolutions.com" className="underline">
             Contact us
           </a>
         </div>
-        <div className="mt-4">© {new Date().getFullYear()} Kiori Solutions</div>
+        <div className="mt-4">
+          © {new Date().getFullYear()} Kiori Solutions
+        </div>
       </footer>
     </main>
   );
