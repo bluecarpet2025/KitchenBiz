@@ -63,7 +63,7 @@ export default async function StaffPage() {
     );
   }
 
-  const tenantId = await getEffectiveTenant(supabase);
+  const tenantId = await getEffectiveTenant();
   if (!tenantId) {
     return (
       <main className="max-w-6xl mx-auto p-6">
@@ -93,7 +93,7 @@ export default async function StaffPage() {
     .select("id, occurred_at, hours, wage_usd")
     .eq("tenant_id", tenantId)
     .order("occurred_at", { ascending: false })
-    .limit(200); // recent shifts only
+    .limit(200);
 
   const shifts = (shiftRows ?? []) as LaborShift[];
 
@@ -120,8 +120,7 @@ export default async function StaffPage() {
     (sum, s) => sum + Number(s.hours ?? 0) * Number(s.wage_usd ?? 0),
     0
   );
-  const avgWage30 =
-    totalHours30 > 0 ? totalWages30 / totalHours30 : 0;
+  const avgWage30 = totalHours30 > 0 ? totalWages30 / totalHours30 : 0;
 
   // Schedule-by-day: aggregate last 14 days of shifts
   const scheduleMap = new Map<
@@ -160,6 +159,13 @@ export default async function StaffPage() {
             prefetch={false}
           >
             Manage
+          </Link>
+          <Link
+            href="/staff/schedule"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+            prefetch={false}
+          >
+            Schedule
           </Link>
           <Link
             href="/staff/import"
@@ -206,7 +212,7 @@ export default async function StaffPage() {
         </div>
       </section>
 
-      {/* Schedule by day (simple calendar-style list) */}
+      {/* Schedule by day (last 14 days) */}
       <section className="space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">
