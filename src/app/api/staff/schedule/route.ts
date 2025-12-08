@@ -26,6 +26,7 @@ export async function POST(req: Request) {
 
   if (action === "create") {
     const { employeeId, shiftDate, hours, notes } = body;
+
     const { data, error } = await supabase
       .from("staff_schedules")
       .insert({
@@ -51,6 +52,7 @@ export async function POST(req: Request) {
 
   if (action === "delete") {
     const { id } = body;
+
     const { error } = await supabase
       .from("staff_schedules")
       .delete()
