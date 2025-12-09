@@ -13,6 +13,8 @@ type ScheduleRow = {
   id: string;
   employee_id: string;
   shift_date: string; // YYYY-MM-DD
+  start_time: string; // HH:MM:SS
+  end_time: string;   // HH:MM:SS
   hours: number;
   notes: string | null;
 };
@@ -26,7 +28,7 @@ type ViewMode = "week" | "month";
 
 type CalendarDay = {
   date: Date;
-  dateKey: string; // YYYY-MM-DD
+  dateKey: string;
   inCurrentMonth: boolean;
 };
 
@@ -41,10 +43,12 @@ export default function StaffScheduleClient({
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>(
     employees[0]?.id ?? ""
   );
-  const [hours, setHours] = useState<string>("8");
+  const [startTime, setStartTime] = useState<string>("09:00");
+  const [endTime, setEndTime] = useState<string>("17:00");
   const [notes, setNotes] = useState<string>("");
 
-  const [schedules, setSchedules] = useState<ScheduleRow[]>(initialSchedules);
+  const [schedules, setSchedules] =
+    useState<ScheduleRow[]>(initialSchedules);
 
   const days = useMemo(
     () => buildCalendarDays(currentDate, view),
@@ -57,6 +61,13 @@ export default function StaffScheduleClient({
       const key = s.shift_date;
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(s);
+    }
+    // keep shifts ordered by start_time
+    for (const [key, arr] of map) {
+      arr.sort((a, b) =>
+        (a.start_time || "").localeCompare(b.start_time || "")
+      );
+      map.set(key, arr);
     }
     return map;
   }, [schedules]);
@@ -80,11 +91,13 @@ export default function StaffScheduleClient({
   async function handleSaveShift() {
     if (!selectedEmployeeId) return;
     const dateKey = toDateKey(selectedDate);
+
     const body = {
-      action: "create",
+      action: "create" as const,
       employeeId: selectedEmployeeId,
       shiftDate: dateKey,
-      hours: Number(hours) || 0,
+      startTime,
+      endTime,
       notes: notes.trim() || null,
     };
 
@@ -122,6 +135,12 @@ export default function StaffScheduleClient({
 
   const selectedKey = toDateKey(selectedDate);
   const selectedDaySchedules = scheduleByDay.get(selectedKey) ?? [];
+
+  function handlePrint() {
+    if (typeof window !== "undefined") {
+      window.print();
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -180,6 +199,13 @@ export default function StaffScheduleClient({
           >
             Month
           </button>
+          <button
+            type="button"
+            className="ml-2 px-3 py-1 rounded border hover:bg-neutral-900 print:hidden"
+            onClick={handlePrint}
+          >
+            Print schedule
+          </button>
         </div>
       </div>
 
@@ -229,7 +255,9 @@ export default function StaffScheduleClient({
                         key={s.id}
                         className="truncate text-[11px] text-neutral-200"
                       >
-                        {emp?.display_name ?? "Staff"} · {s.hours}h
+                        {emp?.display_name ?? "Staff"} ·{" "}
+                        {formatTimeShort(s.start_time)}–
+                        {formatTimeShort(s.end_time)}
                       </div>
                     );
                   })}
@@ -278,17 +306,29 @@ export default function StaffScheduleClient({
                 ))}
               </select>
             </div>
-            <div>
-              <label className="text-xs text-neutral-400 block mb-1">
-                Hours
-              </label>
-              <input
-                type="number"
-                step="0.25"
-                className="w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1"
-                value={hours}
-                onChange={(e) => setHours(e.target.value)}
-              />
+            <div className="flex items-center gap-2">
+              <div className="flex-1">
+                <label className="text-xs text-neutral-400 block mb-1">
+                  Start time
+                </label>
+                <input
+                  type="time"
+                  className="w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1"
+                  value={startTime}
+                  onChange={(e) => setStartTime(e.target.value)}
+                />
+              </div>
+              <div className="flex-1">
+                <label className="text-xs text-neutral-400 block mb-1">
+                  End time
+                </label>
+                <input
+                  type="time"
+                  className="w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1"
+                  value={endTime}
+                  onChange={(e) => setEndTime(e.target.value)}
+                />
+              </div>
             </div>
             <div>
               <label className="text-xs text-neutral-400 block mb-1">
@@ -325,6 +365,7 @@ export default function StaffScheduleClient({
               <thead className="bg-neutral-900/60">
                 <tr>
                   <th className="p-2 text-left">Employee</th>
+                  <th className="p-2 text-left">Time</th>
                   <th className="p-2 text-right">Hours</th>
                   <th className="p-2 text-left">Notes</th>
                   <th className="p-2 text-right">Actions</th>
@@ -340,7 +381,13 @@ export default function StaffScheduleClient({
                       <td className="p-2">
                         {emp?.display_name ?? "Staff"}
                       </td>
-                      <td className="p-2 text-right">{s.hours}</td>
+                      <td className="p-2">
+                        {formatTimeShort(s.start_time)}–{" "}
+                        {formatTimeShort(s.end_time)}
+                      </td>
+                      <td className="p-2 text-right">
+                        {Number(s.hours ?? 0).toFixed(2)}
+                      </td>
                       <td className="p-2 max-w-[160px] truncate">
                         {s.notes ?? "—"}
                       </td>
@@ -360,7 +407,7 @@ export default function StaffScheduleClient({
                   <tr>
                     <td
                       className="p-3 text-neutral-400 text-center"
-                      colSpan={4}
+                      colSpan={5}
                     >
                       No shifts for this day yet.
                     </td>
@@ -382,7 +429,7 @@ function toDateKey(d: Date): string {
 function buildCalendarDays(current: Date, view: ViewMode): CalendarDay[] {
   const days: CalendarDay[] = [];
   if (view === "week") {
-    // show 2 full weeks: current week + next
+    // current week + next week
     const start = startOfWeek(current);
     for (let i = 0; i < 14; i++) {
       const d = new Date(start);
@@ -394,8 +441,12 @@ function buildCalendarDays(current: Date, view: ViewMode): CalendarDay[] {
       });
     }
   } else {
-    // month view: full weeks covering the month
-    const firstOfMonth = new Date(current.getFullYear(), current.getMonth(), 1);
+    // full calendar month, padded to full weeks (6x7 = 42 days)
+    const firstOfMonth = new Date(
+      current.getFullYear(),
+      current.getMonth(),
+      1
+    );
     const start = startOfWeek(firstOfMonth);
     for (let i = 0; i < 42; i++) {
       const d = new Date(start);
@@ -411,7 +462,18 @@ function buildCalendarDays(current: Date, view: ViewMode): CalendarDay[] {
 }
 
 function startOfWeek(d: Date): Date {
-  const day = d.getDay(); // 0=Sun
-  const diff = d.getDate() - day; // start on Sunday
+  const day = d.getDay(); // 0 = Sun
+  const diff = d.getDate() - day;
   return new Date(d.getFullYear(), d.getMonth(), diff);
+}
+
+function formatTimeShort(time: string | null | undefined): string {
+  if (!time) return "";
+  const [hStr, mStr] = time.split(":");
+  let h = Number(hStr) || 0;
+  const m = Number(mStr) || 0;
+  const ampm = h >= 12 ? "p" : "a";
+  if (h === 0) h = 12;
+  if (h > 12) h -= 12;
+  return `${h}:${m.toString().padStart(2, "0")}${ampm}`;
 }

@@ -16,7 +16,9 @@ type Employee = {
 type ScheduleRow = {
   id: string;
   employee_id: string;
-  shift_date: string;
+  shift_date: string; // YYYY-MM-DD
+  start_time: string; // HH:MM:SS
+  end_time: string;   // HH:MM:SS
   hours: number;
   notes: string | null;
 };
@@ -75,7 +77,7 @@ export default async function StaffSchedulePage() {
 
   const employees = (employeeRows ?? []) as Employee[];
 
-  // For simplicity, fetch schedules for the current month +/- 1 month
+  // Fetch schedules for current month +/- 1 month
   const base = new Date();
   const start = new Date(base.getFullYear(), base.getMonth() - 1, 1);
   const end = new Date(base.getFullYear(), base.getMonth() + 2, 0);
@@ -85,12 +87,14 @@ export default async function StaffSchedulePage() {
 
   const { data: scheduleRows } = await supabase
     .from("staff_schedules")
-    .select("id, employee_id, shift_date, hours, notes")
+    .select(
+      "id, employee_id, shift_date, start_time, end_time, hours, notes"
+    )
     .eq("tenant_id", tenantId)
     .gte("shift_date", startStr)
     .lte("shift_date", endStr);
 
-  const schedules = (scheduleRows ?? []) as ScheduleRow[];
+  const schedules = (scheduleRows ?? []) as unknown as ScheduleRow[];
 
   return (
     <main className="max-w-6xl mx-auto p-6 space-y-4">
@@ -101,12 +105,14 @@ export default async function StaffSchedulePage() {
             Plan weekly and monthly coverage. Click a day to add or edit shifts.
           </p>
         </div>
-        <Link
-          href="/staff"
-          className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
-        >
-          Back to Staff
-        </Link>
+        <div className="flex gap-2">
+          <Link
+            href="/staff"
+            className="px-3 py-2 border rounded-md text-sm hover:bg-neutral-900"
+          >
+            Back to Staff
+          </Link>
+        </div>
       </div>
 
       <StaffScheduleClient

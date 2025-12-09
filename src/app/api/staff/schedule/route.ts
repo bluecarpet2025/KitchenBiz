@@ -25,7 +25,22 @@ export async function POST(req: Request) {
   }
 
   if (action === "create") {
-    const { employeeId, shiftDate, hours, notes } = body;
+    const {
+      employeeId,
+      shiftDate,
+      startTime, // "HH:MM"
+      endTime,   // "HH:MM"
+      notes,
+    } = body as {
+      employeeId: string;
+      shiftDate: string;
+      startTime: string;
+      endTime: string;
+      notes: string | null;
+    };
+
+    // Compute hours from start/end (same-day shift)
+    const hours = computeHours(startTime, endTime);
 
     const { data, error } = await supabase
       .from("staff_schedules")
@@ -33,10 +48,12 @@ export async function POST(req: Request) {
         tenant_id: tenantId,
         employee_id: employeeId,
         shift_date: shiftDate,
+        start_time: startTime,
+        end_time: endTime,
         hours,
         notes,
       })
-      .select("id, employee_id, shift_date, hours, notes")
+      .select("id, employee_id, shift_date, start_time, end_time, hours, notes")
       .single();
 
     if (error) {
@@ -51,7 +68,7 @@ export async function POST(req: Request) {
   }
 
   if (action === "delete") {
-    const { id } = body;
+    const { id } = body as { id: string };
 
     const { error } = await supabase
       .from("staff_schedules")
@@ -71,4 +88,19 @@ export async function POST(req: Request) {
   }
 
   return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+}
+
+function computeHours(start: string, end: string): number {
+  // inputs like "07:00" or "07:00:00"
+  const [sh, sm] = start.split(":").map((n) => Number(n) || 0);
+  const [eh, em] = end.split(":").map((n) => Number(n) || 0);
+
+  const startMinutes = sh * 60 + sm;
+  const endMinutes = eh * 60 + em;
+
+  // same-day only; if end <= start, treat as 0
+  if (endMinutes <= startMinutes) return 0;
+
+  const diffMinutes = endMinutes - startMinutes;
+  return Math.round((diffMinutes / 60) * 100) / 100; // 2 decimals
 }
