@@ -28,8 +28,8 @@ export async function POST(req: Request) {
     const {
       employeeId,
       shiftDate,
-      startTime, // "HH:MM"
-      endTime,   // "HH:MM"
+      startTime,
+      endTime,
       notes,
     } = body as {
       employeeId: string;
@@ -39,9 +39,50 @@ export async function POST(req: Request) {
       notes: string | null;
     };
 
-    // Compute hours from start/end (same-day shift)
     const hours = computeHours(startTime, endTime);
 
+    // Look up pay info for this employee
+    const { data: emp, error: empError } = await supabase
+      .from("employees")
+      .select("pay_type, pay_rate_usd")
+      .eq("id", employeeId)
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+
+    if (empError) {
+      console.error("employee lookup error", empError);
+    }
+
+    let wageUsd = Number(emp?.pay_rate_usd ?? 0);
+
+    // If salary, approximate hourly for payroll purposes.
+    if (emp?.pay_type === "salary" && wageUsd > 0) {
+      wageUsd = wageUsd / 2080; // 40h/week * 52 weeks
+    }
+
+    // Insert into labor_shifts so dashboards & exports see payroll
+    const occurredAtIso = new Date(`${shiftDate}T00:00:00Z`).toISOString();
+
+    const { data: labor, error: laborError } = await supabase
+      .from("labor_shifts")
+      .insert({
+        tenant_id: tenantId,
+        occurred_at: occurredAtIso,
+        hours,
+        wage_usd: wageUsd,
+      })
+      .select("id")
+      .single();
+
+    if (laborError) {
+      console.error("create labor_shift error", laborError);
+      // We still proceed with schedule so the user isn't blocked,
+      // but this day won't show as payroll until we fix the data.
+    }
+
+    const laborShiftId = labor?.id ?? null;
+
+    // Insert schedule row
     const { data, error } = await supabase
       .from("staff_schedules")
       .insert({
@@ -52,8 +93,11 @@ export async function POST(req: Request) {
         end_time: endTime,
         hours,
         notes,
+        labor_shift_id: laborShiftId,
       })
-      .select("id, employee_id, shift_date, start_time, end_time, hours, notes")
+      .select(
+        "id, employee_id, shift_date, start_time, end_time, hours, notes"
+      )
       .single();
 
     if (error) {
@@ -70,18 +114,46 @@ export async function POST(req: Request) {
   if (action === "delete") {
     const { id } = body as { id: string };
 
-    const { error } = await supabase
+    // First fetch the linked labor_shift_id (if any)
+    const { data: schedule, error: schedError } = await supabase
+      .from("staff_schedules")
+      .select("labor_shift_id")
+      .eq("id", id)
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+
+    if (schedError) {
+      console.error("fetch schedule before delete error", schedError);
+    }
+
+    const laborShiftId = schedule?.labor_shift_id as string | null;
+
+    // Delete schedule row
+    const { error: delSchedError } = await supabase
       .from("staff_schedules")
       .delete()
       .eq("id", id)
       .eq("tenant_id", tenantId);
 
-    if (error) {
-      console.error("delete schedule error", error);
+    if (delSchedError) {
+      console.error("delete schedule error", delSchedError);
       return NextResponse.json(
         { error: "Failed to delete shift" },
         { status: 500 }
       );
+    }
+
+    // If linked, delete the labor_shifts row too
+    if (laborShiftId) {
+      const { error: delLaborError } = await supabase
+        .from("labor_shifts")
+        .delete()
+        .eq("id", laborShiftId)
+        .eq("tenant_id", tenantId);
+
+      if (delLaborError) {
+        console.error("delete labor_shift error", delLaborError);
+      }
     }
 
     return NextResponse.json({ ok: true });

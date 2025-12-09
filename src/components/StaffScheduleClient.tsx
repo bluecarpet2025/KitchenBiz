@@ -229,7 +229,7 @@ export default function StaffScheduleClient({
                 type="button"
                 onClick={() => handleSelectDate(day.date)}
                 className={[
-                  "h-28 p-1 border-t border-r text-left align-top overflow-hidden",
+                  "p-1 border-t border-r text-left align-top",
                   !day.inCurrentMonth ? "opacity-40" : "",
                   isSelected ? "bg-neutral-900" : "hover:bg-neutral-900/40",
                 ].join(" ")}
@@ -246,26 +246,21 @@ export default function StaffScheduleClient({
                   )}
                 </div>
                 <div className="space-y-0.5">
-                  {daySchedules.slice(0, 3).map((s) => {
+                  {daySchedules.map((s) => {
                     const emp = employees.find(
                       (e) => e.id === s.employee_id
                     );
+                    const shortName = getShortName(emp?.display_name);
                     return (
                       <div
                         key={s.id}
-                        className="truncate text-[11px] text-neutral-200"
+                        className="text-[11px] text-neutral-200"
                       >
-                        {emp?.display_name ?? "Staff"} ·{" "}
-                        {formatTimeShort(s.start_time)}–
+                        {shortName} · {formatTimeShort(s.start_time)}–
                         {formatTimeShort(s.end_time)}
                       </div>
                     );
                   })}
-                  {daySchedules.length > 3 && (
-                    <div className="text-[10px] text-neutral-400">
-                      +{daySchedules.length - 3} more…
-                    </div>
-                  )}
                 </div>
               </button>
             );
@@ -300,7 +295,7 @@ export default function StaffScheduleClient({
               >
                 {employees.map((e) => (
                   <option key={e.id} value={e.id}>
-                    {e.display_name || "Unnamed"}
+                    {getShortName(e.display_name) || "Unnamed"}
                     {e.is_active === false ? " (inactive)" : ""}
                   </option>
                 ))}
@@ -376,13 +371,12 @@ export default function StaffScheduleClient({
                   const emp = employees.find(
                     (e) => e.id === s.employee_id
                   );
+                  const shortName = getShortName(emp?.display_name);
                   return (
                     <tr key={s.id} className="border-t">
+                      <td className="p-2">{shortName || "Staff"}</td>
                       <td className="p-2">
-                        {emp?.display_name ?? "Staff"}
-                      </td>
-                      <td className="p-2">
-                        {formatTimeShort(s.start_time)}–{" "}
+                        {formatTimeShort(s.start_time)}–
                         {formatTimeShort(s.end_time)}
                       </td>
                       <td className="p-2 text-right">
@@ -420,6 +414,12 @@ export default function StaffScheduleClient({
       </div>
     </div>
   );
+}
+
+function getShortName(displayName: string | null | undefined): string {
+  const name = (displayName ?? "").trim();
+  if (!name) return "";
+  return name.split(" ")[0]; // first word only
 }
 
 function toDateKey(d: Date): string {
