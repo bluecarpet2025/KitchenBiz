@@ -1,3 +1,4 @@
+// src/app/api/accounting/export/route.ts
 import "server-only";
 import { NextRequest } from "next/server";
 import JSZip from "jszip";
@@ -32,7 +33,11 @@ export async function GET(req: NextRequest) {
   const uid = u?.user?.id;
   if (!uid) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
 
-  const { data: prof } = await supabase.from("profiles").select("tenant_id").eq("id", uid).maybeSingle();
+  const { data: prof } = await supabase
+    .from("profiles")
+    .select("tenant_id")
+    .eq("id", uid)
+    .maybeSingle();
   const tenantId = prof?.tenant_id as string | undefined;
   if (!tenantId) return new Response(JSON.stringify({ error: "No tenant" }), { status: 400 });
 
@@ -40,7 +45,7 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const year = url.searchParams.get("year");
   let start = url.searchParams.get("start"); // YYYY-MM-DD
-  let end = url.searchParams.get("end");     // YYYY-MM-DD (exclusive)
+  let end = url.searchParams.get("end"); // YYYY-MM-DD (exclusive)
 
   if ((!start || !end) && year) {
     const y = Number(year);
@@ -50,9 +55,15 @@ export async function GET(req: NextRequest) {
   if (!start || !end) {
     // default last 12 months
     const now = new Date();
-    const endD = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
-    const startD = new Date(Date.UTC(endD.getUTCFullYear(), endD.getUTCMonth() - 12, 1));
-    start = `${startD.getUTCFullYear()}-${pad2(startD.getUTCMonth() + 1)}-01`;
+    const endD = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)
+    );
+    const startD = new Date(
+      Date.UTC(endD.getUTCFullYear(), endD.getUTCMonth() - 12, 1)
+    );
+    start = `${startD.getUTCFullYear()}-${pad2(
+      startD.getUTCMonth() + 1
+    )}-01`;
     end = `${endD.getUTCFullYear()}-${pad2(endD.getUTCMonth() + 1)}-01`;
   }
 
@@ -62,7 +73,9 @@ export async function GET(req: NextRequest) {
   /* ----------------------------- pull data ----------------------------- */
   const { data: expenses } = await supabase
     .from("expenses")
-    .select("id, occurred_at, category, description, amount_usd, source, created_at")
+    .select(
+      "id, occurred_at, category, description, amount_usd, source, created_at"
+    )
     .eq("tenant_id", tenantId)
     .gte("occurred_at", startTs)
     .lt("occurred_at", endTs)
@@ -84,9 +97,29 @@ export async function GET(req: NextRequest) {
     const slice = orderIds.slice(i, i + CHUNK);
     const { data } = await supabase
       .from("sales_order_lines")
-      .select("order_id, product_id, product_name, qty, unit_price, tax, discount, total")
+      .select(
+        "order_id, product_id, product_name, qty, unit_price, tax, discount, total"
+      )
       .in("order_id", slice);
     lines = lines.concat(data ?? []);
+  }
+
+  // labor shifts for payroll (for entire range)
+  const { data: laborShifts } = await supabase
+    .from("labor_shifts")
+    .select("id, occurred_at, hours, wage_usd, created_at")
+    .eq("tenant_id", tenantId)
+    .gte("occurred_at", startTs)
+    .lt("occurred_at", endTs)
+    .order("occurred_at", { ascending: true });
+
+  // Pre-bucket labor by month (for income statement)
+  const laborByMonth = new Map<string, number>();
+  for (const r of laborShifts ?? []) {
+    const dt = new Date((r as any).occurred_at);
+    const k = `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}`;
+    const amt = Number((r as any).wage_usd || 0);
+    laborByMonth.set(k, (laborByMonth.get(k) || 0) + amt);
   }
 
   // sales summary by day
@@ -94,9 +127,14 @@ export async function GET(req: NextRequest) {
     const bucket = new Map<string, number>();
     (orders ?? []).forEach((o: any) => {
       const dt = new Date(o.occurred_at ?? o.created_at);
-      const k = `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}-${pad2(dt.getUTCDate())}`;
+      const k = `${dt.getUTCFullYear()}-${pad2(
+        dt.getUTCMonth() + 1
+      )}-${pad2(dt.getUTCDate())}`;
       const sum = (lines.filter((l) => l.order_id === o.id) ?? []).reduce(
-        (a, b) => a + (Number(b.total ?? 0) || Number(b.qty || 0) * Number(b.unit_price || 0)),
+        (a, b) =>
+          a +
+          (Number(b.total ?? 0) ||
+            Number(b.qty || 0) * Number(b.unit_price || 0)),
         0
       );
       bucket.set(k, (bucket.get(k) || 0) + sum);
@@ -116,7 +154,12 @@ export async function GET(req: NextRequest) {
 
   const incomeRows: any[] = [];
   for (const m of months) {
-    const { data: s } = await supabase.from("v_sales_month_totals").select("revenue").eq("month", m).maybeSingle();
+    const { data: s } = await supabase
+      .from("v_sales_month_totals")
+      .select("revenue")
+      .eq("tenant_id", tenantId)
+      .eq("month", m)
+      .maybeSingle();
     const sales = Number((s as any)?.revenue ?? 0);
 
     const mStart = monthStart(m);
@@ -133,22 +176,41 @@ export async function GET(req: NextRequest) {
       const k = (r.category?.trim() || "Misc") as string;
       bucket.set(k, (bucket.get(k) || 0) + Number(r.amount_usd || 0));
     });
+
     const food = bucket.get("Food") || 0;
-    const labor = bucket.get("Labor") || 0;
+    const laborManual = bucket.get("Labor") || 0;
     const rent = bucket.get("Rent") || 0;
     const utilities = bucket.get("Utilities") || 0;
     const marketing = bucket.get("Marketing") || 0;
     const misc = bucket.get("Misc") || 0;
-    const total_expenses = [...bucket.values()].reduce((a, b) => a + b, 0);
+
+    // Add labor from scheduled shifts
+    const laborFromShifts = laborByMonth.get(m) || 0;
+    const labor = laborManual + laborFromShifts;
+
+    const total_expenses =
+      food + labor + rent + utilities + marketing + misc;
     const profit = sales - total_expenses;
 
-    incomeRows.push({ month: m, sales, food, labor, rent, utilities, marketing, misc, total_expenses, profit });
+    incomeRows.push({
+      month: m,
+      sales,
+      food,
+      labor,
+      rent,
+      utilities,
+      marketing,
+      misc,
+      total_expenses,
+      profit,
+    });
   }
 
   const { data: vendors } = await supabase
     .from("vendors")
     .select("id, name, contact, created_at")
     .eq("tenant_id", tenantId);
+
   const { data: employees } = await supabase
     .from("employees")
     .select(
@@ -158,11 +220,45 @@ export async function GET(req: NextRequest) {
 
   const { data: receipts } = await supabase
     .from("inventory_receipts")
-    .select("id, item_id, qty_base, total_cost_usd, unit_cost_base, expires_on, note, purchased_at")
+    .select(
+      "id, item_id, qty_base, total_cost_usd, unit_cost_base, expires_on, note, purchased_at"
+    )
     .eq("tenant_id", tenantId)
     .gte("purchased_at", startTs)
     .lt("purchased_at", endTs)
     .order("purchased_at", { ascending: true });
+
+  // schedules for labor_detail.csv
+  const { data: schedules } = await supabase
+    .from("staff_schedules")
+    .select("id, shift_date, hours, employee_id, labor_shift_id")
+    .eq("tenant_id", tenantId)
+    .gte("shift_date", start)
+    .lt("shift_date", end)
+    .order("shift_date", { ascending: true });
+
+  // Build labor_detail rows by joining schedules + employees + labor_shifts
+  const empMap = new Map<string, any>(
+    (employees ?? []).map((e: any) => [e.id as string, e])
+  );
+  const laborMap = new Map<string, any>(
+    (laborShifts ?? []).map((ls: any) => [ls.id as string, ls])
+  );
+
+  const laborDetailRows =
+    (schedules ?? []).map((s: any) => {
+      const emp = empMap.get(s.employee_id as string);
+      const labor = s.labor_shift_id
+        ? laborMap.get(s.labor_shift_id as string)
+        : null;
+      return {
+        shift_date: s.shift_date,
+        employee_id: s.employee_id,
+        employee_name: emp?.display_name ?? "",
+        hours: s.hours,
+        shift_pay_usd: labor ? labor.wage_usd : null,
+      };
+    }) ?? [];
 
   /* ----------------------------- build ZIP ----------------------------- */
   const label =
@@ -185,6 +281,7 @@ Files:
 - vendors.csv
 - employees.csv
 - inventory_receipts.csv
+- labor_detail.csv
 
 All amounts in USD. Dates are UTC.`
   );
@@ -216,7 +313,9 @@ All amounts in USD. Dates are UTC.`
         unit_price: l.unit_price,
         discount: l.discount,
         tax: l.tax,
-        total: l.total ?? Number(l.qty || 0) * Number(l.unit_price || 0),
+        total:
+          l.total ??
+          Number(l.qty || 0) * Number(l.unit_price || 0),
       }))
     )
   );
@@ -247,10 +346,18 @@ All amounts in USD. Dates are UTC.`
       }))
     )
   );
+  zip.file("labor_detail.csv", toCSV(laborDetailRows));
 
   // Generate zip as Uint8Array and return a **Node Buffer**
-  const u8 = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
-  const buf = Buffer.from(u8.buffer, u8.byteOffset, u8.byteLength); // Node Buffer
+  const u8 = await zip.generateAsync({
+    type: "uint8array",
+    compression: "DEFLATE",
+  });
+  const buf = Buffer.from(
+    u8.buffer,
+    u8.byteOffset,
+    u8.byteLength
+  ); // Node Buffer
 
   const filename = `KioriSolutions_accountant_pack_${label}.zip`;
   return new Response(buf as unknown as BodyInit, {
