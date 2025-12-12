@@ -53,12 +53,15 @@ export async function POST(req: Request) {
       console.error("employee lookup error", empError);
     }
 
-    let wageUsd = Number(emp?.pay_rate_usd ?? 0);
+    let hourlyRate = Number(emp?.pay_rate_usd ?? 0);
 
     // If salary, approximate hourly for payroll purposes.
-    if (emp?.pay_type === "salary" && wageUsd > 0) {
-      wageUsd = wageUsd / 2080; // 40h/week * 52 weeks
+    if (emp?.pay_type === "salary" && hourlyRate > 0) {
+      hourlyRate = hourlyRate / 2080; // 40h/week * 52 weeks
     }
+
+    // Total cost for this shift
+    const shiftPayUsd = hours * hourlyRate;
 
     // Insert into labor_shifts so dashboards & exports see payroll
     const occurredAtIso = new Date(`${shiftDate}T00:00:00Z`).toISOString();
@@ -69,15 +72,15 @@ export async function POST(req: Request) {
         tenant_id: tenantId,
         occurred_at: occurredAtIso,
         hours,
-        wage_usd: wageUsd,
+        wage_usd: shiftPayUsd,
       })
       .select("id")
       .single();
 
     if (laborError) {
       console.error("create labor_shift error", laborError);
-      // We still proceed with schedule so the user isn't blocked,
-      // but this day won't show as payroll until we fix the data.
+      // Continue anyway so schedule is not blocked; this shift just won't
+      // show in payroll until we fix the data.
     }
 
     const laborShiftId = labor?.id ?? null;

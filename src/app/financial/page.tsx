@@ -123,9 +123,31 @@ export default async function FinancialPage(props: any) {
     const k = `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}`;
     const c = catKey((r as any).category);
     const amt = Number((r as any).amount_usd || 0);
-    if (!expByMonth.has(k)) expByMonth.set(k, { Food: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 });
+    if (!expByMonth.has(k)) {
+      expByMonth.set(k, { Food: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 });
+    }
     expByMonth.get(k)![c] += amt;
     ytdBucket[c] += amt;
+  }
+
+  /* ------------------------ fetch labor_shifts ------------------------ */
+  const { data: laborRows } = await supabase
+    .from("labor_shifts")
+    .select("occurred_at, hours, wage_usd")
+    .eq("tenant_id", tenantId)
+    .gte("occurred_at", `${startIso}T00:00:00Z`)
+    .lt("occurred_at", `${endIso}T00:00:00Z`);
+
+  for (const r of laborRows ?? []) {
+    const dt = new Date((r as any).occurred_at);
+    const k = `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}`;
+    const amt = Number((r as any).wage_usd || 0);
+
+    if (!expByMonth.has(k)) {
+      expByMonth.set(k, { Food: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 });
+    }
+    expByMonth.get(k)!.Labor += amt;
+    ytdBucket.Labor += amt;
   }
 
   /* ---------------- This Month & YTD (calendar) cards ----------------- */
