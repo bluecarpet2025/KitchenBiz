@@ -10,15 +10,8 @@ export default async function HomePage() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const deployStamp = new Date().toLocaleString();
-
   return (
     <main className="max-w-5xl mx-auto p-6">
-      {/* Deploy test badge (safe visual change) */}
-      <div className="mb-4 rounded-lg border border-neutral-800 bg-neutral-900/40 px-4 py-2 text-xs text-neutral-300">
-        ✅ Deploy test: <span className="font-mono">{deployStamp}</span>
-      </div>
-
       {/* Hero */}
       <section className="pt-6 pb-8">
         <p className="inline-flex items-center gap-2 rounded-full border border-emerald-600/60 bg-emerald-900/20 px-3 py-1 text-xs font-medium text-emerald-300">
