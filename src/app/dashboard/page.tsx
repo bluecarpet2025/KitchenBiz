@@ -4,13 +4,14 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { createServerClient } from "@/lib/supabase/server";
 import { effectiveTenantId } from "@/lib/effective-tenant";
+import { effectivePlan } from "@/lib/plan";
 import { SalesVsExpenses, ExpenseDonut, TopItems, WeekdayBars } from "./ClientCharts";
 
 /* ------------------------------ small utils ------------------------------ */
 const pad2 = (n: number) => String(n).padStart(2, "0");
-const fmtDay   = (d: Date) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+const fmtDay = (d: Date) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
 const fmtMonth = (d: Date) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}`;
-const fmtYear  = (d: Date) => String(d.getUTCFullYear());
+const fmtYear = (d: Date) => String(d.getUTCFullYear());
 const usd = (n: number) =>
   new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(Number(n) || 0);
 
@@ -19,6 +20,13 @@ const addDays = (d: Date, n: number) => {
   x.setUTCDate(x.getUTCDate() + n);
   return x;
 };
+
+function addMonthsUTC(d: Date, n: number) {
+  const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  x.setUTCMonth(x.getUTCMonth() + n);
+  return x;
+}
+
 function isoWeekString(d: Date) {
   const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
   x.setUTCDate(x.getUTCDate() + 4 - (x.getUTCDay() || 7));
@@ -27,16 +35,14 @@ function isoWeekString(d: Date) {
   return `${x.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
 }
 
+const maxIso = (a: string, b: string) => (a > b ? a : b);
+
 /* ------------------------------ helpers (DB) ------------------------------ */
 async function getProfileGoal(supabase: any): Promise<number> {
   const { data: u } = await supabase.auth.getUser();
   const uid = u?.user?.id;
   if (!uid) return 0;
-  const { data: prof } = await supabase
-    .from("profiles")
-    .select("goal_month_usd")
-    .eq("id", uid)
-    .maybeSingle();
+  const { data: prof } = await supabase.from("profiles").select("goal_month_usd").eq("id", uid).maybeSingle();
   return Number(prof?.goal_month_usd ?? 0);
 }
 
@@ -48,12 +54,7 @@ async function sumOne(
   col: "revenue" | "total" | "orders",
   tenantId: string
 ): Promise<number> {
-  const { data } = await supabase
-    .from(view)
-    .select(col)
-    .eq("tenant_id", tenantId)      // << tenant filter
-    .eq(periodCol, key)
-    .maybeSingle();
+  const { data } = await supabase.from(view).select(col).eq("tenant_id", tenantId).eq(periodCol, key).maybeSingle();
   return Number((data as any)?.[col] ?? 0);
 }
 
@@ -70,6 +71,7 @@ async function expenseBreakdownSQL(
     .eq("tenant_id", tenantId)
     .gte("occurred_at", `${startIso}T00:00:00Z`)
     .lt("occurred_at", `${endIso}T00:00:00Z`);
+
   const bucket = new Map<string, number>();
   for (const r of (data ?? []) as any[]) {
     const k = (r.category?.trim() || "Misc") as string;
@@ -86,10 +88,11 @@ async function weekdayRevenueThisMonth(supabase: any, tenantId: string): Promise
   const { data } = await supabase
     .from("v_sales_day_totals")
     .select("day, revenue")
-    .eq("tenant_id", tenantId)       // << tenant filter
+    .eq("tenant_id", tenantId)
     .gte("day", fmtDay(start))
     .lt("day", fmtDay(endExcl))
     .order("day", { ascending: true });
+
   const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const vals = [0, 0, 0, 0, 0, 0, 0];
   for (const r of (data ?? []) as any[]) {
@@ -108,16 +111,21 @@ async function topItemsForRange(
 ): Promise<Array<{ name: string; value: number }>> {
   const start = `${startIso}T00:00:00Z`;
   const end = `${endIso}T00:00:00Z`;
+
   const { data: orders, error: ordErr } = await supabase
     .from("sales_orders")
     .select("id, occurred_at, created_at")
     .eq("tenant_id", tenantId)
-    .or([
-      `and(occurred_at.gte.${start},occurred_at.lt.${end})`,
-      `and(occurred_at.is.null,created_at.gte.${start},created_at.lt.${end})`,
-    ].join(","));
+    .or(
+      [
+        `and(occurred_at.gte.${start},occurred_at.lt.${end})`,
+        `and(occurred_at.is.null,created_at.gte.${start},created_at.lt.${end})`,
+      ].join(",")
+    );
+
   if (ordErr || !orders?.length) return [];
   const ids = (orders as any[]).map((o) => String(o.id));
+
   const CHUNK = 200;
   const bucket = new Map<string, number>();
   for (let i = 0; i < ids.length; i += CHUNK) {
@@ -126,12 +134,14 @@ async function topItemsForRange(
       .from("sales_order_lines")
       .select("product_name, qty, unit_price, total, order_id")
       .in("order_id", slice);
+
     for (const row of (lines ?? []) as any[]) {
       const name = String(row.product_name ?? "Unknown").trim();
-      const lineTotal = Number(row.total ?? 0) || (Number(row.qty || 0) * Number(row.unit_price || 0)) || 0;
+      const lineTotal = Number(row.total ?? 0) || Number(row.qty || 0) * Number(row.unit_price || 0) || 0;
       bucket.set(name, (bucket.get(name) || 0) + lineTotal);
     }
   }
+
   return [...bucket.entries()]
     .map(([name, value]) => ({ name, value }))
     .sort((a, b) => b.value - a.value)
@@ -147,6 +157,7 @@ async function setGoal(formData: FormData) {
   const { data: u } = await supabase.auth.getUser();
   const uid = u?.user?.id;
   if (uid) await supabase.from("profiles").update({ goal_month_usd: newGoal }).eq("id", uid);
+
   const c = await cookies();
   c.set("_kb_goal", String(newGoal), { path: "/", maxAge: 60 * 60 * 24 * 365 });
 }
@@ -154,8 +165,7 @@ async function setGoal(formData: FormData) {
 /* ================================== PAGE ================================== */
 export default async function DashboardPage(props: any) {
   const supabase = await createServerClient();
-  const { tenantId } = await effectiveTenantId(); // << DEMO-AWARE TENANT
-
+  const { tenantId } = await effectiveTenantId();
   if (!tenantId) {
     return (
       <main className="max-w-6xl mx-auto px-4 py-6">
@@ -165,10 +175,18 @@ export default async function DashboardPage(props: any) {
     );
   }
 
-  const sp = (await props?.searchParams) ?? props?.searchParams ?? {};
-  const range = (typeof sp.range === "string" ? sp.range : Array.isArray(sp.range) ? sp.range[0] : null) ?? "month";
+  const plan = await effectivePlan();
+  const isStarter = plan === "starter";
 
+  // Starter cutoff: rolling last 3 months (UTC)
   const now = new Date();
+  const cutoff = addMonthsUTC(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())), -3);
+  const cutoffIso = fmtDay(cutoff);
+
+  const sp = (await props?.searchParams) ?? props?.searchParams ?? {};
+  const range =
+    (typeof sp.range === "string" ? sp.range : Array.isArray(sp.range) ? sp.range[0] : null) ?? "month";
+
   const today = fmtDay(now);
   const thisWeek = isoWeekString(now);
   const thisMonth = fmtMonth(now);
@@ -177,6 +195,7 @@ export default async function DashboardPage(props: any) {
   // canonical [start, end)
   let startIso = today;
   let endIsoExcl = fmtDay(addDays(now, 1));
+
   if (range === "week") {
     startIso = fmtDay(addDays(now, -6));
     endIsoExcl = fmtDay(addDays(now, 1));
@@ -192,42 +211,92 @@ export default async function DashboardPage(props: any) {
     endIsoExcl = fmtDay(e);
   }
 
+  // For Starter: charts/breakdowns should only *query* the last 3 months, but UI can still show full YTD with zeros.
+  const queryStartIso = isStarter ? maxIso(startIso, cutoffIso) : startIso;
+
   /* headline aggregates (tenant-scoped) */
-  const [salesVal, expVal, ordersVal] = await (async () => {
-    if (range === "today") {
-      return Promise.all([
-        sumOne(supabase, "v_sales_day_totals", "day", today, "revenue", tenantId),
-        sumOne(supabase, "v_expense_day_totals", "day", today, "total", tenantId),
-        sumOne(supabase, "v_sales_day_totals", "day", today, "orders", tenantId),
-      ]);
-    } else if (range === "week") {
-      return Promise.all([
-        sumOne(supabase, "v_sales_week_totals", "week", thisWeek, "revenue", tenantId),
-        sumOne(supabase, "v_expense_week_totals", "week", thisWeek, "total", tenantId),
-        sumOne(supabase, "v_sales_week_totals", "week", thisWeek, "orders", tenantId),
-      ]);
-    } else if (range === "ytd") {
-      return Promise.all([
+  let salesVal = 0;
+  let expVal = 0;
+  let ordersVal = 0;
+
+  if (range === "today") {
+    [salesVal, expVal, ordersVal] = await Promise.all([
+      sumOne(supabase, "v_sales_day_totals", "day", today, "revenue", tenantId),
+      sumOne(supabase, "v_expense_day_totals", "day", today, "total", tenantId),
+      sumOne(supabase, "v_sales_day_totals", "day", today, "orders", tenantId),
+    ]);
+  } else if (range === "week") {
+    [salesVal, expVal, ordersVal] = await Promise.all([
+      sumOne(supabase, "v_sales_week_totals", "week", thisWeek, "revenue", tenantId),
+      sumOne(supabase, "v_expense_week_totals", "week", thisWeek, "total", tenantId),
+      sumOne(supabase, "v_sales_week_totals", "week", thisWeek, "orders", tenantId),
+    ]);
+  } else if (range === "ytd") {
+    if (isStarter) {
+      // Starter: compute "YTD" headline as sum of months >= cutoff (older months render as $0).
+      const months: string[] = [];
+      for (let m = 0; m <= now.getUTCMonth(); m++) {
+        months.push(fmtMonth(new Date(Date.UTC(now.getUTCFullYear(), m, 1))));
+      }
+      const sales = await Promise.all(months.map((mk) => sumOne(supabase, "v_sales_month_totals", "month", mk, "revenue", tenantId)));
+      const exps = await Promise.all(months.map((mk) => sumOne(supabase, "v_expense_month_totals", "month", mk, "total", tenantId)));
+      const ords = await Promise.all(months.map((mk) => sumOne(supabase, "v_sales_month_totals", "month", mk, "orders", tenantId)));
+
+      const monthStartIso = (mk: string) => `${mk}-01`;
+      for (let i = 0; i < months.length; i++) {
+        if (monthStartIso(months[i]) < cutoffIso) continue; // older than 3 months => treated as 0
+        salesVal += Number(sales[i] || 0);
+        expVal += Number(exps[i] || 0);
+        ordersVal += Number(ords[i] || 0);
+      }
+    } else {
+      [salesVal, expVal, ordersVal] = await Promise.all([
         sumOne(supabase, "v_sales_year_totals", "year", thisYear, "revenue", tenantId),
         sumOne(supabase, "v_expense_year_totals", "year", thisYear, "total", tenantId),
         sumOne(supabase, "v_sales_year_totals", "year", thisYear, "orders", tenantId),
       ]);
-    } else {
-      return Promise.all([
-        sumOne(supabase, "v_sales_month_totals", "month", thisMonth, "revenue", tenantId),
-        sumOne(supabase, "v_expense_month_totals", "month", thisMonth, "total", tenantId),
-        sumOne(supabase, "v_sales_month_totals", "month", thisMonth, "orders", tenantId),
-      ]);
     }
-  })();
+  } else {
+    [salesVal, expVal, ordersVal] = await Promise.all([
+      sumOne(supabase, "v_sales_month_totals", "month", thisMonth, "revenue", tenantId),
+      sumOne(supabase, "v_expense_month_totals", "month", thisMonth, "total", tenantId),
+      sumOne(supabase, "v_sales_month_totals", "month", thisMonth, "orders", tenantId),
+    ]);
+  }
+
+  // Starter: if month/week range starts before cutoff, treat the "range" headline as last 3 months only
+  if (isStarter && (range === "month" || range === "week") && startIso < cutoffIso) {
+    // Recompute headlines from queryStartIso..endIsoExcl using month/day views where possible:
+    // We'll approximate by summing months that overlap cutoff (simple + consistent).
+    const months: string[] = [];
+    const startD = new Date(`${queryStartIso}T00:00:00Z`);
+    const endD = new Date(`${endIsoExcl}T00:00:00Z`);
+    const cur = new Date(Date.UTC(startD.getUTCFullYear(), startD.getUTCMonth(), 1));
+    const endM = new Date(Date.UTC(endD.getUTCFullYear(), endD.getUTCMonth(), 1));
+    while (cur <= endM) {
+      months.push(fmtMonth(cur));
+      cur.setUTCMonth(cur.getUTCMonth() + 1);
+      if (months.length > 24) break;
+    }
+
+    const [sales, exps, ords] = await Promise.all([
+      Promise.all(months.map((mk) => sumOne(supabase, "v_sales_month_totals", "month", mk, "revenue", tenantId))),
+      Promise.all(months.map((mk) => sumOne(supabase, "v_expense_month_totals", "month", mk, "total", tenantId))),
+      Promise.all(months.map((mk) => sumOne(supabase, "v_sales_month_totals", "month", mk, "orders", tenantId))),
+    ]);
+
+    salesVal = sales.reduce((a, b) => a + Number(b || 0), 0);
+    expVal = exps.reduce((a, b) => a + Number(b || 0), 0);
+    ordersVal = ords.reduce((a, b) => a + Number(b || 0), 0);
+  }
 
   const profitVal = salesVal - expVal;
   const aov = ordersVal > 0 ? salesVal / ordersVal : 0;
 
-  /* breakdowns & charts (tenant-scoped) */
-  const breakdown = await expenseBreakdownSQL(supabase, tenantId, startIso, endIsoExcl);
+  /* breakdowns & charts */
+  const breakdown = await expenseBreakdownSQL(supabase, tenantId, queryStartIso, endIsoExcl);
   const weekday = await weekdayRevenueThisMonth(supabase, tenantId);
-  const topItems = await topItemsForRange(supabase, tenantId, startIso, endIsoExcl);
+  const topItems = await topItemsForRange(supabase, tenantId, queryStartIso, endIsoExcl);
 
   /* goal (profile first, cookie override second) */
   const goalCookie = (await cookies()).get("_kb_goal")?.value;
@@ -235,13 +304,17 @@ export default async function DashboardPage(props: any) {
   const goal = Math.max(0, Math.round(Number(goalCookie ?? profileGoal ?? 0)));
 
   /* last 4 months table */
-  const months: string[] = [];
+  const months4: string[] = [];
   for (let i = 3; i >= 0; i--) {
     const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
-    months.push(fmtMonth(d));
+    months4.push(fmtMonth(d));
   }
   const last4 = await Promise.all(
-    months.map(async (m) => {
+    months4.map(async (m) => {
+      const monthStartIso = `${m}-01`;
+      if (isStarter && monthStartIso < cutoffIso) {
+        return { key: m, aov: 0, orders: 0, sales: 0, expenses: 0, profit: 0 };
+      }
       const [s, e, o] = await Promise.all([
         sumOne(supabase, "v_sales_month_totals", "month", m, "revenue", tenantId),
         sumOne(supabase, "v_expense_month_totals", "month", m, "total", tenantId),
@@ -253,6 +326,7 @@ export default async function DashboardPage(props: any) {
 
   /* line series for big chart (tenant-scoped) */
   const series: Array<{ key: string; sales: number; expenses: number; profit: number }> = [];
+
   if (range === "today") {
     for (let i = 11; i >= 0; i--) {
       const d = fmtDay(addDays(now, -i));
@@ -274,6 +348,11 @@ export default async function DashboardPage(props: any) {
   } else if (range === "ytd") {
     for (let m = 0; m <= now.getUTCMonth(); m++) {
       const mk = fmtMonth(new Date(Date.UTC(now.getUTCFullYear(), m, 1)));
+      const monthStartIso = `${mk}-01`;
+      if (isStarter && monthStartIso < cutoffIso) {
+        series.push({ key: mk, sales: 0, expenses: 0, profit: 0 });
+        continue;
+      }
       const [s, e] = await Promise.all([
         sumOne(supabase, "v_sales_month_totals", "month", mk, "revenue", tenantId),
         sumOne(supabase, "v_expense_month_totals", "month", mk, "total", tenantId),
@@ -283,6 +362,11 @@ export default async function DashboardPage(props: any) {
   } else {
     for (let i = 11; i >= 0; i--) {
       const mk = fmtMonth(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1)));
+      const monthStartIso = `${mk}-01`;
+      if (isStarter && monthStartIso < cutoffIso) {
+        series.push({ key: mk, sales: 0, expenses: 0, profit: 0 });
+        continue;
+      }
       const [s, e] = await Promise.all([
         sumOne(supabase, "v_sales_month_totals", "month", mk, "revenue", tenantId),
         sumOne(supabase, "v_expense_month_totals", "month", mk, "total", tenantId),
@@ -312,9 +396,22 @@ export default async function DashboardPage(props: any) {
     last3Months.push(fmtMonth(d));
   }
   const [last3Sales, last3Exp] = await Promise.all([
-    Promise.all(last3Months.map((m) => sumOne(supabase, "v_sales_month_totals", "month", m, "revenue", tenantId))),
-    Promise.all(last3Months.map((m) => sumOne(supabase, "v_expense_month_totals", "month", m, "total", tenantId))),
+    Promise.all(
+      last3Months.map(async (m) => {
+        const monthStartIso = `${m}-01`;
+        if (isStarter && monthStartIso < cutoffIso) return 0;
+        return sumOne(supabase, "v_sales_month_totals", "month", m, "revenue", tenantId);
+      })
+    ),
+    Promise.all(
+      last3Months.map(async (m) => {
+        const monthStartIso = `${m}-01`;
+        if (isStarter && monthStartIso < cutoffIso) return 0;
+        return sumOne(supabase, "v_expense_month_totals", "month", m, "total", tenantId);
+      })
+    ),
   ]);
+
   const last3AvgSales = last3Sales.reduce((a, b) => a + b, 0) / Math.max(1, last3Sales.length);
   const last3AvgExp = last3Exp.reduce((a, b) => a + b, 0) / Math.max(1, last3Exp.length);
   const last3AvgProfit = last3AvgSales - last3AvgExp;
@@ -326,17 +423,56 @@ export default async function DashboardPage(props: any) {
     <main className="max-w-6xl mx-auto px-4 py-6">
       {/* header: range + quick links */}
       <div className="flex items-center justify-between mb-4 gap-3">
-        <div className="flex items-center gap-2">
-          <Link href="/dashboard?range=today" className={`rounded border px-3 py-1 ${range === "today" ? "bg-neutral-900" : ""}`}>Today</Link>
-          <Link href="/dashboard?range=week"  className={`rounded border px-3 py-1 ${range === "week" ? "bg-neutral-900" : ""}`}>Week</Link>
-          <Link href="/dashboard?range=month" className={`rounded border px-3 py-1 ${range === "month" ? "bg-neutral-900" : ""}`}>Month</Link>
-          <Link href="/dashboard?range=ytd"   className={`rounded border px-3 py-1 ${range === "ytd" ? "bg-neutral-900" : ""}`}>YTD</Link>
-          <span className="text-xs px-2 py-1 rounded border opacity-70">Range: {startIso} → {endIsoExcl}</span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Link
+            href="/dashboard?range=today"
+            className={`rounded border px-3 py-1 ${range === "today" ? "bg-neutral-900" : ""}`}
+          >
+            Today
+          </Link>
+          <Link
+            href="/dashboard?range=week"
+            className={`rounded border px-3 py-1 ${range === "week" ? "bg-neutral-900" : ""}`}
+          >
+            Week
+          </Link>
+          <Link
+            href="/dashboard?range=month"
+            className={`rounded border px-3 py-1 ${range === "month" ? "bg-neutral-900" : ""}`}
+          >
+            Month
+          </Link>
+          <Link
+            href="/dashboard?range=ytd"
+            className={`rounded border px-3 py-1 ${range === "ytd" ? "bg-neutral-900" : ""}`}
+          >
+            YTD
+          </Link>
+
+          <span className="text-xs px-2 py-1 rounded border opacity-70">
+            Range: {startIso} → {endIsoExcl}
+          </span>
+
+          {isStarter && (
+            <span className="text-xs px-2 py-1 rounded border border-amber-600/40 bg-amber-900/10 text-amber-200">
+              Starter shows last 3 months in visuals (older periods display $0).{" "}
+              <Link href="/profile" className="underline">
+                Upgrade to Basic
+              </Link>
+            </span>
+          )}
         </div>
+
         <div className="flex gap-2">
-          <Link href="/sales"    className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">Sales details</Link>
-          <Link href="/expenses" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">Expenses details</Link>
-          <Link href="/dashboard/insights" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">Insights</Link>
+          <Link href="/sales" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">
+            Sales details
+          </Link>
+          <Link href="/expenses" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">
+            Expenses details
+          </Link>
+          <Link href="/dashboard/insights" className="rounded border px-3 py-1 hover:bg-neutral-900 text-sm">
+            Insights
+          </Link>
         </div>
       </div>
 
@@ -351,6 +487,7 @@ export default async function DashboardPage(props: any) {
           <div className="text-xs text-emerald-400">3-mo avg: {usd(last3AvgSales)}</div>
           <div className="text-xs text-emerald-400">AOV: {usd(aov)}</div>
         </div>
+
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 tracking-wide flex items-center gap-1">
             EXPENSES — {range.toUpperCase()} <span title="Sum of expenses in the selected range.">ⓘ</span>
@@ -360,6 +497,7 @@ export default async function DashboardPage(props: any) {
           <div className="text-xs text-emerald-400">3-mo avg: {usd(last3AvgExp)}</div>
           <div className="text-xs text-emerald-400">Exp % of sales: {expensePctOfSales}%</div>
         </div>
+
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 tracking-wide flex items-center gap-1">
             PROFIT / LOSS — {range.toUpperCase()} <span title="Profit = Sales − Expenses.">ⓘ</span>
@@ -369,12 +507,16 @@ export default async function DashboardPage(props: any) {
           <div className="text-xs text-emerald-400">3-mo avg: {usd(last3AvgProfit)}</div>
           <div className="text-xs text-emerald-400">Margin: {marginPct}%</div>
         </div>
+
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 tracking-wide">SALES vs GOAL</div>
           <div className="text-2xl font-semibold mt-1">{usd(salesVal)}</div>
           <div className="text-xs opacity-70">Goal {usd(goal)}</div>
           <div className="w-full h-1.5 bg-neutral-800 rounded mt-2">
-            <div className="h-1.5 bg-emerald-500 rounded" style={{ width: `${goal > 0 ? Math.min(100, Math.round((salesVal / goal) * 100)) : 0}%` }} />
+            <div
+              className="h-1.5 bg-emerald-500 rounded"
+              style={{ width: `${goal > 0 ? Math.min(100, Math.round((salesVal / goal) * 100)) : 0}%` }}
+            />
           </div>
           <form action={setGoal} className="mt-2 flex gap-2">
             <input name="goal" defaultValue={goal || ""} className="bg-transparent border rounded px-2 py-1 text-sm w-24" />
@@ -427,7 +569,14 @@ export default async function DashboardPage(props: any) {
       <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
         <div className="border rounded-2xl p-4">
           <div className="text-xs opacity-70 mb-2">
-            Sales vs Expenses — {range === "today" ? "last 12 days" : range === "week" ? "last 12 weeks" : range === "ytd" ? "YTD (by month)" : "last 12 months"}
+            Sales vs Expenses —{" "}
+            {range === "today"
+              ? "last 12 days"
+              : range === "week"
+              ? "last 12 weeks"
+              : range === "ytd"
+              ? "YTD (by month)"
+              : "last 12 months"}
           </div>
           <SalesVsExpenses data={series} />
         </div>

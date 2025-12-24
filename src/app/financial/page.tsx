@@ -3,6 +3,7 @@ import "server-only";
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { effectiveTenantId } from "@/lib/effective-tenant";
+import { effectivePlan } from "@/lib/plan";
 
 /* ----------------------------- helpers ----------------------------- */
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -18,6 +19,12 @@ function addMonths(ymStr: string, delta: number) {
   d.setUTCMonth(d.getUTCMonth() + delta);
   return ym(d);
 }
+function addMonthsUTC(d: Date, n: number) {
+  const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  x.setUTCMonth(x.getUTCMonth() + n);
+  return x;
+}
+const maxIso = (a: string, b: string) => (a > b ? a : b);
 
 type SalesMonthRow = { month: string; revenue: number; orders: number };
 type IncomeRow = {
@@ -44,9 +51,8 @@ export default async function FinancialPage(props: any) {
   const sp = (spRaw ?? {}) as Record<string, string>;
 
   const supabase = await createServerClient();
-  const { tenantId } = await effectiveTenantId(); // << DEMO-AWARE TENANT
+  const { tenantId } = await effectiveTenantId();
 
-  // If no tenant at all (not signed in), render empty shell
   if (!tenantId) {
     return (
       <main className="max-w-6xl mx-auto px-4 py-6">
@@ -56,22 +62,34 @@ export default async function FinancialPage(props: any) {
     );
   }
 
-  // Defaults: current-year YTD
+  const plan = await effectivePlan();
+  const isStarter = plan === "starter";
+
+  // Starter cutoff: rolling last 3 months (UTC)
   const now = new Date();
+  const cutoff = addMonthsUTC(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())), -3);
+  const cutoffIso = `${cutoff.getUTCFullYear()}-${pad2(cutoff.getUTCMonth() + 1)}-${pad2(cutoff.getUTCDate())}`;
+
+  // Defaults: current-year YTD
   const defaultStart = `${now.getUTCFullYear()}-01-01`;
   const defaultEnd = `${now.getUTCFullYear() + 1}-01-01`;
+
   const startIso = sp.start && /^\d{4}-\d{2}-\d{2}$/.test(sp.start) ? sp.start : defaultStart;
   const endIso = sp.end && /^\d{4}-\d{2}-\d{2}$/.test(sp.end) ? sp.end : defaultEnd;
 
   const startMonth = startIso.slice(0, 7);
   const endMonthExcl = endIso.slice(0, 7); // exclusive
 
-  // build list of months [startMonth ... <endMonthExcl)
+  // Month list [startMonth ... <endMonthExcl)
   const months: string[] = [];
   for (let m = startMonth; m < endMonthExcl; m = addMonths(m, 1)) {
     months.push(m);
-    if (months.length > 120) break; // safety cap (10 years)
+    if (months.length > 120) break;
   }
+
+  // For Starter: only query >= cutoff, but keep the full month list and render old months as $0.
+  const queryStartIso = isStarter ? maxIso(startIso, cutoffIso) : startIso;
+  const queryStartMonth = queryStartIso.slice(0, 7);
 
   /* ---------------------------- fetch sales ---------------------------- */
   let salesRows: SalesMonthRow[] = [];
@@ -79,18 +97,17 @@ export default async function FinancialPage(props: any) {
     const { data } = await supabase
       .from("v_sales_month_totals")
       .select("month, revenue, orders")
-      .eq("tenant_id", tenantId)               // << tenant filter
-      .gte("month", startMonth)
+      .eq("tenant_id", tenantId)
+      .gte("month", queryStartMonth)
       .lt("month", endMonthExcl)
       .order("month", { ascending: true });
 
     salesRows =
-      (data ?? []).map((r: any) => ([
-        String(r.month),
-        Number(r.revenue ?? 0),
-        Number(r.orders ?? 0),
-      ] as [string, number, number])).map(([month, revenue, orders]) => ({ month, revenue, orders })) ?? [];
+      (data ?? [])
+        .map((r: any) => [String(r.month), Number(r.revenue ?? 0), Number(r.orders ?? 0)] as [string, number, number])
+        .map(([month, revenue, orders]) => ({ month, revenue, orders })) ?? [];
   }
+
   const salesByMonth = new Map(salesRows.map((r) => [r.month, r.revenue]));
   const ordersByMonth = new Map(salesRows.map((r) => [r.month, r.orders]));
 
@@ -98,8 +115,8 @@ export default async function FinancialPage(props: any) {
   const { data: expRows } = await supabase
     .from("expenses")
     .select("occurred_at, amount_usd, category")
-    .eq("tenant_id", tenantId)                // << tenant filter
-    .gte("occurred_at", `${startIso}T00:00:00Z`)
+    .eq("tenant_id", tenantId)
+    .gte("occurred_at", `${queryStartIso}T00:00:00Z`)
     .lt("occurred_at", `${endIso}T00:00:00Z`);
 
   const expByMonth = new Map<
@@ -123,34 +140,12 @@ export default async function FinancialPage(props: any) {
     const k = `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}`;
     const c = catKey((r as any).category);
     const amt = Number((r as any).amount_usd || 0);
-    if (!expByMonth.has(k)) {
-      expByMonth.set(k, { Food: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 });
-    }
+    if (!expByMonth.has(k)) expByMonth.set(k, { Food: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 });
     expByMonth.get(k)![c] += amt;
     ytdBucket[c] += amt;
   }
 
-  /* ------------------------ fetch labor_shifts ------------------------ */
-  const { data: laborRows } = await supabase
-    .from("labor_shifts")
-    .select("occurred_at, hours, wage_usd")
-    .eq("tenant_id", tenantId)
-    .gte("occurred_at", `${startIso}T00:00:00Z`)
-    .lt("occurred_at", `${endIso}T00:00:00Z`);
-
-  for (const r of laborRows ?? []) {
-    const dt = new Date((r as any).occurred_at);
-    const k = `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}`;
-    const amt = Number((r as any).wage_usd || 0);
-
-    if (!expByMonth.has(k)) {
-      expByMonth.set(k, { Food: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 });
-    }
-    expByMonth.get(k)!.Labor += amt;
-    ytdBucket.Labor += amt;
-  }
-
-  /* ---------------- This Month & YTD (calendar) cards ----------------- */
+  /* ---------------- This Month & YTD cards ----------------- */
   const thisMonth = `${now.getUTCFullYear()}-${pad2(now.getUTCMonth() + 1)}`;
   const thisYear = String(now.getUTCFullYear());
 
@@ -162,26 +157,35 @@ export default async function FinancialPage(props: any) {
   const cardMonthAOV = cardMonthOrders > 0 ? cardMonthSales / cardMonthOrders : 0;
 
   const ytdMonths = months.filter((m) => m.startsWith(thisYear));
-  const ytdSales = ytdMonths.reduce((a, m) => a + Number(salesByMonth.get(m) || 0), 0);
-  const ytdOrders = ytdMonths.reduce((a, m) => a + Number(ordersByMonth.get(m) || 0), 0);
-  const ytdExpenses = ytdMonths.reduce(
-    (a, m) => a + Object.values(expByMonth.get(m) ?? {}).reduce((x, y) => x + y, 0),
-    0
-  );
+
+  const monthStartIso = (m: string) => `${m}-01`;
+  const ytdSales = ytdMonths.reduce((a, m) => a + (isStarter && monthStartIso(m) < cutoffIso ? 0 : Number(salesByMonth.get(m) || 0)), 0);
+  const ytdOrders = ytdMonths.reduce((a, m) => a + (isStarter && monthStartIso(m) < cutoffIso ? 0 : Number(ordersByMonth.get(m) || 0)), 0);
+  const ytdExpenses = ytdMonths.reduce((a, m) => {
+    if (isStarter && monthStartIso(m) < cutoffIso) return a;
+    return a + Object.values(expByMonth.get(m) ?? {}).reduce((x, y) => x + y, 0);
+  }, 0);
+
   const ytdProfit = ytdSales - ytdExpenses;
   const ytdAOV = ytdOrders > 0 ? ytdSales / ytdOrders : 0;
 
   /* ---------------- Trailing months series & income table -------------- */
   const lineSeries = months.map((m) => {
-    const s = Number(salesByMonth.get(m) || 0);
-    const e = Object.values(expByMonth.get(m) ?? {}).reduce((a, b) => a + b, 0);
+    const isLocked = isStarter && monthStartIso(m) < cutoffIso;
+    const s = isLocked ? 0 : Number(salesByMonth.get(m) || 0);
+    const e = isLocked ? 0 : Object.values(expByMonth.get(m) ?? {}).reduce((a, b) => a + b, 0);
     return { key: m, sales: s, expenses: e, profit: s - e };
   });
 
   const incomeRows: IncomeRow[] = months.map((m) => {
-    const exp = expByMonth.get(m) ?? { Food: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 };
-    const sales = Number(salesByMonth.get(m) || 0);
+    const isLocked = isStarter && monthStartIso(m) < cutoffIso;
+    const exp = isLocked
+      ? { Food: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 }
+      : expByMonth.get(m) ?? { Food: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 };
+
+    const sales = isLocked ? 0 : Number(salesByMonth.get(m) || 0);
     const total = Object.values(exp).reduce((a, b) => a + b, 0);
+
     return {
       month: m,
       sales,
@@ -201,7 +205,7 @@ export default async function FinancialPage(props: any) {
   return (
     <main className="max-w-6xl mx-auto px-4 py-6">
       {/* Filter row */}
-      <div className="flex flex-wrap items-center gap-2 mb-4">
+      <div className="flex flex-wrap items-center gap-2 mb-2">
         <div className="text-xl font-semibold mr-4">Financials</div>
         <label className="text-xs opacity-70">Start (UTC)</label>
         <form action="/financial" className="contents">
@@ -222,6 +226,16 @@ export default async function FinancialPage(props: any) {
         </Link>
       </div>
 
+      {isStarter && (
+        <div className="mb-4 text-xs rounded border border-amber-600/40 bg-amber-900/10 px-3 py-2 text-amber-200">
+          Starter shows last 3 months in visuals (older periods display $0).{" "}
+          <Link href="/profile" className="underline">
+            Upgrade to Basic
+          </Link>{" "}
+          for full history.
+        </div>
+      )}
+
       {/* Top cards */}
       <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="border rounded p-4">
@@ -236,7 +250,12 @@ export default async function FinancialPage(props: any) {
             Food + Labor share:{" "}
             {(() => {
               const exp = expByMonth.get(cardMonthKey) ?? {
-                Food: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0,
+                Food: 0,
+                Labor: 0,
+                Rent: 0,
+                Utilities: 0,
+                Marketing: 0,
+                Misc: 0,
               };
               const pct = (exp.Food + exp.Labor) / Math.max(1, cardMonthSales);
               return `${Math.round(pct * 100)}%`;
@@ -267,7 +286,9 @@ export default async function FinancialPage(props: any) {
         <div className="border rounded p-4">
           <div className="opacity-70 text-xs">YEAR TO DATE — PROFIT / LOSS</div>
           <div className={`text-2xl font-semibold ${ytdProfit < 0 ? "text-rose-400" : ""}`}>{fmtUSD(ytdProfit)}</div>
-          <div className="text-xs mt-1 opacity-80">Margin: {Math.round((ytdSales > 0 ? (ytdProfit / ytdSales) * 100 : 0))}%</div>
+          <div className="text-xs mt-1 opacity-80">
+            Margin: {Math.round((ytdSales > 0 ? (ytdProfit / ytdSales) * 100 : 0))}%
+          </div>
         </div>
       </section>
 
