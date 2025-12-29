@@ -30,8 +30,8 @@ export default function ProfileForm({
   const [bizName, setBizName] = useState(initialBusinessName);
   const [bizBlurb, setBizBlurb] = useState(initialBusinessBlurb);
 
-  // Plan is now read-only here (Stripe controls it via webhook → profiles.plan)
-  const plan = (initialPlan as Plan) || "starter";
+  // Plan is read-only here (Stripe controls it via webhook → profiles.plan)
+  const plan = ((initialPlan as Plan) || "starter") as Plan;
 
   const [brandingTier, setBrandingTier] = useState(initialBrandingTier);
   const [busy, setBusy] = useState(false);
@@ -59,8 +59,6 @@ export default function ProfileForm({
       return;
     }
 
-    // Profile save: name + demo toggle + branding tier only.
-    // Plan is controlled by Stripe webhook sync (profiles.plan).
     const { error: profErr } = await supabase
       .from("profiles")
       .upsert(
@@ -136,6 +134,80 @@ export default function ProfileForm({
   const isOwner = role === "owner";
   const canBill = isOwner && !useDemo && !!tenantId;
 
+  const planLabel = (p: Plan) => {
+    if (p === "starter") return "Starter";
+    if (p === "basic") return "Basic";
+    if (p === "pro") return "Pro";
+    return "Enterprise";
+  };
+
+  const planPrice = (p: Plan) => {
+    if (p === "basic") return "$49/mo";
+    if (p === "pro") return "$99/mo";
+    if (p === "enterprise") return "$499/mo";
+    return "Free";
+  };
+
+  const planBlurb = (p: Plan) => {
+    if (p === "basic") return "Receipt photos, visuals & exports.";
+    if (p === "pro") return "Staff module, AI dashboards, branding.";
+    if (p === "enterprise") return "Multi-location, white-label, custom.";
+    return "Inventory, sales, expenses, recipes.";
+  };
+
+  const actionLabel = (target: Plan) => {
+    if (plan === target) return "Manage in Portal";
+    if (target === "enterprise") return "Switch to Enterprise";
+    if (target === "pro") return plan === "enterprise" ? "Downgrade to Pro" : "Upgrade to Pro";
+    if (target === "basic") return plan === "starter" ? "Upgrade to Basic" : "Switch to Basic";
+    return "Switch";
+  };
+
+  const onPlanClick = (target: Plan) => {
+    // If already on that plan, open portal instead of sending them through checkout.
+    if (plan === target) return openBillingPortal();
+    return startCheckout({ kind: "subscription", plan: target });
+  };
+
+  const PlanCard = ({ target }: { target: Plan }) => {
+    const active = plan === target;
+    const disabled = !canBill || billingBusy;
+
+    return (
+      <div
+        className={`border rounded-md p-3 ${active ? "border-green-700 bg-green-900/10" : "border-neutral-800"}`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="font-medium">
+            {planLabel(target)} — {planPrice(target)}
+          </div>
+          {active && (
+            <span className="text-[11px] px-2 py-0.5 rounded-full border border-green-700 text-green-300">
+              Current
+            </span>
+          )}
+        </div>
+
+        <div className="text-xs opacity-70 mt-1">{planBlurb(target)}</div>
+
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onPlanClick(target)}
+          className="mt-3 border rounded px-3 py-2 text-sm hover:bg-neutral-900 disabled:opacity-50"
+        >
+          {actionLabel(target)}
+        </button>
+
+        {!canBill && (
+          <div className="text-[11px] opacity-60 mt-2">
+            {useDemo ? "Turn off demo mode to manage billing." : !tenantId ? "Billing requires a tenant." : ""}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <form
       onSubmit={(e) => {
@@ -166,88 +238,59 @@ export default function ProfileForm({
       {/* Billing / Plan (Owner only) */}
       {isOwner && (
         <div className="mt-4 border-t border-neutral-800 pt-4 space-y-3">
-          <div>
-            <div className="text-sm font-medium">Subscription Plan</div>
-            <div className="text-xs opacity-70 mt-1">
-              Your current plan is: <strong>{plan.toUpperCase()}</strong>
-            </div>
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm font-medium">Subscription</div>
             <div className="text-xs opacity-70">
-              Plan changes happen via Stripe. After payment or plan change in the portal, the app updates within a few
-              seconds.
+              Current: <strong>{plan.toUpperCase()}</strong>
             </div>
           </div>
 
-          <div className="grid gap-2">
-            <div className="border rounded-md p-3">
-              <div className="font-medium">Basic — $49/mo</div>
-              <div className="text-xs opacity-70">Unlimited history, receipt photo upload, visuals & exports.</div>
+          {/* Side-by-side cards (responsive) */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <PlanCard target="basic" />
+            <PlanCard target="pro" />
+            <PlanCard target="enterprise" />
+          </div>
+
+          {/* Add-ons */}
+          <div className="border border-neutral-800 rounded-md p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="font-medium">Add-ons</div>
               <button
                 type="button"
                 disabled={!canBill || billingBusy}
-                onClick={() => startCheckout({ kind: "subscription", plan: "basic" })}
-                className="mt-2 border rounded px-3 py-2 text-sm hover:bg-neutral-900 disabled:opacity-50"
+                onClick={openBillingPortal}
+                className="border rounded px-3 py-2 text-xs hover:bg-neutral-900 disabled:opacity-50"
               >
-                {plan === "basic" ? "Manage in Portal" : "Upgrade to Basic"}
+                Billing Portal
               </button>
             </div>
 
-            <div className="border rounded-md p-3">
-              <div className="font-medium">Pro — $99/mo</div>
-              <div className="text-xs opacity-70">Staff module, AI dashboards, custom branding.</div>
-              <button
-                type="button"
-                disabled={!canBill || billingBusy}
-                onClick={() => startCheckout({ kind: "subscription", plan: "pro" })}
-                className="mt-2 border rounded px-3 py-2 text-sm hover:bg-neutral-900 disabled:opacity-50"
-              >
-                {plan === "pro" ? "Manage in Portal" : "Upgrade to Pro"}
-              </button>
-            </div>
+            <div className="mt-2 flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium">AI Deep Business Report</div>
+                <div className="text-xs opacity-70">$49 (one-time) • Available for Basic+</div>
+              </div>
 
-            <div className="border rounded-md p-3 opacity-90">
-              <div className="font-medium">Enterprise — $499/mo</div>
-              <div className="text-xs opacity-70">Multi-location, white-label, custom integrations.</div>
-              <button
-                type="button"
-                disabled={!canBill || billingBusy}
-                onClick={() => startCheckout({ kind: "subscription", plan: "enterprise" })}
-                className="mt-2 border rounded px-3 py-2 text-sm hover:bg-neutral-900 disabled:opacity-50"
-              >
-                Start Enterprise
-              </button>
-              <div className="text-xs opacity-60 mt-1">Hide this button until you’re ready.</div>
-            </div>
-
-            <div className="border rounded-md p-3">
-              <div className="font-medium">AI Deep Business Report — $49 (one-time)</div>
-              <div className="text-xs opacity-70">One-off deep report. Available for Basic+.</div>
               <button
                 type="button"
                 disabled={!canBill || billingBusy || plan === "starter"}
                 onClick={() => startCheckout({ kind: "one_time", sku: "ai_deep_business_report" })}
-                className="mt-2 border rounded px-3 py-2 text-sm hover:bg-neutral-900 disabled:opacity-50"
+                className="border rounded px-3 py-2 text-sm hover:bg-neutral-900 disabled:opacity-50"
                 title={plan === "starter" ? "Upgrade to Basic to purchase this." : ""}
               >
-                Buy AI Report
+                Buy
               </button>
             </div>
+
+            <div className="text-xs opacity-60 mt-2">
+              Plan changes sync from Stripe via webhook (updates in a few seconds).
+            </div>
+
+            <p className="text-xs mt-2 opacity-70">
+              <strong>Branding Tier:</strong> {brandingTier} (auto from plan: {computedBrandingTier})
+            </p>
           </div>
-
-          <button
-            type="button"
-            disabled={!canBill || billingBusy}
-            onClick={openBillingPortal}
-            className="border rounded px-3 py-2 text-sm hover:bg-neutral-900 disabled:opacity-50"
-          >
-            Open Billing Portal
-          </button>
-
-          {!tenantId && <div className="text-xs opacity-70">Billing requires a tenant.</div>}
-          {useDemo && <div className="text-xs opacity-70">Turn off demo mode to manage billing.</div>}
-
-          <p className="text-xs mt-2 opacity-70">
-            <strong>Branding Tier:</strong> {brandingTier} (auto from plan: {computedBrandingTier})
-          </p>
         </div>
       )}
 
