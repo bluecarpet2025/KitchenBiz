@@ -1,11 +1,11 @@
-// src/middleware.ts
+// middleware.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
 
 const PUBLIC_PATHS = [
-  "/", // landing
-  "/login", // login
+  "/",              // landing
+  "/login",         // login
   "/auth/callback", // supabase magic-link handler
 ];
 
@@ -15,8 +15,8 @@ function isPublic(pathname: string) {
   // public share links
   if (pathname.startsWith("/app/share/")) return true;
 
-  // Stripe webhook must be public (no session cookies)
-  if (pathname === "/api/stripe/webhook") return true;
+  // Stripe endpoints must be public (webhooks + checkout/portal endpoints)
+  if (pathname.startsWith("/api/stripe/")) return true;
 
   if (pathname === "/favicon.ico") return true;
   return false;
