@@ -149,14 +149,17 @@ export default function ProfileForm({
   };
 
   const planBlurb = (p: Plan) => {
+    if (p === "starter") return "Core features to get started.";
     if (p === "basic") return "Receipt photos, visuals & exports.";
     if (p === "pro") return "Staff module, AI dashboards, branding.";
-    if (p === "enterprise") return "Multi-location, white-label, custom.";
-    return "Inventory, sales, expenses, recipes.";
+    return "Multi-location, white-label, custom.";
   };
 
   const actionLabel = (target: Plan) => {
     if (plan === target) return "Manage in Portal";
+
+    if (target === "starter") return "Switch to Free";
+
     if (target === "enterprise") return "Switch to Enterprise";
     if (target === "pro") return plan === "enterprise" ? "Downgrade to Pro" : "Upgrade to Pro";
     if (target === "basic") return plan === "starter" ? "Upgrade to Basic" : "Switch to Basic";
@@ -164,8 +167,12 @@ export default function ProfileForm({
   };
 
   const onPlanClick = (target: Plan) => {
-    // If already on that plan, open portal instead of sending them through checkout.
+    // If already on that plan, open portal.
     if (plan === target) return openBillingPortal();
+
+    // Switching to free isn't a Stripe Checkout flow; user cancels in the Portal.
+    if (target === "starter") return openBillingPortal();
+
     return startCheckout({ kind: "subscription", plan: target });
   };
 
@@ -175,7 +182,9 @@ export default function ProfileForm({
 
     return (
       <div
-        className={`border rounded-md p-3 ${active ? "border-green-700 bg-green-900/10" : "border-neutral-800"}`}
+        className={`border rounded-md p-3 ${
+          active ? "border-green-700 bg-green-900/10" : "border-neutral-800"
+        }`}
       >
         <div className="flex items-center justify-between gap-2">
           <div className="font-medium">
@@ -198,6 +207,13 @@ export default function ProfileForm({
         >
           {actionLabel(target)}
         </button>
+
+        {/* Small hint only for switching to free */}
+        {target === "starter" && plan !== "starter" && canBill && (
+          <div className="text-[11px] opacity-60 mt-2">
+            Switching to Free happens by canceling in the portal.
+          </div>
+        )}
 
         {!canBill && (
           <div className="text-[11px] opacity-60 mt-2">
@@ -245,8 +261,9 @@ export default function ProfileForm({
             </div>
           </div>
 
-          {/* Side-by-side cards (responsive) */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          {/* Cards (responsive) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+            <PlanCard target="starter" />
             <PlanCard target="basic" />
             <PlanCard target="pro" />
             <PlanCard target="enterprise" />
