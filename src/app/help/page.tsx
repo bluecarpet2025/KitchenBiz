@@ -11,10 +11,9 @@ export default function Help() {
       <header>
         <h1 className="text-2xl font-semibold">Help / FAQ & Instructions</h1>
         <p className="text-sm text-neutral-300 mt-2">
-          This guide explains how each part of Kiori Solutions works and how your
-          data flows between modules. We’re currently in <strong>beta</strong> —
-          core features are stable, but visuals and copy may still evolve. 
-          If something feels off, you’re helping us shape the product.
+          This guide explains how each part of Kiori Solutions works and how your data flows between modules. We’re
+          currently in <strong>beta</strong> — core features are stable, but visuals and copy may still evolve. If
+          something feels off, you’re helping us shape the product.
         </p>
       </header>
 
@@ -22,35 +21,32 @@ export default function Help() {
       <section className="space-y-3">
         <h2 className="text-xl font-semibold">Inventory</h2>
         <p className="text-sm text-neutral-300">
-          Inventory is the backbone of accurate recipe costs and menu pricing.
-          Every item auto-calculates a base-unit cost from your purchase history.
+          Inventory is the backbone of accurate recipe costs and menu pricing. Every item auto-calculates a base-unit
+          cost from your purchase history.
         </p>
         <ul className="list-disc ml-6 text-sm text-neutral-300 space-y-1">
           <li>
-            Items list: <A href="/inventory">/inventory</A>.  
-            Create new items: <A href="/inventory/items/new">/inventory/items/new</A>.
+            Items list: <A href="/inventory">/inventory</A>. Create new items:{" "}
+            <A href="/inventory/items/new">/inventory/items/new</A>.
           </li>
           <li>
-            Purchases: record vendor invoices at{" "}
-            <A href="/inventory/purchase">/inventory/purchase</A>.  
-            This updates stock on hand and price history.
+            Purchases: record vendor invoices at <A href="/inventory/purchase">/inventory/purchase</A>. This updates
+            stock on hand and price history.
           </li>
           <li>
-            Daily counts: start at{" "}
-            <A href="/inventory/counts/new">/inventory/counts/new</A>.  
-            After entering quantities, press <em>Commit</em> to create adjustments.
+            Daily counts: start at <A href="/inventory/counts/new">/inventory/counts/new</A>. After entering quantities,
+            press <em>Commit</em> to create adjustments.
           </li>
           <li>
-            CSV import: <A href="/inventory/import">/inventory/import</A>.  
-            Use the included template.
+            CSV import: <A href="/inventory/import">/inventory/import</A>. Use the included template.
           </li>
         </ul>
+
         <FAQ
           q="Makeable shows 0 — how do I fix it?"
           a={
             <>
-              Makeable depends entirely on your stock ledger. Record a{" "}
-              <A href="/inventory/purchase">Purchase</A> or{" "}
+              Makeable depends entirely on your stock ledger. Record a <A href="/inventory/purchase">Purchase</A> or{" "}
               <A href="/inventory/counts/new">Count</A>.
             </>
           }
@@ -61,10 +57,9 @@ export default function Help() {
       <section className="space-y-3">
         <h2 className="text-xl font-semibold">Recipes</h2>
         <p className="text-sm text-neutral-300">
-          Recipes calculate cost per serving based on your Inventory base-unit costs.
-          Sub-recipes are supported and expand into their base ingredients automatically.
+          Recipes calculate cost per serving based on your Inventory base-unit costs. Sub-recipes are supported and
+          expand into their base ingredients automatically.
         </p>
-
         <ul className="list-disc ml-6 text-sm text-neutral-300 space-y-1">
           <li>
             Manage recipes: <A href="/recipes">/recipes</A>.
@@ -72,12 +67,8 @@ export default function Help() {
           <li>
             Create new: <A href="/recipes/new">/recipes/new</A>.
           </li>
-          <li>
-            Add ingredients and quantities. Costs update live.
-          </li>
-          <li>
-            “Makeable” shows how many you can prep now using your current stock.
-          </li>
+          <li>Add ingredients and quantities. Costs update live.</li>
+          <li>“Makeable” shows how many you can prep now using your current stock.</li>
         </ul>
       </section>
 
@@ -85,20 +76,15 @@ export default function Help() {
       <section className="space-y-3">
         <h2 className="text-xl font-semibold">Menu</h2>
         <p className="text-sm text-neutral-300">
-          The Menu Builder combines your recipes with your target margins to suggest
-          pricing, rounding, and menu versions you can save and load.
+          The Menu Builder combines your recipes with your target margins to suggest pricing, rounding, and menu
+          versions you can save and load.
         </p>
-
         <ul className="list-disc ml-6 text-sm text-neutral-300 space-y-1">
           <li>
             Build menus: <A href="/menu">/menu</A>.
           </li>
-          <li>
-            Save multiple menus, print them, or share read-only links.
-          </li>
-          <li>
-            Suggested price = (recipe cost ÷ target margin) with automatic rounding.
-          </li>
+          <li>Save multiple menus, print them, or share read-only links.</li>
+          <li>Suggested price = (recipe cost ÷ target margin) with automatic rounding.</li>
         </ul>
       </section>
 
@@ -106,18 +92,15 @@ export default function Help() {
       <section className="space-y-3">
         <h2 className="text-xl font-semibold">Sales</h2>
         <p className="text-sm text-neutral-300">
-          Import sales CSVs and track performance over any time period.  
-          Dashboard uses the same tables so everything stays in sync.
+          Import sales CSVs and track performance over any time period. Dashboard uses the same tables so everything
+          stays in sync.
         </p>
-
         <ul className="list-disc ml-6 text-sm text-neutral-300 space-y-1">
           <li>
-            View sales: <A href="/sales">/sales</A>.  
-            Import CSV: <A href="/sales/import">/sales/import</A>.
+            View sales: <A href="/sales">/sales</A>. Import CSV: <A href="/sales/import">/sales/import</A>.
           </li>
           <li>
-            Sales imports generate both <code>sales_orders</code> and{" "}
-            <code>sales_order_lines</code>.
+            Sales imports generate both <code>sales_orders</code> and <code>sales_order_lines</code>.
           </li>
           <li>
             Time-bucketed calculations come from <code>v_sales_*_totals</code>.
@@ -129,17 +112,15 @@ export default function Help() {
       <section className="space-y-3">
         <h2 className="text-xl font-semibold">Expenses</h2>
         <p className="text-sm text-neutral-300">
-          Log or import expenses to complete your Profit & Loss picture. 
-          These totals feed directly into the dashboard.
+          Log or import expenses to complete your Profit &amp; Loss picture. These totals feed directly into the
+          dashboard.
         </p>
         <ul className="list-disc ml-6 text-sm text-neutral-300 space-y-1">
           <li>
-            Expense list: <A href="/expenses">/expenses</A>.  
-            CSV import: <A href="/expenses/import">/expenses/import</A>.
+            Expense list: <A href="/expenses">/expenses</A>. CSV import: <A href="/expenses/import">/expenses/import</A>.
           </li>
           <li>
-            Required columns: <code>date</code>, <code>category</code>,{" "}
-            <code>description</code>, <code>amount</code>.
+            Required columns: <code>date</code>, <code>category</code>, <code>description</code>, <code>amount</code>.
           </li>
         </ul>
       </section>
@@ -148,8 +129,7 @@ export default function Help() {
       <section className="space-y-3">
         <h2 className="text-xl font-semibold">Staff</h2>
         <p className="text-sm text-neutral-300">
-          Keep a basic roster for admin tasks. This module will expand in future
-          updates with scheduling and permissions.
+          Keep a basic roster for admin tasks. This module will expand in future updates with scheduling and permissions.
         </p>
         <ul className="list-disc ml-6 text-sm text-neutral-300 space-y-1">
           <li>
@@ -162,20 +142,18 @@ export default function Help() {
       <section className="space-y-3">
         <h2 className="text-xl font-semibold">Dashboard</h2>
         <p className="text-sm text-neutral-300">
-          Your Sales & Expenses summarized across multiple timeframes:
-          daily, weekly, monthly, quarterly, and year-to-date.
+          Your Sales &amp; Expenses summarized across multiple timeframes: daily, weekly, monthly, quarterly, and
+          year-to-date.
         </p>
         <ul className="list-disc ml-6 text-sm text-neutral-300 space-y-1">
           <li>
-            Views must exist: <code>v_sales_*_totals</code>,{" "}
-            <code>v_expense_*_totals</code>.
+            Views must exist: <code>v_sales_*_totals</code>, <code>v_expense_*_totals</code>.
           </li>
           <li>
             Required columns: <code>revenue</code> (sales) and <code>total</code> (expenses).
           </li>
           <li>
-            Time labels: <code>day</code>, <code>week</code> (IYYY-WIW),{" "}
-            <code>month</code> (YYYY-MM), <code>year</code>.
+            Time labels: <code>day</code>, <code>week</code> (IYYY-WIW), <code>month</code> (YYYY-MM), <code>year</code>.
           </li>
         </ul>
       </section>
@@ -184,12 +162,16 @@ export default function Help() {
       <section className="space-y-3">
         <h2 className="text-xl font-semibold">CSV templates & troubleshooting</h2>
         <p className="text-sm text-neutral-300">
-          All Import pages include a downloadable template matched to your
-          tenant’s structure. Importers ignore extra columns safely.
+          All Import pages include a downloadable template matched to your tenant’s structure. Importers ignore extra
+          columns safely.
         </p>
         <ul className="list-disc ml-6 text-sm text-neutral-300 space-y-1">
-          <li>Dates must be <code>YYYY-MM-DD</code>.</li>
-          <li>Amounts must be numeric — no <code>$</code> signs.</li>
+          <li>
+            Dates must be <code>YYYY-MM-DD</code>.
+          </li>
+          <li>
+            Amounts must be numeric — no <code>$</code> signs.
+          </li>
           <li>Check toast errors for specific rows and messages.</li>
         </ul>
       </section>
@@ -202,10 +184,7 @@ export default function Help() {
           q="Why doesn’t my dashboard show data?"
           a="You may need at least one Sales or Expenses import. Also ensure the views and columns exist with exact names."
         />
-        <FAQ
-          q="What currency does it use?"
-          a="USD. Values are stored as numeric(12,2)."
-        />
+        <FAQ q="What currency does it use?" a="USD. Values are stored as numeric(12,2)." />
         <FAQ
           q="Is my data private?"
           a="Yes. Every row is tenant-scoped through RLS (Row-Level Security). You cannot see others’ data and they cannot see yours."
@@ -213,7 +192,7 @@ export default function Help() {
       </section>
 
       <footer className="pt-4 text-xs text-neutral-500">
-        Need help? Email <A href="mailto:bluecarpetllc@gmail.com">bluecarpetllc@gmail.com</A>.
+        Need help? Email <A href="mailto:support@kiorisolutions.com">support@kiorisolutions.com</A>.
       </footer>
     </main>
   );
