@@ -1,3 +1,4 @@
+// src/app/layout.tsx
 import "./globals.css";
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
@@ -20,13 +21,13 @@ export const metadata = {
     description: "Smart kitchen management tools for food entrepreneurs",
   },
   icons: {
-    icon: "/kiori-icon-32.png",                 // browser tab
-    shortcut: "/kiori-favicon.ico",             // legacy fallback
-    apple: "/kiori-apple-touch-icon.png",       // iOS home screen
+    icon: "/kiori-icon-32.png", // browser tab
+    shortcut: "/kiori-favicon.ico", // legacy fallback
+    apple: "/kiori-apple-touch-icon.png", // iOS home screen
     other: [
       {
         rel: "mask-icon",
-        url: "/kiori-maskable-icon-512.png",    // Android / PWA maskable icon
+        url: "/kiori-maskable-icon-512.png", // Android / PWA maskable icon
       },
     ],
   },
@@ -55,6 +56,32 @@ export default async function RootLayout({
   // Plan-based nav visibility
   const plan = await effectivePlan();
   const showStaff = canUseFeature(plan, "staff_accounts");
+
+  const bugMailto =
+    "mailto:support@kiorisolutions.com" +
+    "?subject=Kiori%20Solutions%20Bug%20Report" +
+    "&body=" +
+    encodeURIComponent(
+      [
+        "Thanks for helping improve Kiori Solutions!",
+        "",
+        "What happened?",
+        "",
+        "What page were you on? (paste the URL if possible)",
+        "",
+        "Steps to reproduce:",
+        "1) ",
+        "2) ",
+        "3) ",
+        "",
+        "Expected result:",
+        "",
+        "Actual result:",
+        "",
+        "Screenshot (optional):",
+        "",
+      ].join("\n")
+    );
 
   return (
     <html lang="en">
@@ -90,6 +117,7 @@ export default async function RootLayout({
               Dashboard
             </Link>
           </nav>
+
           <nav className="flex items-center gap-4">
             {user ? (
               <>
@@ -109,10 +137,15 @@ export default async function RootLayout({
                 Log in / Sign up
               </Link>
             )}
-            {/* Shared button component for Help / FAQ */}
+
+            {/* Bug Report (mailto) */}
+            <TopNavButton href={bugMailto} label="Report a bug" variant="danger" />
+
+            {/* Help / FAQ */}
             <TopNavButton href="/help" label="Help / FAQ" />
           </nav>
         </header>
+
         {children}
       </body>
     </html>
