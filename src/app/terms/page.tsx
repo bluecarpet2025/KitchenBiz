@@ -6,7 +6,7 @@ export default function TermsPage() {
         <li>Kiori Solutions is provided “as is” during beta. We may change or remove features at any time.</li>
         <li>You are responsible for any data you enter. Back up any critical information.</li>
         <li>By using Kiori Solutions you agree to our Privacy Policy and these Terms.</li>
-        <li>Contact: <a className="underline" href="mailto:bluecarpetllc@gmail.com">bluecarpetllc@gmail.com</a></li>
+        <li>Contact: <a className="underline" href="support@kiorisolutions.com">support@kiorisolutions.com</a></li>
       </ol>
       <p className="text-neutral-300 text-sm">Last updated: {new Date().toLocaleDateString()}</p>
     </main>
