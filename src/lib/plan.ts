@@ -21,35 +21,19 @@ export type FeatureKey =
  * Minimum plan required for each feature.
  *
  * IMPORTANT: This is the source of truth for tier gating.
- * - Starter should have Inventory, Sales, Expenses, Recipes/Menu.
- * - Basic unlocks receipt photos, trends, PDFs, etc.
- * - Pro unlocks Staff, AI, Branding, POS, etc.
- * - Enterprise extends Pro with multi-location & API (handled elsewhere).
+ * - Starter: Inventory, Sales, Expenses, Recipes/Menu.
+ * - Basic: Receipt photos, trends, exports.
+ * - Pro: Staff, AI, Branding.
+ * - Enterprise: Everything (future multi-location, API, etc).
  */
 const FEATURE_MIN_PLAN: Record<FeatureKey, Plan> = {
-  // Starter has full access to inventory flows
   inventory_access: "starter",
-
-  // Staff module (tab, accounts, schedules, payroll) is Pro+
   staff_accounts: "pro",
-
-  // Receipt photo upload is Basic+
-  // Starter can still use CSV-only flows handled in the UI.
   receipt_photo_upload: "basic",
-
-  // Starter can use Sales flows (with 3-month history cap in UI logic)
   sales_access: "starter",
-
-  // Starter can also track Expenses
   expenses_access: "starter",
-
-  // Menu builder / recipes are Starter+
   menu_builder: "starter",
-
-  // AI dashboards / AI financial insights are Pro+
   ai_reports: "pro",
-
-  // Custom branding is Pro+
   custom_branding: "pro",
 };
 
@@ -58,21 +42,32 @@ export function canUseFeature(plan: Plan, feature: FeatureKey): boolean {
   return PLAN_ORDER.indexOf(plan) >= PLAN_ORDER.indexOf(need);
 }
 
-/** Read the user’s effective plan from profiles; defaults to starter if unknown */
+/**
+ * Read the user’s effective plan.
+ *
+ * ADMIN OVERRIDE:
+ * - role = 'admin' ALWAYS resolves to 'enterprise'
+ * - Stripe can never downgrade admin accounts
+ */
 export async function effectivePlan(): Promise<Plan> {
   const supabase = await createServerClient();
   const { data: au } = await supabase.auth.getUser();
   const uid = au.user?.id;
+
   if (!uid) return "starter";
 
   const { data: prof } = await supabase
     .from("profiles")
-    .select("plan")
+    .select("plan, role")
     .eq("id", uid)
     .maybeSingle();
 
+  // 🔒 HARD ADMIN OVERRIDE
+  if (prof?.role === "admin") {
+    return "enterprise";
+  }
+
   const raw = (prof?.plan as Plan | null) ?? "starter";
 
-  // Normalize any weird/legacy values
   return PLAN_ORDER.includes(raw) ? raw : "starter";
 }
