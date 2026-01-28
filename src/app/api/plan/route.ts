@@ -1,3 +1,4 @@
+// src/app/api/plan/route.ts
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { effectivePlan } from "@/lib/plan";

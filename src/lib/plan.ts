@@ -2,9 +2,9 @@
 import "server-only";
 import { createServerClient } from "@/lib/supabase/server";
 
-export type Plan = "starter" | "basic" | "pro" | "enterprise";
+export type Plan = "starter" | "basic" | "pro";
 
-export const PLAN_ORDER: Plan[] = ["starter", "basic", "pro", "enterprise"];
+export const PLAN_ORDER: Plan[] = ["starter", "basic", "pro"];
 
 /** All feature flags we gate in the app */
 export type FeatureKey =
@@ -23,8 +23,7 @@ export type FeatureKey =
  * IMPORTANT: This is the source of truth for tier gating.
  * - Starter: Inventory, Sales, Expenses, Recipes/Menu.
  * - Basic: Receipt photos, trends, exports.
- * - Pro: Staff, AI, Branding.
- * - Enterprise: Everything (future multi-location, API, etc).
+ * - Pro: Staff and customization. (AI features are planned, but gating can remain here.)
  */
 const FEATURE_MIN_PLAN: Record<FeatureKey, Plan> = {
   inventory_access: "starter",
@@ -43,17 +42,30 @@ export function canUseFeature(plan: Plan, feature: FeatureKey): boolean {
 }
 
 /**
+ * Normalize any legacy or unknown plan values.
+ * - "enterprise" (legacy) => "pro"
+ * - unknown => "starter"
+ */
+function normalizePlan(raw: unknown): Plan {
+  if (raw === "pro") return "pro";
+  if (raw === "basic") return "basic";
+  if (raw === "starter") return "starter";
+  // legacy value still possibly in DB
+  if (raw === "enterprise") return "pro";
+  return "starter";
+}
+
+/**
  * Read the user’s effective plan.
  *
  * ADMIN OVERRIDE:
- * - role = 'admin' ALWAYS resolves to 'enterprise'
+ * - role = 'admin' ALWAYS resolves to 'pro' (highest plan now)
  * - Stripe can never downgrade admin accounts
  */
 export async function effectivePlan(): Promise<Plan> {
   const supabase = await createServerClient();
   const { data: au } = await supabase.auth.getUser();
   const uid = au.user?.id;
-
   if (!uid) return "starter";
 
   const { data: prof } = await supabase
@@ -64,10 +76,8 @@ export async function effectivePlan(): Promise<Plan> {
 
   // 🔒 HARD ADMIN OVERRIDE
   if (prof?.role === "admin") {
-    return "enterprise";
+    return "pro";
   }
 
-  const raw = (prof?.plan as Plan | null) ?? "starter";
-
-  return PLAN_ORDER.includes(raw) ? raw : "starter";
+  return normalizePlan(prof?.plan);
 }
