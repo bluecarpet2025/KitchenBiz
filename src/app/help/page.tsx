@@ -11,10 +11,9 @@ export default function Help() {
       <header>
         <h1 className="text-2xl font-semibold">Help / FAQ & Instructions</h1>
         <p className="text-sm text-neutral-300 mt-2">
-          This guide explains how each part of Kiori Solutions works and how your
-          data flows between modules. We’re currently in <strong>beta</strong> — core
-          features are stable, but visuals and copy may still evolve. If something
-          feels off, you’re helping us shape the product.
+          This guide explains how each part of Kiori Solutions works and how your data flows between modules. We’re currently in{" "}
+          <strong>beta</strong> — core features are stable, but visuals and copy may still evolve. If something feels off, you’re helping us
+          shape the product.
         </p>
       </header>
 
@@ -22,22 +21,20 @@ export default function Help() {
       <section className="space-y-3">
         <h2 className="text-xl font-semibold">Inventory</h2>
         <p className="text-sm text-neutral-300">
-          Inventory is the backbone of accurate recipe costs and menu pricing. Every
-          item auto-calculates a base-unit cost from your purchase history.
+          Inventory is the backbone of accurate recipe costs and menu pricing. Every item auto-calculates a base-unit cost from your purchase
+          history.
         </p>
         <ul className="list-disc ml-6 text-sm text-neutral-300 space-y-1">
           <li>
-            Items list: <A href="/inventory">/inventory</A>. Create new items:{" "}
-            <A href="/inventory/items/new">/inventory/items/new</A>.
+            Items list: <A href="/inventory">/inventory</A>. Create new items: <A href="/inventory/items/new">/inventory/items/new</A>.
           </li>
           <li>
-            Purchases: record vendor invoices at{" "}
-            <A href="/inventory/purchase">/inventory/purchase</A>. This updates stock
-            on hand and price history.
+            Purchases: record vendor invoices at <A href="/inventory/purchase">/inventory/purchase</A>. This updates stock on hand and price
+            history.
           </li>
           <li>
-            Daily counts: start at <A href="/inventory/counts/new">/inventory/counts/new</A>.
-            After entering quantities, press <em>Commit</em> to create adjustments.
+            Daily counts: start at <A href="/inventory/counts/new">/inventory/counts/new</A>. After entering quantities, press <em>Commit</em>{" "}
+            to create adjustments.
           </li>
           <li>
             CSV import: <A href="/inventory/import">/inventory/import</A>. Use the included template.
@@ -48,8 +45,7 @@ export default function Help() {
           q="Makeable shows 0 — how do I fix it?"
           a={
             <>
-              Makeable depends entirely on your stock ledger. Record a{" "}
-              <A href="/inventory/purchase">Purchase</A> or{" "}
+              Makeable depends entirely on your stock ledger. Record a <A href="/inventory/purchase">Purchase</A> or{" "}
               <A href="/inventory/counts/new">Count</A>.
             </>
           }
@@ -60,8 +56,8 @@ export default function Help() {
       <section className="space-y-3">
         <h2 className="text-xl font-semibold">Recipes</h2>
         <p className="text-sm text-neutral-300">
-          Recipes calculate cost per serving based on your Inventory base-unit costs.
-          Sub-recipes are supported and expand into their base ingredients automatically.
+          Recipes calculate cost per serving based on your Inventory base-unit costs. Sub-recipes are supported and expand into their base
+          ingredients automatically.
         </p>
         <ul className="list-disc ml-6 text-sm text-neutral-300 space-y-1">
           <li>
@@ -79,8 +75,7 @@ export default function Help() {
       <section className="space-y-3">
         <h2 className="text-xl font-semibold">Menu</h2>
         <p className="text-sm text-neutral-300">
-          The Menu Builder combines your recipes with your target margins to suggest
-          pricing, rounding, and menu versions you can save and load.
+          The Menu Builder combines your recipes with your target margins to suggest pricing, rounding, and menu versions you can save and load.
         </p>
         <ul className="list-disc ml-6 text-sm text-neutral-300 space-y-1">
           <li>
@@ -130,11 +125,14 @@ export default function Help() {
       <section className="space-y-3">
         <h2 className="text-xl font-semibold">Staff</h2>
         <p className="text-sm text-neutral-300">
-          Keep a basic roster for admin tasks. This module will expand in future updates with scheduling and permissions.
+          Staff tools help you keep a roster and track schedules and payroll totals. Staff is available on the <strong>Pro</strong> plan.
         </p>
         <ul className="list-disc ml-6 text-sm text-neutral-300 space-y-1">
           <li>
             Manage: <A href="/staff/manage">/staff/manage</A>.
+          </li>
+          <li>
+            Schedule: <A href="/staff/schedule">/staff/schedule</A>.
           </li>
         </ul>
       </section>
@@ -165,8 +163,12 @@ export default function Help() {
           All Import pages include a downloadable template matched to your tenant’s structure. Importers ignore extra columns safely.
         </p>
         <ul className="list-disc ml-6 text-sm text-neutral-300 space-y-1">
-          <li>Dates must be <code>YYYY-MM-DD</code>.</li>
-          <li>Amounts must be numeric — no <code>$</code> signs.</li>
+          <li>
+            Dates must be <code>YYYY-MM-DD</code>.
+          </li>
+          <li>
+            Amounts must be numeric — no <code>$</code> signs.
+          </li>
           <li>Check toast errors for specific rows and messages.</li>
         </ul>
       </section>
@@ -190,12 +192,16 @@ export default function Help() {
         />
 
         <FAQ
+          q="Is AI included?"
+          a="Not yet. We’re focused on making the core numbers rock-solid first. AI-assisted insights are planned for a future update."
+        />
+
+        <FAQ
           q="How do I cancel or go back to the free plan?"
           a={
             <>
-              You can cancel anytime from the <strong>Billing Portal</strong> (Profile → Billing Portal).
-              After your subscription ends, your account stays active on the <strong>Starter (Free)</strong> plan.
-              Your data remains in your tenant so you can upgrade again later.
+              You can cancel anytime from the <strong>Billing Portal</strong> (Profile → Billing Portal). After your subscription ends, your
+              account stays active on the <strong>Starter (Free)</strong> plan. Your data remains in your tenant so you can upgrade again later.
             </>
           }
         />
@@ -205,8 +211,7 @@ export default function Help() {
           a={
             <>
               During beta, refunds are handled case-by-case. If something didn’t work as expected, email{" "}
-              <A href="mailto:support@kiorisolutions.com">support@kiorisolutions.com</A>{" "}
-              and we’ll review it quickly.
+              <A href="mailto:support@kiorisolutions.com">support@kiorisolutions.com</A> and we’ll review it quickly.
             </>
           }
         />
