@@ -4,7 +4,7 @@
 import { useMemo, useState } from "react";
 import createClient from "@/lib/supabase/client";
 
-type Plan = "starter" | "basic" | "pro" | "enterprise";
+type Plan = "starter" | "basic" | "pro";
 
 export default function ProfileForm({
   initialName,
@@ -43,12 +43,11 @@ export default function ProfileForm({
   const computedBrandingTier = useMemo(() => {
     if (plan === "starter") return "none";
     if (plan === "basic") return "one_time";
-    return "unlimited";
+    return "unlimited"; // pro
   }, [plan]);
 
   const save = async () => {
     setBusy(true);
-
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -73,6 +72,7 @@ export default function ProfileForm({
 
     // Save tenant info if applicable
     let tenantErr: string | null = null;
+
     if (!useDemo && tenantId) {
       const cleanName = bizName.trim().slice(0, 120);
       const cleanBlurb = bizBlurb.trim().slice(0, 240);
@@ -137,31 +137,25 @@ export default function ProfileForm({
   const planLabel = (p: Plan) => {
     if (p === "starter") return "Starter";
     if (p === "basic") return "Basic";
-    if (p === "pro") return "Pro";
-    return "Enterprise";
+    return "Pro";
   };
 
   const planPrice = (p: Plan) => {
     if (p === "basic") return "$49/mo";
     if (p === "pro") return "$99/mo";
-    if (p === "enterprise") return "$499/mo";
     return "Free";
   };
 
   const planBlurb = (p: Plan) => {
-    if (p === "starter") return "Core features to get started.";
-    if (p === "basic") return "Receipt photos, visuals & exports.";
-    if (p === "pro") return "Staff module, AI dashboards, branding.";
-    return "Multi-location, white-label, custom.";
+    if (p === "starter") return "Get set up and learn the workflow.";
+    if (p === "basic") return "Trends, exports, and receipt photo upload.";
+    return "Staff tools, advanced dashboards, and customization.";
   };
 
   const actionLabel = (target: Plan) => {
     if (plan === target) return "Manage in Portal";
-
     if (target === "starter") return "Switch to Free";
-
-    if (target === "enterprise") return "Switch to Enterprise";
-    if (target === "pro") return plan === "enterprise" ? "Downgrade to Pro" : "Upgrade to Pro";
+    if (target === "pro") return "Upgrade to Pro";
     if (target === "basic") return plan === "starter" ? "Upgrade to Basic" : "Switch to Basic";
     return "Switch";
   };
@@ -169,10 +163,8 @@ export default function ProfileForm({
   const onPlanClick = (target: Plan) => {
     // If already on that plan, open portal.
     if (plan === target) return openBillingPortal();
-
     // Switching to free isn't a Stripe Checkout flow; user cancels in the Portal.
     if (target === "starter") return openBillingPortal();
-
     return startCheckout({ kind: "subscription", plan: target });
   };
 
@@ -262,11 +254,10 @@ export default function ProfileForm({
           </div>
 
           {/* Cards (responsive) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
             <PlanCard target="starter" />
             <PlanCard target="basic" />
             <PlanCard target="pro" />
-            <PlanCard target="enterprise" />
           </div>
 
           {/* Add-ons */}
@@ -285,10 +276,9 @@ export default function ProfileForm({
 
             <div className="mt-2 flex items-start justify-between gap-3">
               <div>
-                <div className="text-sm font-medium">AI Deep Business Report</div>
+                <div className="text-sm font-medium">Deep Business Report</div>
                 <div className="text-xs opacity-70">$49 (one-time) • Available for Basic+</div>
               </div>
-
               <button
                 type="button"
                 disabled={!canBill || billingBusy || plan === "starter"}

@@ -1,14 +1,23 @@
+// src/app/profile/page.tsx
 import { createServerClient } from "@/lib/supabase/server";
 import ProfileForm from "./ProfileForm";
 
 export default async function ProfilePage() {
   const supabase = await createServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   if (!user) {
     return (
       <main className="mx-auto max-w-3xl px-4 py-8">
-        <p>Please <a className="underline" href="/login">log in</a>.</p>
+        <p>
+          Please{" "}
+          <a className="underline" href="/login">
+            log in
+          </a>
+          .
+        </p>
       </main>
     );
   }
@@ -21,12 +30,14 @@ export default async function ProfilePage() {
 
   let businessName = "";
   let businessBlurb = "";
+
   if (profile?.tenant_id) {
     const { data: t } = await supabase
       .from("tenants")
       .select("name, short_description")
       .eq("id", profile.tenant_id)
       .maybeSingle();
+
     businessName = (t?.name ?? "").toString();
     businessBlurb = (t?.short_description ?? "").toString();
   }
@@ -34,6 +45,7 @@ export default async function ProfilePage() {
   return (
     <main className="mx-auto max-w-3xl px-4 py-8">
       <h1 className="text-2xl font-semibold mb-6">Profile</h1>
+
       <ProfileForm
         initialName={profile?.display_name ?? ""}
         initialUseDemo={!!profile?.use_demo}
@@ -44,6 +56,7 @@ export default async function ProfilePage() {
         initialPlan={profile?.plan ?? "starter"}
         initialBrandingTier={profile?.branding_tier ?? "none"}
       />
+
       <p className="mt-6 text-sm text-neutral-400">
         When <strong>Use demo data</strong> is on, you’ll see the read-only
         <em> Pizza Demo (Tester)</em> tenant everywhere. Business settings are disabled in demo mode.
