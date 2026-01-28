@@ -1,5 +1,6 @@
 // src/app/api/stripe/checkout/route.ts
 import "server-only";
+
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -8,7 +9,7 @@ import { stripe, assertStripeEnv } from "@/lib/stripe";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type SubscriptionPlan = "basic" | "pro" | "enterprise";
+type SubscriptionPlan = "basic" | "pro";
 type OneTimeSku = "ai_deep_business_report";
 
 type Body =
@@ -18,11 +19,6 @@ type Body =
 function priceIdForPlan(plan: SubscriptionPlan) {
   if (plan === "basic") return process.env.STRIPE_PRICE_BASIC!;
   if (plan === "pro") return process.env.STRIPE_PRICE_PRO!;
-  if (plan === "enterprise") {
-    const ent = process.env.STRIPE_PRICE_ENTERPRISE;
-    if (!ent) throw new Error("Enterprise price id missing (STRIPE_PRICE_ENTERPRISE)");
-    return ent;
-  }
   throw new Error("Unknown plan");
 }
 
@@ -52,6 +48,7 @@ export async function POST(req: Request) {
 
   const tenantId = (prof?.tenant_id as string | null) ?? null;
   if (!tenantId) return NextResponse.json({ error: "No tenant" }, { status: 400 });
+
   if (prof?.use_demo) return NextResponse.json({ error: "Demo mode cannot purchase" }, { status: 400 });
 
   const role = String(prof?.role ?? "owner");
@@ -59,6 +56,7 @@ export async function POST(req: Request) {
 
   // Create/reuse Stripe customer for tenant
   const admin = createAdminClient();
+
   const { data: existing } = await admin
     .from("stripe_customers")
     .select("stripe_customer_id")
@@ -75,7 +73,6 @@ export async function POST(req: Request) {
         owner_user_id: user.id,
       },
     });
-
     customerId = customer.id;
 
     await admin.from("stripe_customers").insert({
