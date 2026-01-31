@@ -1,3 +1,4 @@
+// src/app/financial/page.tsx
 import "server-only";
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
@@ -12,23 +13,32 @@ const fmtUSD = (n: number) =>
 function ym(d: Date) {
   return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}`;
 }
-
 function addMonths(ymStr: string, delta: number) {
   const [y, m] = ymStr.split("-").map(Number);
   const d = new Date(Date.UTC(y, m - 1, 1));
   d.setUTCMonth(d.getUTCMonth() + delta);
   return ym(d);
 }
-
 function addMonthsUTC(d: Date, n: number) {
   const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
   x.setUTCMonth(x.getUTCMonth() + n);
   return x;
 }
-
 const maxIso = (a: string, b: string) => (a > b ? a : b);
 
+/* ----------------------------- types ------------------------------ */
 type SalesMonthRow = { month: string; revenue: number; orders: number };
+
+type ExpenseBuckets = {
+  Food: number;
+  Beverage: number;
+  Labor: number;
+  Rent: number;
+  Utilities: number;
+  Marketing: number;
+  Misc: number;
+};
+
 type IncomeRow = {
   month: string;
   sales: number;
@@ -90,7 +100,7 @@ export default async function FinancialPage(props: any) {
     if (months.length > 120) break;
   }
 
-  // For Starter: only query >= cutoff, but keep full month list and render old months as $0.
+  // For Starter: only query >= cutoff, but keep the full month list and render old months as $0.
   const queryStartIso = isStarter ? maxIso(startIso, cutoffIso) : startIso;
   const queryStartMonth = queryStartIso.slice(0, 7);
 
@@ -122,17 +132,7 @@ export default async function FinancialPage(props: any) {
     .gte("occurred_at", `${queryStartIso}T00:00:00Z`)
     .lt("occurred_at", `${endIso}T00:00:00Z`);
 
-  type ExpBucket = {
-    Food: number;
-    Beverage: number;
-    Labor: number;
-    Rent: number;
-    Utilities: number;
-    Marketing: number;
-    Misc: number;
-  };
-
-  const emptyBucket = (): ExpBucket => ({
+  const emptyBuckets = (): ExpenseBuckets => ({
     Food: 0,
     Beverage: 0,
     Labor: 0,
@@ -142,90 +142,88 @@ export default async function FinancialPage(props: any) {
     Misc: 0,
   });
 
-  const expByMonth = new Map<string, ExpBucket>();
-  const ytdBucket = emptyBucket();
+  const expByMonth = new Map<string, ExpenseBuckets>();
+  const ytdBucket = emptyBuckets();
 
-  function catKey(c: string | null): keyof ExpBucket {
+  // Category bucketing:
+  // - custom is allowed, but we normalize common ones
+  // - everything else falls into Misc
+  function catKey(c: string | null): keyof ExpenseBuckets {
     const k = String(c ?? "").trim().toLowerCase();
 
+    // Food/Beverage
     if (k === "food") return "Food";
+    if (k === "beverage" || k === "drinks" || k === "drink") return "Beverage";
 
-    // Beverage synonyms (light touch — can expand later)
-    if (k === "beverage" || k === "drinks" || k === "drink" || k === "bar" || k === "coffee") return "Beverage";
+    // Labor
+    if (k === "labor" || k === "payroll" || k === "wages") return "Labor";
 
-    if (k === "labor") return "Labor";
-    if (k === "rent") return "Rent";
-    if (k === "utilities" || k === "utility") return "Utilities";
-    if (k === "marketing") return "Marketing";
+    // Rent
+    if (k === "rent" || k === "lease") return "Rent";
+
+    // Utilities
+    if (k === "utilities" || k === "utility" || k === "electric" || k === "electricity" || k === "gas" || k === "water")
+      return "Utilities";
+
+    // Marketing
+    if (k === "marketing" || k === "ads" || k === "advertising") return "Marketing";
+
     return "Misc";
   }
 
   for (const r of expRows ?? []) {
     const dt = new Date((r as any).occurred_at);
-    const m = `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}`;
+    const monthKey = `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}`;
     const c = catKey((r as any).category);
-    const amt = Number((r as any).amount_usd || 0); // ✅ negatives allowed
+    const amt = Number((r as any).amount_usd || 0); // can be negative
 
-    if (!expByMonth.has(m)) expByMonth.set(m, emptyBucket());
-    expByMonth.get(m)![c] += amt;
+    if (!expByMonth.has(monthKey)) expByMonth.set(monthKey, emptyBuckets());
+    expByMonth.get(monthKey)![c] += amt;
     ytdBucket[c] += amt;
   }
 
-  /* ---------------- This Month & YTD cards ----------------- */
+  const monthStartIso = (m: string) => `${m}-01`;
+
+  /* ---------------- Cards: This Month / YTD ---------------- */
   const thisMonth = `${now.getUTCFullYear()}-${pad2(now.getUTCMonth() + 1)}`;
   const thisYear = String(now.getUTCFullYear());
 
   const cardMonthKey = thisMonth;
   const cardMonthSales = Number(salesByMonth.get(cardMonthKey) || 0);
   const cardMonthOrders = Number(ordersByMonth.get(cardMonthKey) || 0);
-
-  const cardMonthExp = Object.values(expByMonth.get(cardMonthKey) ?? emptyBucket()).reduce((a, b) => a + b, 0);
+  const cardMonthExp = Object.values(expByMonth.get(cardMonthKey) ?? emptyBuckets()).reduce((a, b) => a + b, 0);
   const cardMonthProfit = cardMonthSales - cardMonthExp;
   const cardMonthAOV = cardMonthOrders > 0 ? cardMonthSales / cardMonthOrders : 0;
 
-  const monthStartIso = (m: string) => `${m}-01`;
   const ytdMonths = months.filter((m) => m.startsWith(thisYear));
 
-  const ytdSales = ytdMonths.reduce((a, m) => {
-    if (isStarter && monthStartIso(m) < cutoffIso) return a;
-    return a + Number(salesByMonth.get(m) || 0);
-  }, 0);
-
-  const ytdOrders = ytdMonths.reduce((a, m) => {
-    if (isStarter && monthStartIso(m) < cutoffIso) return a;
-    return a + Number(ordersByMonth.get(m) || 0);
-  }, 0);
+  const ytdSales = ytdMonths.reduce((a, m) => a + (isStarter && monthStartIso(m) < cutoffIso ? 0 : Number(salesByMonth.get(m) || 0)), 0);
+  const ytdOrders = ytdMonths.reduce((a, m) => a + (isStarter && monthStartIso(m) < cutoffIso ? 0 : Number(ordersByMonth.get(m) || 0)), 0);
 
   const ytdExpenses = ytdMonths.reduce((a, m) => {
     if (isStarter && monthStartIso(m) < cutoffIso) return a;
-    return a + Object.values(expByMonth.get(m) ?? emptyBucket()).reduce((x, y) => x + y, 0);
+    return a + Object.values(expByMonth.get(m) ?? emptyBuckets()).reduce((x, y) => x + y, 0);
   }, 0);
 
   const ytdProfit = ytdSales - ytdExpenses;
   const ytdAOV = ytdOrders > 0 ? ytdSales / ytdOrders : 0;
 
-  // Prime Cost (accountant language): Food + Beverage + Labor
-  const cardMonthBucket = expByMonth.get(cardMonthKey) ?? emptyBucket();
-  const cardMonthPrimeCost = (cardMonthBucket.Food || 0) + (cardMonthBucket.Beverage || 0) + (cardMonthBucket.Labor || 0);
-  const cardMonthPrimePct = cardMonthSales > 0 ? (cardMonthPrimeCost / cardMonthSales) * 100 : 0;
+  // Prime cost: Food + Beverage + Labor (signed)
+  const ytdPrime = ytdBucket.Food + ytdBucket.Beverage + ytdBucket.Labor;
 
-  const ytdPrimeCost = (ytdBucket.Food || 0) + (ytdBucket.Beverage || 0) + (ytdBucket.Labor || 0);
-  const ytdPrimePct = ytdSales > 0 ? (ytdPrimeCost / ytdSales) * 100 : 0;
-
-  /* ---------------- Trailing months series & income table -------------- */
+  /* ---------------- Series & income table ---------------- */
   const lineSeries = months.map((m) => {
     const isLocked = isStarter && monthStartIso(m) < cutoffIso;
     const s = isLocked ? 0 : Number(salesByMonth.get(m) || 0);
-    const e = isLocked ? 0 : Object.values(expByMonth.get(m) ?? emptyBucket()).reduce((a, b) => a + b, 0);
+    const e = isLocked ? 0 : Object.values(expByMonth.get(m) ?? emptyBuckets()).reduce((a, b) => a + b, 0);
     return { key: m, sales: s, expenses: e, profit: s - e };
   });
 
   const incomeRows: IncomeRow[] = months.map((m) => {
     const isLocked = isStarter && monthStartIso(m) < cutoffIso;
-    const exp = isLocked ? emptyBucket() : expByMonth.get(m) ?? emptyBucket();
+    const exp = isLocked ? emptyBuckets() : expByMonth.get(m) ?? emptyBuckets();
     const sales = isLocked ? 0 : Number(salesByMonth.get(m) || 0);
     const total = Object.values(exp).reduce((a, b) => a + b, 0);
-
     return {
       month: m,
       sales,
@@ -273,7 +271,7 @@ export default async function FinancialPage(props: any) {
       </div>
 
       {isStarter && (
-        <div className="mb-4 text-xs rounded border border-amber-600/40 bg-amber-900/10 px-3 py-2 text-amber-200">
+        <div className="mb-3 text-xs rounded border border-amber-600/40 bg-amber-900/10 px-3 py-2 text-amber-200">
           Starter shows last 3 months in visuals (older periods display $0).{" "}
           <Link href="/profile" className="underline">
             Upgrade to Basic
@@ -281,6 +279,11 @@ export default async function FinancialPage(props: any) {
           for full history.
         </div>
       )}
+
+      {/* One clean note only */}
+      <div className="mb-4 text-xs rounded border border-neutral-800 bg-neutral-900/40 px-3 py-2 opacity-90">
+        <b>Note:</b> Refunds/credits should be entered as <b>negative expenses</b> (example: <code>-25.00</code>).
+      </div>
 
       {/* Top cards */}
       <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -291,10 +294,16 @@ export default async function FinancialPage(props: any) {
         </div>
 
         <div className="border rounded p-4">
-          <div className="opacity-70 text-xs">THIS MONTH — EXPENSES</div>
+          <div className="opacity-70 text-xs">THIS MONTH — EXPENSES (NET)</div>
           <div className="text-2xl font-semibold">{fmtUSD(cardMonthExp)}</div>
           <div className="text-xs mt-1 opacity-80">
-            Prime Cost %: {Math.round(cardMonthPrimePct)}%
+            Prime %:{" "}
+            {(() => {
+              const exp = expByMonth.get(cardMonthKey) ?? emptyBuckets();
+              const prime = exp.Food + exp.Beverage + exp.Labor;
+              const pct = prime / Math.max(1, cardMonthSales);
+              return `${Math.round(pct * 100)}%`;
+            })()}
           </div>
         </div>
 
@@ -304,7 +313,7 @@ export default async function FinancialPage(props: any) {
             {fmtUSD(cardMonthProfit)}
           </div>
           <div className="text-xs mt-1 opacity-80">
-            Margin: {Math.round(cardMonthSales > 0 ? (cardMonthProfit / cardMonthSales) * 100 : 0)}%
+            Margin: {Math.round((cardMonthSales > 0 ? (cardMonthProfit / cardMonthSales) * 100 : 0))}%
           </div>
         </div>
 
@@ -315,11 +324,11 @@ export default async function FinancialPage(props: any) {
         </div>
 
         <div className="border rounded p-4">
-          <div className="opacity-70 text-xs">YEAR TO DATE — EXPENSES</div>
+          <div className="opacity-70 text-xs">YEAR TO DATE — EXPENSES (NET)</div>
           <div className="text-2xl font-semibold">{fmtUSD(ytdExpenses)}</div>
           <div className="text-xs mt-1 opacity-80">
-            Expense % of sales: {Math.round(ytdSales > 0 ? (ytdExpenses / ytdSales) * 100 : 0)}% · Prime Cost %:{" "}
-            {Math.round(ytdPrimePct)}%
+            Expense % of sales: {Math.round((ytdSales > 0 ? (ytdExpenses / ytdSales) * 100 : 0))}% · Prime %:{" "}
+            {Math.round((ytdSales > 0 ? (ytdPrime / ytdSales) * 100 : 0))}%
           </div>
         </div>
 
@@ -327,50 +336,54 @@ export default async function FinancialPage(props: any) {
           <div className="opacity-70 text-xs">YEAR TO DATE — PROFIT / LOSS</div>
           <div className={`text-2xl font-semibold ${ytdProfit < 0 ? "text-rose-400" : ""}`}>{fmtUSD(ytdProfit)}</div>
           <div className="text-xs mt-1 opacity-80">
-            Margin: {Math.round(ytdSales > 0 ? (ytdProfit / ytdSales) * 100 : 0)}%
+            Margin: {Math.round((ytdSales > 0 ? (ytdProfit / ytdSales) * 100 : 0))}%
           </div>
         </div>
       </section>
 
-      {/* Charts row (minimal, keep as-is but now reflects signed expenses) */}
+      {/* Charts row (kept minimal, but now supports negatives correctly) */}
       <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
         <div className="border rounded p-4">
-          <div className="text-sm opacity-80 mb-2">Trailing months — Sales vs Expenses</div>
+          <div className="text-sm opacity-80 mb-2">Trailing months — Sales vs Expenses (net)</div>
           <div className="h-48">
             {(() => {
               const width = 600, height = 180, left = 36, right = 6, top = 10, bottom = 22;
               const W = width - left - right, H = height - top - bottom;
 
-              // Signed series can go negative; keep chart simple but safe:
-              // We scale using max absolute to avoid inverted visuals.
-              const values = lineSeries.flatMap((r) => [r.sales, r.expenses]);
-              const maxAbs = Math.max(1, ...values.map((v) => Math.abs(v)));
-              const dx = lineSeries.length > 1 ? W / (lineSeries.length - 1) : 0;
-              const scaleY = (v: number) => top + H - ((v + maxAbs) / (2 * maxAbs)) * H; // center zero
-              const zeroY = scaleY(0);
+              const vals = lineSeries.flatMap((r) => [r.sales, r.expenses, 0]);
+              const minV = Math.min(...vals);
+              const maxV = Math.max(...vals);
+              const span = Math.max(1, maxV - minV);
 
+              const dx = lineSeries.length > 1 ? W / (lineSeries.length - 1) : 0;
               const xs = lineSeries.map((_, i) => left + i * dx);
+
+              const scaleY = (v: number) => top + H - ((v - minV) / span) * H;
+
               const path = (key: "sales" | "expenses") =>
                 lineSeries.map((r, i) => `${i ? "L" : "M"} ${xs[i].toFixed(1)} ${scaleY(r[key]).toFixed(1)}`).join(" ");
+
+              // zero line
+              const y0 = scaleY(0);
 
               return (
                 <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full">
                   <line x1={left} y1={top} x2={left} y2={top + H} stroke="#2a2a2a" />
                   <line x1={left} y1={top + H} x2={left + W} y2={top + H} stroke="#2a2a2a" />
-                  <line x1={left} y1={zeroY} x2={left + W} y2={zeroY} stroke="#2a2a2a" strokeDasharray="4 4" />
+                  <line x1={left} y1={y0} x2={left + W} y2={y0} stroke="#2a2a2a" strokeDasharray="4 4" />
                   <path d={path("expenses")} fill="none" stroke="#4da3ff" strokeWidth="2" />
                   <path d={path("sales")} fill="none" stroke="#3ea65f" strokeWidth="2" />
                 </svg>
               );
             })()}
           </div>
-          <div className="text-xs opacity-60 mt-2">
-            Note: expenses can be negative (credits/refunds). Chart centers on $0 for accuracy.
+          <div className="mt-2 text-[11px] opacity-70">
+            Net expenses can be negative (credits/refunds). Chart includes a $0 baseline for accuracy.
           </div>
         </div>
 
         <div className="border rounded p-4">
-          <div className="text-sm opacity-80 mb-2">YTD expense mix (signed)</div>
+          <div className="text-sm opacity-80 mb-2">YTD expense mix (net)</div>
           <div className="grid grid-cols-2 gap-2 text-sm">
             <div className="flex justify-between border rounded px-2 py-1"><span>Food</span><span>{fmtUSD(ytdBucket.Food)}</span></div>
             <div className="flex justify-between border rounded px-2 py-1"><span>Beverage</span><span>{fmtUSD(ytdBucket.Beverage)}</span></div>
@@ -402,21 +415,22 @@ export default async function FinancialPage(props: any) {
               <th className="text-right font-normal px-2 py-1">Profit</th>
             </tr>
           </thead>
-
           <tbody>
             {incomeRows.map((r) => (
               <tr key={r.month} className="border-t">
                 <td className="px-2 py-1">{r.month}</td>
-                <td className="px-2 py-1 text-right">{fmtUSD(r.sales)}</td>
-                <td className="px-2 py-1 text-right">{fmtUSD(r.food)}</td>
-                <td className="px-2 py-1 text-right">{fmtUSD(r.beverage)}</td>
-                <td className="px-2 py-1 text-right">{fmtUSD(r.labor)}</td>
-                <td className="px-2 py-1 text-right">{fmtUSD(r.rent)}</td>
-                <td className="px-2 py-1 text-right">{fmtUSD(r.utilities)}</td>
-                <td className="px-2 py-1 text-right">{fmtUSD(r.marketing)}</td>
-                <td className="px-2 py-1 text-right">{fmtUSD(r.misc)}</td>
-                <td className="px-2 py-1 text-right">{fmtUSD(r.total_expenses)}</td>
-                <td className={`px-2 py-1 text-right ${r.profit < 0 ? "text-rose-400" : ""}`}>{fmtUSD(r.profit)}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{fmtUSD(r.sales)}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{fmtUSD(r.food)}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{fmtUSD(r.beverage)}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{fmtUSD(r.labor)}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{fmtUSD(r.rent)}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{fmtUSD(r.utilities)}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{fmtUSD(r.marketing)}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{fmtUSD(r.misc)}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{fmtUSD(r.total_expenses)}</td>
+                <td className={`px-2 py-1 text-right tabular-nums ${r.profit < 0 ? "text-rose-400" : ""}`}>
+                  {fmtUSD(r.profit)}
+                </td>
               </tr>
             ))}
           </tbody>
