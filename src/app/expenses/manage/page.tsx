@@ -1,4 +1,4 @@
-//src/app/expenses/manage/page.tsx
+// src/app/expenses/manage/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { effectiveTenantId } from "@/lib/effective-tenant";
@@ -48,9 +48,9 @@ export default async function ExpensesManagePage() {
         </div>
       )}
 
-      {/* One simple note at the top (NOT repeated all over the UI) */}
+      {/* One note at the top (NOT repeated all over the UI) */}
       <div className="mb-4 rounded border border-neutral-800 bg-neutral-900/40 px-3 py-2 text-sm">
-        <b>Tip:</b> Enter refunds/credits as <b>negative amounts</b> (example: <code>-25.00</code>).
+        <b>Tip:</b> Refunds/credits should be entered as <b>negative amounts</b> (example: <code>-25.00</code>).
       </div>
 
       {!tenantId ? (

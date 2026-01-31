@@ -1,3 +1,4 @@
+// src/app/expenses/manage/ExpensesEditorClient.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -8,8 +9,18 @@ type Row = {
   occurred_at: string; // YYYY-MM-DD
   category: string;
   description: string | null;
-  amount_usd: number;
+  amount_usd: number; // can be negative (refund/credit)
 };
+
+const SUGGESTED_CATEGORIES = [
+  "Food",
+  "Beverage",
+  "Labor",
+  "Rent",
+  "Utilities",
+  "Marketing",
+  "Misc",
+];
 
 export default function ExpensesEditorClient({
   tenantId,
@@ -43,11 +54,14 @@ export default function ExpensesEditorClient({
       .eq("tenant_id", tenantId)
       .order("occurred_at", { ascending: false })
       .limit(1000);
+
     setLoading(false);
+
     if (error) {
       setMsg(error.message);
       return;
     }
+
     setRows(
       (data ?? []).map((r) => ({
         id: String((r as any).id),
@@ -66,13 +80,16 @@ export default function ExpensesEditorClient({
 
   async function addOne() {
     if (disabled) return;
+
     const d = date.trim();
     const c = category.trim();
     const a = Number(amount);
+
     if (!d || !c || !Number.isFinite(a)) {
-      setMsg("Please fill date, category, and a valid amount.");
+      setMsg("Please fill date, category, and a valid amount (negatives allowed).");
       return;
     }
+
     const { error } = await supabase
       .from("expenses")
       .insert({
@@ -80,18 +97,21 @@ export default function ExpensesEditorClient({
         occurred_at: d,
         category: c,
         description: description.trim() || null,
-        amount_usd: a,
+        amount_usd: a, // allow negatives
       })
       .select("id")
       .maybeSingle();
+
     if (error) {
       setMsg(error.message);
       return;
     }
+
     setDate("");
     setCategory("");
     setDescription("");
     setAmount("");
+
     await load();
     setMsg("Added ✓");
     setTimeout(() => setMsg(null), 2000);
@@ -99,6 +119,7 @@ export default function ExpensesEditorClient({
 
   async function removeOne(id: string) {
     if (disabled) return;
+
     const { error } = await supabase.from("expenses").delete().eq("id", id);
     if (error) {
       setMsg(error.message);
@@ -110,7 +131,13 @@ export default function ExpensesEditorClient({
   function downloadTemplate() {
     const header = "date,category,description,amount_usd\n";
     const sample =
-      "2025-01-15,Food,Flour and tomatoes,125.50\n2025-01-16,Labor,Saturday overtime,300.00\n";
+      [
+        "2026-01-15,Food,Flour and tomatoes,125.50",
+        "2026-01-16,Labor,Saturday overtime,300.00",
+        "2026-01-17,Rent,Monthly rent,2200.00",
+        "2026-01-18,Food,Refund from supplier,-45.25",
+      ].join("\n") + "\n";
+
     const blob = new Blob([header + sample], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -129,35 +156,41 @@ export default function ExpensesEditorClient({
       description: string | null;
       amount_usd: number;
     }> = [];
+
     const lines = text.replace(/\r/g, "").split("\n");
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
       if (!line) continue;
-      if (i === 0 && /^date,category,description,amount_usd$/i.test(line)) {
-        // header row
-        continue;
-      }
+      if (i === 0 && /^date,category,description,amount_usd$/i.test(line)) continue;
+
       const parts = line.split(",");
       if (parts.length < 4) continue;
+
       const occurred_at = parts[0].trim();
       const category = parts[1].trim();
       const description = parts[2].trim() || null;
+
+      // allow negatives; amount may contain commas if user did that (we’ll join remainder)
       const amount_usd = Number(parts.slice(3).join(",").trim());
+
       if (!occurred_at || !category || !Number.isFinite(amount_usd)) continue;
       out.push({ occurred_at, category, description, amount_usd });
     }
+
     return out;
   }
 
   async function onUploadCsv(file: File) {
     if (disabled) return;
+
     const text = await file.text();
     const items = parseCsv(text);
+
     if (!items.length) {
       setMsg("CSV contained no valid rows.");
       return;
     }
-    // Insert in small batches to avoid row limit
+
     const chunkSize = 500;
     for (let i = 0; i < items.length; i += chunkSize) {
       const chunk = items.slice(i, i + chunkSize).map((r) => ({
@@ -165,18 +198,23 @@ export default function ExpensesEditorClient({
         occurred_at: r.occurred_at,
         category: r.category,
         description: r.description,
-        amount_usd: r.amount_usd,
+        amount_usd: r.amount_usd, // allow negatives
       }));
+
       const { error } = await supabase.from("expenses").insert(chunk);
       if (error) {
         setMsg(error.message);
         return;
       }
     }
+
     await load();
     setMsg(`Imported ${items.length} row(s) ✓`);
     setTimeout(() => setMsg(null), 3000);
   }
+
+  const fmtUSD = (n: number) =>
+    new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(Number(n) || 0);
 
   return (
     <section>
@@ -188,7 +226,12 @@ export default function ExpensesEditorClient({
         >
           Download CSV Template
         </button>
-        <label className={`rounded border px-3 py-1 text-sm ${disabled ? "opacity-50 cursor-not-allowed" : "hover:bg-neutral-900 cursor-pointer"}`}>
+
+        <label
+          className={`rounded border px-3 py-1 text-sm ${
+            disabled ? "opacity-50 cursor-not-allowed" : "hover:bg-neutral-900 cursor-pointer"
+          }`}
+        >
           Upload CSV
           <input
             type="file"
@@ -202,6 +245,7 @@ export default function ExpensesEditorClient({
             }}
           />
         </label>
+
         {tenantId ? (
           <span className="text-xs opacity-70">Tenant: {tenantId}</span>
         ) : (
@@ -214,6 +258,7 @@ export default function ExpensesEditorClient({
       {/* Add form */}
       <div className="border rounded p-3 mb-4">
         <div className="text-sm opacity-80 mb-2">Add expense</div>
+
         <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
           <input
             type="date"
@@ -223,13 +268,24 @@ export default function ExpensesEditorClient({
             disabled={disabled}
             placeholder="YYYY-MM-DD"
           />
-          <input
-            className="bg-neutral-900 border rounded px-2 py-1"
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            disabled={disabled}
-            placeholder="Category (e.g., Food)"
-          />
+
+          {/* Suggested categories (but still custom) */}
+          <div className="md:col-span-1">
+            <input
+              list="expense-categories"
+              className="w-full bg-neutral-900 border rounded px-2 py-1"
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              disabled={disabled}
+              placeholder="Category (custom allowed)"
+            />
+            <datalist id="expense-categories">
+              {SUGGESTED_CATEGORIES.map((c) => (
+                <option key={c} value={c} />
+              ))}
+            </datalist>
+          </div>
+
           <input
             className="bg-neutral-900 border rounded px-2 py-1"
             value={description}
@@ -237,13 +293,15 @@ export default function ExpensesEditorClient({
             disabled={disabled}
             placeholder="Description (optional)"
           />
+
           <input
             className="bg-neutral-900 border rounded px-2 py-1"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
             disabled={disabled}
-            placeholder="Amount (e.g., 125.50)"
+            placeholder="Amount (e.g., 125.50 or -25.00)"
           />
+
           <button
             type="button"
             onClick={addOne}
@@ -252,6 +310,10 @@ export default function ExpensesEditorClient({
           >
             Add
           </button>
+        </div>
+
+        <div className="text-xs opacity-70 mt-2">
+          Suggested categories: {SUGGESTED_CATEGORIES.join(", ")} — you can still type anything.
         </div>
       </div>
 
@@ -286,12 +348,7 @@ export default function ExpensesEditorClient({
                   <td className="px-2 py-1">{r.occurred_at}</td>
                   <td className="px-2 py-1">{r.category}</td>
                   <td className="px-2 py-1">{r.description ?? ""}</td>
-                  <td className="px-2 py-1 text-right">
-                    {new Intl.NumberFormat(undefined, {
-                      style: "currency",
-                      currency: "USD",
-                    }).format(r.amount_usd)}
-                  </td>
+                  <td className="px-2 py-1 text-right tabular-nums">{fmtUSD(r.amount_usd)}</td>
                   <td className="px-2 py-1 text-right">
                     <button
                       className="rounded border px-2 py-0.5 hover:bg-neutral-900 disabled:opacity-50"
