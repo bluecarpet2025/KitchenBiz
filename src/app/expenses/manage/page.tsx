@@ -1,8 +1,10 @@
+//src/app/expenses/manage/page.tsx
 import Link from "next/link";
 import { createServerClient } from "@/lib/supabase/server";
 import { effectiveTenantId } from "@/lib/effective-tenant";
-import ExpensesEditorClient from "@/components/ExpensesEditorClient";
 import { effectivePlan, canUseFeature } from "@/lib/plan";
+import ExpensesEditorClient from "./ExpensesEditorClient";
+
 export const dynamic = "force-dynamic";
 
 export default async function ExpensesManagePage() {
@@ -22,8 +24,8 @@ export default async function ExpensesManagePage() {
   }
 
   // Keep SSR client initialization (used elsewhere on page as needed)
-  const _supabase = await createServerClient();
-  // New helper takes NO arguments
+  await createServerClient();
+
   const { tenantId, useDemo } = await effectiveTenantId();
 
   return (
@@ -46,13 +48,17 @@ export default async function ExpensesManagePage() {
         </div>
       )}
 
+      {/* One simple note at the top (NOT repeated all over the UI) */}
+      <div className="mb-4 rounded border border-neutral-800 bg-neutral-900/40 px-3 py-2 text-sm">
+        <b>Tip:</b> Enter refunds/credits as <b>negative amounts</b> (example: <code>-25.00</code>).
+      </div>
+
       {!tenantId ? (
         <div className="rounded border px-3 py-4 text-sm">
           You’re not signed in or don’t have a tenant set up yet. Please sign in and complete your profile.
         </div>
       ) : (
-        // NOTE: ExpensesEditorClient historically accepts a string tenantId.
-        <ExpensesEditorClient tenantId={tenantId} />
+        <ExpensesEditorClient tenantId={tenantId} readOnly={useDemo} />
       )}
     </main>
   );
