@@ -7,114 +7,102 @@ import { effectivePlan } from "@/lib/plan";
 
 /* ----------------------------- helpers ----------------------------- */
 const pad2 = (n: number) => String(n).padStart(2, "0");
+const fmtUSD = (n: number) =>
+  new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(Number(n) || 0);
 
-function isoDateUTC(d: Date) {
-  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
-}
-
-function ymUTC(d: Date) {
+function ym(d: Date) {
   return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}`;
 }
-
-function startOfMonthUTC(d: Date) {
+function firstOfMonthUTC(d: Date) {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
 }
-
-function startOfNextMonthUTC(d: Date) {
-  const s = startOfMonthUTC(d);
-  s.setUTCMonth(s.getUTCMonth() + 1);
-  return s;
-}
-
 function addMonthsUTC(d: Date, n: number) {
   const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
   x.setUTCMonth(x.getUTCMonth() + n);
   return x;
 }
-
 function addMonthsYM(ymStr: string, delta: number) {
   const [y, m] = ymStr.split("-").map(Number);
   const d = new Date(Date.UTC(y, m - 1, 1));
   d.setUTCMonth(d.getUTCMonth() + delta);
-  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}`;
+  return ym(d);
 }
-
-function monthsBetween(startYM: string, endYMExcl: string) {
-  const [sy, sm] = startYM.split("-").map(Number);
-  const [ey, em] = endYMExcl.split("-").map(Number);
-  return (ey - sy) * 12 + (em - sm);
+function isoDate(d: Date) {
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
 }
-
-const fmtUSD = (n: number) =>
-  new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(Number(n) || 0);
-
-const fmtPct = (n: number) => `${Math.round((Number.isFinite(n) ? n : 0) * 100)}%`;
-
-const safeDiv = (a: number, b: number) => (b ? a / b : 0);
+function monthStartIso(ymStr: string) {
+  return `${ymStr}-01`;
+}
+function clampIsoDate(str: string | undefined, fallback: string) {
+  return str && /^\d{4}-\d{2}-\d{2}$/.test(str) ? str : fallback;
+}
+function toNum(x: any) {
+  const n = Number(x);
+  return Number.isFinite(n) ? n : 0;
+}
+function pct(n: number) {
+  if (!Number.isFinite(n)) return "0%";
+  return `${Math.round(n * 100)}%`;
+}
 
 type SalesMonthRow = { month: string; revenue: number; orders: number };
-type IncomeCats = {
-  Food: number;
-  Beverage: number;
-  Labor: number;
-  Rent: number;
-  Utilities: number;
-  Marketing: number;
-  Misc: number;
-};
+type ExpenseBucket = { Food: number; Beverage: number; Labor: number; Rent: number; Utilities: number; Marketing: number; Misc: number };
 
-type IncomeRow = {
-  month: string;
-  sales: number;
-  food: number;
-  beverage: number;
-  labor: number;
-  rent: number;
-  utilities: number;
-  marketing: number;
-  misc: number;
-  cost_of_revenue: number;
-  operating_expenses: number;
-  gross_profit: number;
-  net_income: number;
-};
+type Period = "monthly" | "quarterly" | "annual";
+type ViewMode = "expanded" | "compact";
 
-function catKey(c: string | null): keyof IncomeCats {
-  const k = String(c ?? "").trim().toLowerCase();
-
-  // IMPORTANT: these map to your statement rows
-  // - Food/Beverage are "cost of revenue"
-  // - Everything else is "operating expenses"
-  if (k === "food" || k === "food/beverage" || k === "food & beverage" || k === "food and beverage") return "Food";
-  if (k === "beverage" || k === "drinks") return "Beverage";
-  if (k === "labor") return "Labor";
-  if (k === "rent") return "Rent";
-  if (k === "utilities") return "Utilities";
-  if (k === "marketing") return "Marketing";
-  return "Misc";
+function periodKeyFromMonth(month: string, period: Period) {
+  // month: YYYY-MM
+  const y = Number(month.slice(0, 4));
+  const m = Number(month.slice(5, 7));
+  if (period === "monthly") return month;
+  if (period === "annual") return String(y);
+  // quarterly
+  const q = Math.floor((m - 1) / 3) + 1;
+  return `${y}-Q${q}`;
 }
 
-function emptyCats(): IncomeCats {
-  return { Food: 0, Beverage: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 };
+function periodLabel(key: string, period: Period) {
+  if (period === "monthly") return key;
+  if (period === "annual") return key;
+  // quarterly: YYYY-Q#
+  return key;
 }
 
-function sumCats(c: IncomeCats) {
-  return Object.values(c).reduce((a, b) => a + b, 0);
+function isTruthyParam(v: string | undefined) {
+  return v === "1" || v === "true" || v === "yes";
 }
 
-function Tip({ label, tip }: { label: string; tip: string }) {
+function Info({ text }: { text: string }) {
   return (
-    <span className="inline-flex items-center gap-1" title={tip}>
-      <span>{label}</span>
-      <span className="text-[10px] opacity-60">ⓘ</span>
+    <span
+      title={text}
+      className="ml-1 inline-flex items-center justify-center w-4 h-4 rounded-full border border-neutral-600 text-[10px] opacity-70 hover:opacity-100 cursor-help"
+      aria-label={text}
+    >
+      i
     </span>
   );
+}
+
+function buildHref(base: string, params: Record<string, string>) {
+  const u = new URLSearchParams(params);
+  return `${base}?${u.toString()}`;
+}
+
+function niceRangeLabel(kind: string) {
+  if (kind === "1m") return "1M";
+  if (kind === "3m") return "3M";
+  if (kind === "6m") return "6M";
+  if (kind === "ytd") return "YTD";
+  if (kind === "1y") return "1Y";
+  if (kind === "all") return "ALL";
+  return kind.toUpperCase();
 }
 
 /* =============================== PAGE =============================== */
 /** Use `any` to satisfy Next's PageProps constraint; normalize inside */
 export default async function FinancialPage(props: any) {
-  // Normalize search params for both Next 15 (Promise) and older (object)
   const spRaw =
     (props?.searchParams && typeof (props.searchParams as any)?.then === "function"
       ? await (props.searchParams as Promise<Record<string, string>>)
@@ -137,129 +125,115 @@ export default async function FinancialPage(props: any) {
 
   // Starter cutoff: rolling last 3 months (UTC)
   const now = new Date();
-  const cutoff = addMonthsUTC(startOfMonthUTC(now), -3);
-  const cutoffIso = isoDateUTC(cutoff);
+  const cutoff = addMonthsUTC(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())), -3);
+  const cutoffIso = isoDate(cutoff);
 
-  // Range selection:
-  // - If user provides start/end explicitly -> treat as custom
-  // - Else if range param -> compute start/end
-  // - Else default to YTD
-  const isValidIso = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+  // Determine latest/earliest data months (to make ALL work as expected)
+  // Sales month bounds
+  const [{ data: salesLatest }, { data: salesEarliest }] = await Promise.all([
+    supabase
+      .from("v_sales_month_totals")
+      .select("month")
+      .eq("tenant_id", tenantId)
+      .order("month", { ascending: false })
+      .limit(1),
+    supabase
+      .from("v_sales_month_totals")
+      .select("month")
+      .eq("tenant_id", tenantId)
+      .order("month", { ascending: true })
+      .limit(1),
+  ]);
 
-  let range = (sp.range ?? "").trim().toLowerCase();
-  const hasExplicit = isValidIso(sp.start ?? "") && isValidIso(sp.end ?? "");
-  if (hasExplicit) range = ""; // custom overrides pills
+  // Expenses date bounds
+  const [{ data: expLatest }, { data: expEarliest }] = await Promise.all([
+    supabase
+      .from("expenses")
+      .select("occurred_at")
+      .eq("tenant_id", tenantId)
+      .order("occurred_at", { ascending: false })
+      .limit(1),
+    supabase
+      .from("expenses")
+      .select("occurred_at")
+      .eq("tenant_id", tenantId)
+      .order("occurred_at", { ascending: true })
+      .limit(1),
+  ]);
 
-  // Defaults (YTD)
+  const salesLatestMonth = salesLatest?.[0]?.month ? String(salesLatest[0].month) : null;
+  const salesEarliestMonth = salesEarliest?.[0]?.month ? String(salesEarliest[0].month) : null;
+
+  const expLatestMonth = expLatest?.[0]?.occurred_at ? ym(new Date(String(expLatest[0].occurred_at))) : null;
+  const expEarliestMonth = expEarliest?.[0]?.occurred_at ? ym(new Date(String(expEarliest[0].occurred_at))) : null;
+
+  const latestMonth = [salesLatestMonth, expLatestMonth].filter(Boolean).sort().slice(-1)[0] ?? ym(now);
+  const earliestMonth = [salesEarliestMonth, expEarliestMonth].filter(Boolean).sort().slice(0, 1)[0] ?? ym(now);
+
+  // Preset selection
+  const preset = (sp.preset ?? "").toLowerCase();
+
+  // Default: YTD (but only through current month)
+  const startOfThisMonth = firstOfMonthUTC(now);
+  const startOfNextMonth = firstOfMonthUTC(addMonthsUTC(startOfThisMonth, 1));
+
   const defaultStart = `${now.getUTCFullYear()}-01-01`;
-  const defaultEnd = isoDateUTC(startOfNextMonthUTC(now)); // end is exclusive, start of next month
+  const defaultEnd = isoDate(startOfNextMonth); // exclusive end boundary as ISO date
 
-  // For ALL range we need to find min/max month with any data.
-  // We'll do that before deciding start/end if range === "all".
-  let allMinYM: string | null = null;
-  let allMaxYM: string | null = null;
+  let startIso = clampIsoDate(sp.start, defaultStart);
+  let endIso = clampIsoDate(sp.end, defaultEnd);
 
-  if (range === "all") {
-    const [
-      { data: sMin },
-      { data: sMax },
-      { data: eMin },
-      { data: eMax },
-    ] = await Promise.all([
-      supabase
-        .from("v_sales_month_totals")
-        .select("month")
-        .eq("tenant_id", tenantId)
-        .order("month", { ascending: true })
-        .limit(1),
-      supabase
-        .from("v_sales_month_totals")
-        .select("month")
-        .eq("tenant_id", tenantId)
-        .order("month", { ascending: false })
-        .limit(1),
-      supabase
-        .from("expenses")
-        .select("occurred_at")
-        .eq("tenant_id", tenantId)
-        .order("occurred_at", { ascending: true })
-        .limit(1),
-      supabase
-        .from("expenses")
-        .select("occurred_at")
-        .eq("tenant_id", tenantId)
-        .order("occurred_at", { ascending: false })
-        .limit(1),
-    ]);
-
-    const salesMinYM = (sMin?.[0] as any)?.month ? String((sMin![0] as any).month) : null;
-    const salesMaxYM = (sMax?.[0] as any)?.month ? String((sMax![0] as any).month) : null;
-
-    const expMinYM = (eMin?.[0] as any)?.occurred_at ? ymUTC(new Date(String((eMin![0] as any).occurred_at))) : null;
-    const expMaxYM = (eMax?.[0] as any)?.occurred_at ? ymUTC(new Date(String((eMax![0] as any).occurred_at))) : null;
-
-    const mins = [salesMinYM, expMinYM].filter(Boolean) as string[];
-    const maxs = [salesMaxYM, expMaxYM].filter(Boolean) as string[];
-
-    allMinYM = mins.length ? mins.sort()[0] : null;
-    allMaxYM = maxs.length ? maxs.sort()[maxs.length - 1] : null;
+  // Apply presets (end is exclusive, at start of next month)
+  if (preset === "ytd") {
+    startIso = `${now.getUTCFullYear()}-01-01`;
+    endIso = isoDate(startOfNextMonth);
+  } else if (preset === "1y") {
+    const end = startOfNextMonth;
+    const start = firstOfMonthUTC(addMonthsUTC(end, -12));
+    startIso = isoDate(start);
+    endIso = isoDate(end);
+  } else if (preset === "6m") {
+    const end = startOfNextMonth;
+    const start = firstOfMonthUTC(addMonthsUTC(end, -6));
+    startIso = isoDate(start);
+    endIso = isoDate(end);
+  } else if (preset === "3m") {
+    const end = startOfNextMonth;
+    const start = firstOfMonthUTC(addMonthsUTC(end, -3));
+    startIso = isoDate(start);
+    endIso = isoDate(end);
+  } else if (preset === "1m") {
+    const end = startOfNextMonth;
+    const start = firstOfMonthUTC(addMonthsUTC(end, -1));
+    startIso = isoDate(start);
+    endIso = isoDate(end);
+  } else if (preset === "all") {
+    // ALL = all months with data, ending at month after latest month
+    const [y, m] = latestMonth.split("-").map(Number);
+    const end = new Date(Date.UTC(y, m - 1, 1));
+    const endExcl = firstOfMonthUTC(addMonthsUTC(end, 1));
+    startIso = `${earliestMonth}-01`;
+    endIso = isoDate(endExcl);
   }
 
-  const computeRange = (): { startIso: string; endIso: string } => {
-    if (hasExplicit) return { startIso: sp.start!, endIso: sp.end! };
+  // Period & view controls
+  const period = (sp.period as Period) || "monthly";
+  const view = (sp.view as ViewMode) || "expanded";
+  const expCogs = sp.cogs ? isTruthyParam(sp.cogs) : true;
+  const expOpex = sp.opex ? isTruthyParam(sp.opex) : true;
 
-    // For end, we use start of next month (exclusive) so "YTD on 1/31" includes only January.
-    const end = startOfNextMonthUTC(now);
-    const endIso = isoDateUTC(end);
-
-    if (range === "1m") {
-      const start = startOfMonthUTC(now);
-      return { startIso: isoDateUTC(start), endIso };
-    }
-    if (range === "3m") {
-      const start = addMonthsUTC(startOfMonthUTC(now), -2);
-      return { startIso: isoDateUTC(start), endIso };
-    }
-    if (range === "6m") {
-      const start = addMonthsUTC(startOfMonthUTC(now), -5);
-      return { startIso: isoDateUTC(start), endIso };
-    }
-    if (range === "1y") {
-      // trailing 12 months ending current month
-      const start = addMonthsUTC(startOfMonthUTC(now), -11);
-      return { startIso: isoDateUTC(start), endIso };
-    }
-    if (range === "all") {
-      if (allMinYM && allMaxYM) {
-        const startIso = `${allMinYM}-01`;
-        const endYMExcl = addMonthsYM(allMaxYM, 1);
-        const endIso = `${endYMExcl}-01`;
-        return { startIso, endIso };
-      }
-      return { startIso: defaultStart, endIso: defaultEnd };
-    }
-    // default = YTD
-    return { startIso: defaultStart, endIso: defaultEnd };
-  };
-
-  const { startIso: rawStartIso, endIso: rawEndIso } = computeRange();
-
-  // Guard: ensure ISO formatting
-  const startIso = isValidIso(rawStartIso) ? rawStartIso : defaultStart;
-  const endIso = isValidIso(rawEndIso) ? rawEndIso : defaultEnd;
-
+  // Build month range [startMonth .. < endMonthExcl)
   const startMonth = startIso.slice(0, 7);
-  const endMonthExcl = endIso.slice(0, 7); // exclusive
+  const endMonthExcl = endIso.slice(0, 7);
 
-  // Month list [startMonth ... <endMonthExcl)
   const months: string[] = [];
   for (let m = startMonth; m < endMonthExcl; m = addMonthsYM(m, 1)) {
     months.push(m);
-    if (months.length > 180) break; // safety
+    if (months.length > 240) break;
   }
 
-  // Starter: only query >= cutoff, but keep the full month list and render old months as $0.
-  const queryStartIso = isStarter && startIso < cutoffIso ? cutoffIso : startIso;
+  // For Starter: only query >= cutoff, but keep the full month list and render locked months as $0.
+  const queryStartIso = isStarter ? (startIso > cutoffIso ? startIso : cutoffIso) : startIso;
   const queryStartMonth = queryStartIso.slice(0, 7);
 
   /* ---------------------------- fetch sales ---------------------------- */
@@ -272,13 +246,11 @@ export default async function FinancialPage(props: any) {
       .gte("month", queryStartMonth)
       .lt("month", endMonthExcl)
       .order("month", { ascending: true });
-
     salesRows =
       (data ?? [])
-        .map((r: any) => [String(r.month), Number(r.revenue ?? 0), Number(r.orders ?? 0)] as [string, number, number])
+        .map((r: any) => [String(r.month), toNum(r.revenue), toNum(r.orders)] as [string, number, number])
         .map(([month, revenue, orders]) => ({ month, revenue, orders })) ?? [];
   }
-
   const salesByMonth = new Map(salesRows.map((r) => [r.month, r.revenue]));
   const ordersByMonth = new Map(salesRows.map((r) => [r.month, r.orders]));
 
@@ -290,533 +262,870 @@ export default async function FinancialPage(props: any) {
     .gte("occurred_at", `${queryStartIso}T00:00:00Z`)
     .lt("occurred_at", `${endIso}T00:00:00Z`);
 
-  const expByMonth = new Map<string, IncomeCats>();
+  function catKey(c: string | null): keyof ExpenseBucket {
+    const k = String(c ?? "").trim().toLowerCase();
+    if (k === "food") return "Food";
+    if (k === "beverage") return "Beverage";
+    if (k === "labor") return "Labor";
+    if (k === "rent") return "Rent";
+    if (k === "utilities") return "Utilities";
+    if (k === "marketing") return "Marketing";
+    return "Misc";
+  }
+
+  const expByMonth = new Map<string, ExpenseBucket>();
   for (const r of expRows ?? []) {
     const dt = new Date((r as any).occurred_at);
     const k = `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}`;
     const c = catKey((r as any).category);
-    const amt = Number((r as any).amount_usd || 0); // can be negative now (refunds/credits)
-    if (!expByMonth.has(k)) expByMonth.set(k, emptyCats());
-    expByMonth.get(k)![c] += amt;
+    const amt = toNum((r as any).amount_usd);
+    if (!expByMonth.has(k)) expByMonth.set(k, { Food: 0, Beverage: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 });
+    expByMonth.get(k)![c] += amt; // can be negative (refund/credit)
   }
 
-  /* --------------------------- build statement --------------------------- */
-  const monthStartIso = (m: string) => `${m}-01`;
+  /* ----------------------- lock + normalize rows ----------------------- */
+  const lockedMonth = (m: string) => isStarter && monthStartIso(m) < cutoffIso;
 
-  const incomeRows: IncomeRow[] = months.map((m) => {
-    const isLocked = isStarter && monthStartIso(m) < cutoffIso;
-
-    const sales = isLocked ? 0 : Number(salesByMonth.get(m) || 0);
-    const exp = isLocked ? emptyCats() : expByMonth.get(m) ?? emptyCats();
-
-    const cost_of_revenue = exp.Food + exp.Beverage; // net (can be negative)
-    const operating_expenses = exp.Labor + exp.Rent + exp.Utilities + exp.Marketing + exp.Misc; // net (can be negative)
-    const gross_profit = sales - cost_of_revenue;
-    const net_income = gross_profit - operating_expenses;
-
-    return {
-      month: m,
-      sales,
-      food: exp.Food,
-      beverage: exp.Beverage,
-      labor: exp.Labor,
-      rent: exp.Rent,
-      utilities: exp.Utilities,
-      marketing: exp.Marketing,
-      misc: exp.Misc,
-      cost_of_revenue,
-      operating_expenses,
-      gross_profit,
-      net_income,
-    };
-  });
-
-  // Selected period totals
-  const selSales = incomeRows.reduce((a, r) => a + r.sales, 0);
-  const selOrders = months.reduce((a, m) => a + Number(ordersByMonth.get(m) || 0), 0);
-  const selCats = incomeRows.reduce(
-    (acc, r) => {
-      acc.Food += r.food;
-      acc.Beverage += r.beverage;
-      acc.Labor += r.labor;
-      acc.Rent += r.rent;
-      acc.Utilities += r.utilities;
-      acc.Marketing += r.marketing;
-      acc.Misc += r.misc;
-      return acc;
-    },
-    emptyCats()
-  );
-
-  const selNetExpenses = sumCats(selCats); // includes cost-of-revenue + operating expenses
-  const selCostOfRev = selCats.Food + selCats.Beverage;
-  const selOpEx = selCats.Labor + selCats.Rent + selCats.Utilities + selCats.Marketing + selCats.Misc;
-  const selGrossProfit = selSales - selCostOfRev;
-  const selNetIncome = selGrossProfit - selOpEx;
-
-  const selAOV = safeDiv(selSales, selOrders);
-  const selFoodPct = safeDiv(selCats.Food + selCats.Beverage, selSales);
-  const selLaborPct = safeDiv(selCats.Labor, selSales);
-  const selPrimePct = safeDiv(selCats.Food + selCats.Beverage + selCats.Labor, selSales);
-  const selNetMargin = safeDiv(selNetIncome, selSales);
-
-  // Prior period comparison (same month count)
-  const spanMonths = monthsBetween(startMonth, endMonthExcl);
-  const priorStartMonth = addMonthsYM(startMonth, -spanMonths);
-  const priorEndMonthExcl = startMonth;
-
-  // Query prior sales + expenses only if we have a meaningful span
-  let priorSales = 0;
-  let priorCats = emptyCats();
-
-  if (spanMonths > 0) {
-    const priorStartIso = `${priorStartMonth}-01`;
-    const priorEndIso = `${priorEndMonthExcl}-01`;
-
-    // apply starter cutoff to prior too (older months show $0)
-    const priorQueryStartIso = isStarter && priorStartIso < cutoffIso ? cutoffIso : priorStartIso;
-    const priorQueryStartMonth = priorQueryStartIso.slice(0, 7);
-
-    const [{ data: ps }, { data: pe }] = await Promise.all([
-      supabase
-        .from("v_sales_month_totals")
-        .select("month, revenue")
-        .eq("tenant_id", tenantId)
-        .gte("month", priorQueryStartMonth)
-        .lt("month", priorEndMonthExcl),
-      supabase
-        .from("expenses")
-        .select("occurred_at, amount_usd, category")
-        .eq("tenant_id", tenantId)
-        .gte("occurred_at", `${priorQueryStartIso}T00:00:00Z`)
-        .lt("occurred_at", `${priorEndIso}T00:00:00Z`),
-    ]);
-
-    const pSalesMap = new Map((ps ?? []).map((r: any) => [String(r.month), Number(r.revenue ?? 0)]));
-    // Build prior month list to enforce starter "locked months are 0"
-    const priorMonths: string[] = [];
-    for (let m = priorStartMonth; m < priorEndMonthExcl; m = addMonthsYM(m, 1)) {
-      priorMonths.push(m);
-      if (priorMonths.length > 180) break;
-    }
-    priorSales = priorMonths.reduce((a, m) => {
-      const isLocked = isStarter && `${m}-01` < cutoffIso;
-      return a + (isLocked ? 0 : Number(pSalesMap.get(m) || 0));
-    }, 0);
-
-    const tmp = new Map<string, IncomeCats>();
-    for (const r of pe ?? []) {
-      const dt = new Date((r as any).occurred_at);
-      const m = `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}`;
-      const isLocked = isStarter && `${m}-01` < cutoffIso;
-      if (isLocked) continue;
-      const c = catKey((r as any).category);
-      const amt = Number((r as any).amount_usd || 0);
-      if (!tmp.has(m)) tmp.set(m, emptyCats());
-      tmp.get(m)![c] += amt;
-    }
-    // Sum all prior cats
-    priorCats = Array.from(tmp.values()).reduce((acc, v) => {
-      acc.Food += v.Food;
-      acc.Beverage += v.Beverage;
-      acc.Labor += v.Labor;
-      acc.Rent += v.Rent;
-      acc.Utilities += v.Utilities;
-      acc.Marketing += v.Marketing;
-      acc.Misc += v.Misc;
-      return acc;
-    }, emptyCats());
-  }
-
-  const priorNetExpenses = sumCats(priorCats);
-  const priorCostOfRev = priorCats.Food + priorCats.Beverage;
-  const priorOpEx = priorCats.Labor + priorCats.Rent + priorCats.Utilities + priorCats.Marketing + priorCats.Misc;
-  const priorGrossProfit = priorSales - priorCostOfRev;
-  const priorNetIncome = priorGrossProfit - priorOpEx;
-
-  const delta = selNetIncome - priorNetIncome;
-  const deltaPct = priorNetIncome !== 0 ? delta / Math.abs(priorNetIncome) : 0;
-
-  const q = new URLSearchParams({ start: startIso, end: endIso }).toString();
-
-  const pill = (key: string, label: string) => {
-    const active = !hasExplicit && range === key;
-    return (
-      <a
-        href={`/financial?range=${encodeURIComponent(key)}`}
-        className={`px-2 py-1 rounded-full border text-xs ${
-          active ? "border-emerald-500 text-emerald-200 bg-emerald-900/10" : "border-neutral-800 hover:bg-neutral-900"
-        }`}
-      >
-        {label}
-      </a>
-    );
+  // Aggregate into periods
+  type Agg = {
+    key: string; // period key
+    sales: number;
+    orders: number;
+    exp: ExpenseBucket;
   };
 
-  // Starter notice
-  const starterNotice = (
-    <div className="mb-3 text-xs rounded border border-amber-600/40 bg-amber-900/10 px-3 py-2 text-amber-200">
-      Starter shows last 3 months (older periods display $0).{" "}
-      <Link href="/profile" className="underline">
-        Upgrade to Basic
-      </Link>{" "}
-      for full history.
-    </div>
+  const aggMap = new Map<string, Agg>();
+
+  for (const m of months) {
+    const key = periodKeyFromMonth(m, period);
+    if (!aggMap.has(key)) {
+      aggMap.set(key, {
+        key,
+        sales: 0,
+        orders: 0,
+        exp: { Food: 0, Beverage: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 },
+      });
+    }
+    const a = aggMap.get(key)!;
+    const isLocked = lockedMonth(m);
+    const sales = isLocked ? 0 : toNum(salesByMonth.get(m));
+    const orders = isLocked ? 0 : toNum(ordersByMonth.get(m));
+    const exp = isLocked ? { Food: 0, Beverage: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 } : (expByMonth.get(m) ?? { Food: 0, Beverage: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 });
+
+    a.sales += sales;
+    a.orders += orders;
+    a.exp.Food += exp.Food;
+    a.exp.Beverage += exp.Beverage;
+    a.exp.Labor += exp.Labor;
+    a.exp.Rent += exp.Rent;
+    a.exp.Utilities += exp.Utilities;
+    a.exp.Marketing += exp.Marketing;
+    a.exp.Misc += exp.Misc;
+  }
+
+  const periods = Array.from(aggMap.values()).sort((a, b) => (a.key < b.key ? -1 : 1));
+
+  // Selected period totals
+  const selSales = periods.reduce((s, p) => s + p.sales, 0);
+  const selOrders = periods.reduce((s, p) => s + p.orders, 0);
+  const selExp = periods.reduce(
+    (acc, p) => {
+      acc.Food += p.exp.Food;
+      acc.Beverage += p.exp.Beverage;
+      acc.Labor += p.exp.Labor;
+      acc.Rent += p.exp.Rent;
+      acc.Utilities += p.exp.Utilities;
+      acc.Marketing += p.exp.Marketing;
+      acc.Misc += p.exp.Misc;
+      return acc;
+    },
+    { Food: 0, Beverage: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 } as ExpenseBucket
   );
+  const selNetExpenses = Object.values(selExp).reduce((a, b) => a + b, 0);
+  const selCOGS = selExp.Food + selExp.Beverage;
+  const selGrossProfit = selSales - selCOGS;
+  const selOpex = selNetExpenses; // with our current model, all expenses are op-ex; COGS is derived from Food/Beverage buckets
+  const selNetIncome = selSales - selNetExpenses;
+
+  const selAOV = selOrders > 0 ? selSales / selOrders : 0;
+  const selFoodPct = selSales > 0 ? selExp.Food / selSales : 0;
+  const selLaborPct = selSales > 0 ? selExp.Labor / selSales : 0;
+  const selPrimePct = selSales > 0 ? (selExp.Food + selExp.Beverage + selExp.Labor) / selSales : 0;
+  const selNetMargin = selSales > 0 ? selNetIncome / selSales : 0;
+
+  /* ------------------------ Prior period (variance) ------------------------ */
+  // Prior period is same length, immediately preceding startIso.
+  const selLenMonths = Math.max(1, months.length);
+  const priorEnd = new Date(`${startIso}T00:00:00Z`);
+  const priorStart = firstOfMonthUTC(addMonthsUTC(firstOfMonthUTC(priorEnd), -selLenMonths));
+  const priorStartIso = isoDate(priorStart);
+  const priorEndIso = isoDate(firstOfMonthUTC(priorEnd)); // exclusive
+
+  // Build prior month list
+  const priorMonths: string[] = [];
+  const priorStartMonth = priorStartIso.slice(0, 7);
+  const priorEndMonthExcl = priorEndIso.slice(0, 7);
+  for (let m = priorStartMonth; m < priorEndMonthExcl; m = addMonthsYM(m, 1)) {
+    priorMonths.push(m);
+    if (priorMonths.length > 240) break;
+  }
+
+  // Query prior sales month totals
+  let priorSalesRows: SalesMonthRow[] = [];
+  if (priorMonths.length) {
+    const priorQueryStartIso = isStarter ? (priorStartIso > cutoffIso ? priorStartIso : cutoffIso) : priorStartIso;
+    const priorQueryStartMonth = priorQueryStartIso.slice(0, 7);
+    const { data } = await supabase
+      .from("v_sales_month_totals")
+      .select("month, revenue, orders")
+      .eq("tenant_id", tenantId)
+      .gte("month", priorQueryStartMonth)
+      .lt("month", priorEndMonthExcl)
+      .order("month", { ascending: true });
+    priorSalesRows =
+      (data ?? [])
+        .map((r: any) => [String(r.month), toNum(r.revenue), toNum(r.orders)] as [string, number, number])
+        .map(([month, revenue, orders]) => ({ month, revenue, orders })) ?? [];
+  }
+  const priorSalesByMonth = new Map(priorSalesRows.map((r) => [r.month, r.revenue]));
+  const priorOrdersByMonth = new Map(priorSalesRows.map((r) => [r.month, r.orders]));
+
+  // Query prior expenses rows
+  const priorQueryStartIso = isStarter ? (priorStartIso > cutoffIso ? priorStartIso : cutoffIso) : priorStartIso;
+  const { data: priorExpRows } = await supabase
+    .from("expenses")
+    .select("occurred_at, amount_usd, category")
+    .eq("tenant_id", tenantId)
+    .gte("occurred_at", `${priorQueryStartIso}T00:00:00Z`)
+    .lt("occurred_at", `${priorEndIso}T00:00:00Z`);
+
+  const priorExpByMonth = new Map<string, ExpenseBucket>();
+  for (const r of priorExpRows ?? []) {
+    const dt = new Date((r as any).occurred_at);
+    const k = `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}`;
+    const c = catKey((r as any).category);
+    const amt = toNum((r as any).amount_usd);
+    if (!priorExpByMonth.has(k)) priorExpByMonth.set(k, { Food: 0, Beverage: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 });
+    priorExpByMonth.get(k)![c] += amt;
+  }
+
+  const priorTotals = priorMonths.reduce(
+    (acc, m) => {
+      const isLocked = lockedMonth(m);
+      const sales = isLocked ? 0 : toNum(priorSalesByMonth.get(m));
+      const orders = isLocked ? 0 : toNum(priorOrdersByMonth.get(m));
+      const exp = isLocked
+        ? { Food: 0, Beverage: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 }
+        : priorExpByMonth.get(m) ?? { Food: 0, Beverage: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 };
+
+      acc.sales += sales;
+      acc.orders += orders;
+      acc.exp.Food += exp.Food;
+      acc.exp.Beverage += exp.Beverage;
+      acc.exp.Labor += exp.Labor;
+      acc.exp.Rent += exp.Rent;
+      acc.exp.Utilities += exp.Utilities;
+      acc.exp.Marketing += exp.Marketing;
+      acc.exp.Misc += exp.Misc;
+      return acc;
+    },
+    {
+      sales: 0,
+      orders: 0,
+      exp: { Food: 0, Beverage: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 } as ExpenseBucket,
+    }
+  );
+
+  const priorNetExpenses = Object.values(priorTotals.exp).reduce((a, b) => a + b, 0);
+  const priorNetIncome = priorTotals.sales - priorNetExpenses;
+
+  function deltaText(curr: number, prev: number) {
+    const d = curr - prev;
+    const sign = d >= 0 ? "+" : "−";
+    const abs = Math.abs(d);
+    const pctVal = prev !== 0 ? Math.abs(d / prev) : curr !== 0 ? 1 : 0;
+    const up = d >= 0;
+    return {
+      up,
+      text: `${sign}${fmtUSD(abs)} (${sign}${Math.round(pctVal * 100)}%)`,
+    };
+  }
+
+  const dNetIncome = deltaText(selNetIncome, priorNetIncome);
+  const dSales = deltaText(selSales, priorTotals.sales);
+  const dFood = deltaText(selExp.Food, priorTotals.exp.Food);
+  const dLabor = deltaText(selExp.Labor, priorTotals.exp.Labor);
+  const dPrime = deltaText(selExp.Food + selExp.Beverage + selExp.Labor, priorTotals.exp.Food + priorTotals.exp.Beverage + priorTotals.exp.Labor);
+
+  /* ------------------------ mini chart series ------------------------ */
+  // Build monthly series regardless of period (chart is monthly for readability)
+  const chartMonths = months.slice(-Math.min(months.length, 24)); // cap to 24 months
+  const chartSeries = chartMonths.map((m) => {
+    const isLocked = lockedMonth(m);
+    const sales = isLocked ? 0 : toNum(salesByMonth.get(m));
+    const exp = isLocked ? 0 : Object.values(expByMonth.get(m) ?? { Food: 0, Beverage: 0, Labor: 0, Rent: 0, Utilities: 0, Marketing: 0, Misc: 0 }).reduce((a, b) => a + b, 0);
+    return { m, sales, exp, net: sales - exp };
+  });
+
+  /* ------------------------ statement rows ------------------------ */
+  type RowDef = {
+    key: string;
+    label: string;
+    tooltip?: string;
+    indent?: 0 | 1;
+    bold?: boolean;
+    section?: "cogs" | "opex" | null;
+    // value extractors
+    valueFor: (p: Agg) => number;
+    totalFor: (totals: { sales: number; exp: ExpenseBucket }) => number;
+    pctSales?: (totals: { sales: number; exp: ExpenseBucket }, v: number) => number;
+  };
+
+  const totalsObj = { sales: selSales, exp: selExp };
+
+  const rowsExpanded: RowDef[] = [
+    {
+      key: "revenue",
+      label: "Total Revenue",
+      tooltip: "Total sales revenue for the period.",
+      indent: 0,
+      bold: true,
+      section: null,
+      valueFor: (p) => p.sales,
+      totalFor: (t) => t.sales,
+      pctSales: (t, v) => (t.sales > 0 ? v / t.sales : 0),
+    },
+    {
+      key: "cogs",
+      label: "Cost of Revenue",
+      tooltip: "Direct costs tied to producing your sales (COGS). For food businesses, this is mainly Food + Beverage.",
+      indent: 0,
+      bold: true,
+      section: "cogs",
+      valueFor: (p) => p.exp.Food + p.exp.Beverage,
+      totalFor: (t) => t.exp.Food + t.exp.Beverage,
+      pctSales: (t, v) => (t.sales > 0 ? v / t.sales : 0),
+    },
+    {
+      key: "food",
+      label: "Food",
+      tooltip: "Ingredients and food supply costs. Enter refunds/credits as negative values.",
+      indent: 1,
+      section: "cogs",
+      valueFor: (p) => p.exp.Food,
+      totalFor: (t) => t.exp.Food,
+      pctSales: (t, v) => (t.sales > 0 ? v / t.sales : 0),
+    },
+    {
+      key: "beverage",
+      label: "Beverage",
+      tooltip: "Beverage-related costs (non-food). Enter refunds/credits as negative values.",
+      indent: 1,
+      section: "cogs",
+      valueFor: (p) => p.exp.Beverage,
+      totalFor: (t) => t.exp.Beverage,
+      pctSales: (t, v) => (t.sales > 0 ? v / t.sales : 0),
+    },
+    {
+      key: "gross",
+      label: "Gross Profit",
+      tooltip: "Revenue minus Cost of Revenue (COGS).",
+      indent: 0,
+      bold: true,
+      section: null,
+      valueFor: (p) => p.sales - (p.exp.Food + p.exp.Beverage),
+      totalFor: (t) => t.sales - (t.exp.Food + t.exp.Beverage),
+      pctSales: (t, v) => (t.sales > 0 ? v / t.sales : 0),
+    },
+    {
+      key: "opex",
+      label: "Operating Expenses",
+      tooltip: "Ongoing costs to run the business (Labor, Rent, Utilities, etc.). May be negative if refunds/credits exceed charges.",
+      indent: 0,
+      bold: true,
+      section: "opex",
+      valueFor: (p) => p.exp.Labor + p.exp.Rent + p.exp.Utilities + p.exp.Marketing + p.exp.Misc,
+      totalFor: (t) => t.exp.Labor + t.exp.Rent + t.exp.Utilities + t.exp.Marketing + t.exp.Misc,
+      pctSales: (t, v) => (t.sales > 0 ? v / t.sales : 0),
+    },
+    {
+      key: "labor",
+      label: "Labor",
+      tooltip: "Wages and labor costs. (Payroll taxes/benefits can go here too, if you want it simple.)",
+      indent: 1,
+      section: "opex",
+      valueFor: (p) => p.exp.Labor,
+      totalFor: (t) => t.exp.Labor,
+      pctSales: (t, v) => (t.sales > 0 ? v / t.sales : 0),
+    },
+    {
+      key: "rent",
+      label: "Rent",
+      tooltip: "Rent / lease payments and related fixed occupancy costs.",
+      indent: 1,
+      section: "opex",
+      valueFor: (p) => p.exp.Rent,
+      totalFor: (t) => t.exp.Rent,
+      pctSales: (t, v) => (t.sales > 0 ? v / t.sales : 0),
+    },
+    {
+      key: "utilities",
+      label: "Utilities",
+      tooltip: "Utilities (electric, gas, water, etc.).",
+      indent: 1,
+      section: "opex",
+      valueFor: (p) => p.exp.Utilities,
+      totalFor: (t) => t.exp.Utilities,
+      pctSales: (t, v) => (t.sales > 0 ? v / t.sales : 0),
+    },
+    {
+      key: "marketing",
+      label: "Marketing",
+      tooltip: "Ads, promotions, and marketing expenses.",
+      indent: 1,
+      section: "opex",
+      valueFor: (p) => p.exp.Marketing,
+      totalFor: (t) => t.exp.Marketing,
+      pctSales: (t, v) => (t.sales > 0 ? v / t.sales : 0),
+    },
+    {
+      key: "misc",
+      label: "Misc",
+      tooltip: "Everything else not categorized above (small tools, supplies, fees, etc.).",
+      indent: 1,
+      section: "opex",
+      valueFor: (p) => p.exp.Misc,
+      totalFor: (t) => t.exp.Misc,
+      pctSales: (t, v) => (t.sales > 0 ? v / t.sales : 0),
+    },
+    {
+      key: "net",
+      label: "Net Income",
+      tooltip: "Revenue minus all expenses in the selected period.",
+      indent: 0,
+      bold: true,
+      section: null,
+      valueFor: (p) => p.sales - (p.exp.Food + p.exp.Beverage + p.exp.Labor + p.exp.Rent + p.exp.Utilities + p.exp.Marketing + p.exp.Misc),
+      totalFor: (t) => t.sales - (t.exp.Food + t.exp.Beverage + t.exp.Labor + t.exp.Rent + t.exp.Utilities + t.exp.Marketing + t.exp.Misc),
+      pctSales: (t, v) => (t.sales > 0 ? v / t.sales : 0),
+    },
+  ];
+
+  const rowsCompact: RowDef[] = rowsExpanded.filter((r) => {
+    if (r.key === "food" || r.key === "beverage" || r.key === "labor" || r.key === "rent" || r.key === "utilities" || r.key === "marketing" || r.key === "misc") return false;
+    if (r.key === "opex") return true;
+    if (r.key === "cogs") return true;
+    if (r.key === "revenue") return true;
+    if (r.key === "gross") return true;
+    if (r.key === "net") return true;
+    return true;
+  });
+
+  const rowDefs = view === "compact" ? rowsCompact : rowsExpanded;
+
+  function sectionVisible(row: RowDef) {
+    if (row.section === "cogs" && row.indent === 1) return expCogs;
+    if (row.section === "opex" && row.indent === 1) return expOpex;
+    return true;
+  }
+
+  /* ------------------------ header params helpers ------------------------ */
+  const baseParams = {
+    start: startIso,
+    end: endIso,
+    period,
+    view,
+    cogs: expCogs ? "1" : "0",
+    opex: expOpex ? "1" : "0",
+  };
+
+  const applyParams = (extra: Record<string, string>) => {
+    const merged = { ...baseParams, ...extra };
+    // remove preset if explicit start/end changes
+    if (merged.start && merged.end) delete (merged as any).preset;
+    return merged;
+  };
+
+  const qTaxPack = new URLSearchParams({ start: startIso, end: endIso }).toString();
 
   return (
     <main className="max-w-6xl mx-auto px-4 py-6">
-      {/* Header row: title + range pills + actions */}
-      <div className="flex flex-wrap items-center gap-3 mb-3">
-        <div className="text-xl font-semibold mr-2">Financials</div>
+      {/* Top bar: tidy layout */}
+      <div className="flex flex-col gap-3 mb-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="text-xl font-semibold mr-1">Financials</div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {pill("1m", "1M")}
-          {pill("3m", "3M")}
-          {pill("6m", "6M")}
-          {pill("ytd", "YTD")}
-          {pill("1y", "1Y")}
-          {pill("all", "ALL")}
-          {hasExplicit && <span className="text-xs opacity-60 ml-1">Custom</span>}
+          {/* Presets */}
+          <div className="flex items-center gap-1">
+            {["1m", "3m", "6m", "ytd", "1y", "all"].map((k) => {
+              const active = preset === k;
+              return (
+                <Link
+                  key={k}
+                  href={buildHref("/financial", { ...baseParams, preset: k })}
+                  className={`px-2 py-1 rounded-full border text-xs ${
+                    active ? "bg-emerald-600/15 border-emerald-500/50 text-emerald-200" : "hover:bg-neutral-900"
+                  }`}
+                >
+                  {niceRangeLabel(k)}
+                </Link>
+              );
+            })}
+          </div>
+
+          <div className="flex-1" />
+
+          {/* Actions */}
+          <div className="flex flex-wrap items-center gap-2">
+            <a href={`/api/accounting/export?${qTaxPack}`} className="border rounded px-3 h-10 flex items-center hover:bg-neutral-900">
+              Download Tax Pack
+            </a>
+            <Link href="/sales" className="border rounded px-3 h-10 flex items-center hover:bg-neutral-900">
+              Sales details
+            </Link>
+            <Link href="/expenses" className="border rounded px-3 h-10 flex items-center hover:bg-neutral-900">
+              Expenses details
+            </Link>
+          </div>
         </div>
 
-        <div className="flex-1" />
+        {/* Controls row */}
+        <div className="flex flex-wrap items-end gap-3">
+          <form action="/financial" className="flex flex-wrap items-end gap-3">
+            {/* keep other params */}
+            <input type="hidden" name="period" value={period} />
+            <input type="hidden" name="view" value={view} />
+            <input type="hidden" name="cogs" value={expCogs ? "1" : "0"} />
+            <input type="hidden" name="opex" value={expOpex ? "1" : "0"} />
 
-        <div className="flex flex-wrap items-center gap-2">
-          <a href={`/api/accounting/export?${q}`} className="border rounded px-3 h-10 flex items-center hover:bg-neutral-900">
-            Download Tax Pack
-          </a>
-          <Link href="/sales" className="border rounded px-3 h-10 flex items-center hover:bg-neutral-900">
-            Sales details
-          </Link>
-          <Link href="/expenses" className="border rounded px-3 h-10 flex items-center hover:bg-neutral-900">
-            Expenses details
-          </Link>
+            <div className="flex flex-col">
+              <label className="text-xs opacity-70 mb-1">Start (UTC)</label>
+              <input type="date" name="start" defaultValue={startIso} className="border rounded px-2 h-10 bg-transparent" />
+            </div>
+            <div className="flex flex-col">
+              <label className="text-xs opacity-70 mb-1">End (UTC)</label>
+              <input type="date" name="end" defaultValue={endIso} className="border rounded px-2 h-10 bg-transparent" />
+            </div>
+            <button className="border rounded px-4 h-10 hover:bg-neutral-900">Apply</button>
+          </form>
+
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex flex-col">
+              <label className="text-xs opacity-70 mb-1">
+                Period <Info text="Monthly shows each month. Quarterly groups into Q1–Q4. Annual groups by year." />
+              </label>
+              <select
+                className="border rounded px-2 h-10 bg-transparent"
+                value={period}
+                onChange={(e) => {
+                  const v = e.target.value as Period;
+                  window.location.href = buildHref("/financial", { ...baseParams, period: v });
+                }}
+              >
+                <option value="monthly">Monthly</option>
+                <option value="quarterly">Quarterly</option>
+                <option value="annual">Annual</option>
+              </select>
+            </div>
+
+            <div className="flex flex-col">
+              <label className="text-xs opacity-70 mb-1">
+                View <Info text="Expanded shows sub-lines (Food/Beverage, Labor/Rent/etc.). Compact shows only major totals." />
+              </label>
+              <select
+                className="border rounded px-2 h-10 bg-transparent"
+                value={view}
+                onChange={(e) => {
+                  const v = e.target.value as ViewMode;
+                  window.location.href = buildHref("/financial", { ...baseParams, view: v });
+                }}
+              >
+                <option value="expanded">Expanded</option>
+                <option value="compact">Compact</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2 pb-1">
+              <Link
+                href={buildHref("/financial", { ...baseParams, cogs: "1", opex: "1" })}
+                className="text-xs border rounded px-2 py-1 hover:bg-neutral-900"
+              >
+                Expand all
+              </Link>
+              <Link
+                href={buildHref("/financial", { ...baseParams, cogs: "0", opex: "0" })}
+                className="text-xs border rounded px-2 py-1 hover:bg-neutral-900"
+              >
+                Collapse all
+              </Link>
+            </div>
+          </div>
+
+          <div className="flex-1" />
+
+          <div className="text-xs opacity-70 pb-2">
+            Note: refunds/credits should be entered as negative expenses (example: -25.00). Financials shows net expenses.
+          </div>
         </div>
+
+        {isStarter && (
+          <div className="text-xs rounded border border-amber-600/40 bg-amber-900/10 px-3 py-2 text-amber-200">
+            Starter shows last 3 months (older periods display $0).{" "}
+            <Link href="/profile" className="underline">
+              Upgrade to Basic
+            </Link>{" "}
+            for full history.
+          </div>
+        )}
       </div>
 
-      {/* Date range form row */}
-      <div className="flex flex-wrap items-end gap-2 mb-3">
-        <form action="/financial" className="flex flex-wrap items-end gap-2">
-          <div className="flex flex-col">
-            <label className="text-[11px] opacity-70 mb-1">Start (UTC)</label>
-            <input
-              type="date"
-              name="start"
-              defaultValue={startIso}
-              className="border rounded px-2 h-10 bg-transparent"
-            />
-          </div>
-          <div className="flex flex-col">
-            <label className="text-[11px] opacity-70 mb-1">End (UTC)</label>
-            <input
-              type="date"
-              name="end"
-              defaultValue={endIso}
-              className="border rounded px-2 h-10 bg-transparent"
-            />
-          </div>
-          <button className="border rounded px-4 h-10 hover:bg-neutral-900">Apply</button>
-        </form>
-
-        <div className="flex-1" />
-
-        <div className="text-xs opacity-60">
-          Note: refunds/credits should be entered as <b>negative</b> expenses (example: <code>-25.00</code>). Financials shows{" "}
-          <b>net</b> expenses.
-        </div>
-      </div>
-
-      {isStarter && starterNotice}
-
-      {/* Big summary card (Yahoo-ish) */}
+      {/* Summary panel (fills whitespace with useful finance context) */}
       <section className="border rounded-xl p-4">
-        <div className="flex flex-col lg:flex-row gap-4">
-          {/* Left: headline + comparison + KPI strip (fills the “empty space”) */}
-          <div className="flex-1">
-            <div className="text-[11px] opacity-70 tracking-wide">
-              INCOME STATEMENT • {startMonth} → {addMonthsYM(endMonthExcl, -1)}
+        <div className="flex flex-wrap items-start gap-4">
+          <div className="flex-1 min-w-[320px]">
+            <div className="text-xs opacity-70 mb-1">
+              INCOME STATEMENT · {startMonth} → {addMonthsYM(endMonthExcl, -1)}
             </div>
 
-            <div className="mt-2 flex items-end gap-3 flex-wrap">
-              <div className="text-4xl font-semibold tabular-nums">{fmtUSD(selNetIncome)}</div>
-              <div className={`text-sm tabular-nums ${delta < 0 ? "text-rose-300" : "text-emerald-300"}`}>
-                {delta >= 0 ? "+" : ""}
-                {fmtUSD(delta)} ({delta >= 0 ? "+" : ""}
-                {fmtPct(deltaPct)})
+            <div className="text-4xl font-semibold leading-tight">{fmtUSD(selNetIncome)}</div>
+
+            <div className="text-sm opacity-80 mt-1">
+              Net income for selected period{" "}
+              <span className={dNetIncome.up ? "text-emerald-300" : "text-rose-300"}>
+                {dNetIncome.text}
+              </span>{" "}
+              vs prior period ({priorStartMonth} → {addMonthsYM(priorEndMonthExcl, -1)})
+              <Info text="Prior period is the same length immediately before your selected range." />
+            </div>
+
+            {/* KPI strip (tight, high-signal) */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
+              <div className="border rounded-lg p-2">
+                <div className="text-xs opacity-70">
+                  Sales <Info text="Total revenue from sales in the selected period." />
+                </div>
+                <div className="font-semibold">{fmtUSD(selSales)}</div>
+                <div className={`text-xs mt-0.5 ${dSales.up ? "text-emerald-300" : "text-rose-300"}`}>{dSales.text}</div>
               </div>
-              <div className="text-xs opacity-70">
-                vs prior period ({priorStartMonth} → {addMonthsYM(priorEndMonthExcl, -1)})
+              <div className="border rounded-lg p-2">
+                <div className="text-xs opacity-70">
+                  Net expenses <Info text="All expenses net of refunds/credits. Can be negative in rare cases." />
+                </div>
+                <div className="font-semibold">{fmtUSD(selNetExpenses)}</div>
+              </div>
+              <div className="border rounded-lg p-2">
+                <div className="text-xs opacity-70">
+                  Prime % <Info text="(Food + Beverage + Labor) ÷ Sales. Key cost control metric for food businesses." />
+                </div>
+                <div className="font-semibold">{pct(selPrimePct)}</div>
+                <div className={`text-xs mt-0.5 ${dPrime.up ? "text-rose-300" : "text-emerald-300"}`}>
+                  {dPrime.text}
+                </div>
+              </div>
+              <div className="border rounded-lg p-2">
+                <div className="text-xs opacity-70">
+                  Net margin <Info text="Net income ÷ Sales. Higher is better." />
+                </div>
+                <div className="font-semibold">{pct(selNetMargin)}</div>
               </div>
             </div>
 
-            {/* KPI strip */}
-            <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
-              <div className="border rounded-md px-3 py-2">
-                <div className="text-[11px] opacity-70">
-                  <Tip
-                    label="Sales"
-                    tip="Total revenue for the selected period."
-                  />
-                </div>
-                <div className="font-medium tabular-nums">{fmtUSD(selSales)}</div>
+            {/* Purposeful mini chart: Sales vs Net Expenses + Net Income */}
+            <div className="mt-4 border rounded-xl p-3">
+              <div className="text-sm opacity-80 mb-2">
+                Monthly trend <span className="opacity-60">(Sales vs Net Expenses, Net Income)</span>
               </div>
-              <div className="border rounded-md px-3 py-2">
-                <div className="text-[11px] opacity-70">
-                  <Tip
-                    label="Net expenses"
-                    tip="Sum of all expenses for the period. Can be negative if refunds/credits exceed spending."
-                  />
-                </div>
-                <div className="font-medium tabular-nums">{fmtUSD(selNetExpenses)}</div>
+              <div className="h-44">
+                {(() => {
+                  const width = 720,
+                    height = 180,
+                    left = 40,
+                    right = 10,
+                    top = 10,
+                    bottom = 28;
+                  const W = width - left - right;
+                  const H = height - top - bottom;
+
+                  const maxVal = Math.max(1, ...chartSeries.flatMap((r) => [r.sales, r.exp, Math.abs(r.net)]));
+                  const maxAbsNet = Math.max(1, ...chartSeries.map((r) => Math.abs(r.net)));
+                  const dx = chartSeries.length > 0 ? W / chartSeries.length : 0;
+
+                  const y = (v: number) => top + H - (v / maxVal) * H;
+                  const yNet = (v: number) => top + H - ((v + maxAbsNet) / (maxAbsNet * 2)) * H;
+
+                  const bars = chartSeries.map((r, i) => {
+                    const x = left + i * dx + 2;
+                    const bw = Math.max(2, dx - 6);
+                    const salesH = H - (y(r.sales) - top);
+                    const expH = H - (y(r.exp) - top);
+
+                    return (
+                      <g key={r.m}>
+                        {/* expenses bar */}
+                        <rect
+                          x={x}
+                          y={y(r.exp)}
+                          width={bw}
+                          height={expH}
+                          fill="#4da3ff"
+                          opacity="0.35"
+                        />
+                        {/* sales bar */}
+                        <rect
+                          x={x}
+                          y={y(r.sales)}
+                          width={bw}
+                          height={salesH}
+                          fill="#3ea65f"
+                          opacity="0.35"
+                        />
+                      </g>
+                    );
+                  });
+
+                  const netPath =
+                    chartSeries.length > 0
+                      ? chartSeries
+                          .map((r, i) => {
+                            const cx = left + i * dx + dx / 2;
+                            const cy = yNet(r.net);
+                            return `${i === 0 ? "M" : "L"} ${cx.toFixed(1)} ${cy.toFixed(1)}`;
+                          })
+                          .join(" ")
+                      : "";
+
+                  // baseline at net=0
+                  const y0 = yNet(0);
+
+                  return (
+                    <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full">
+                      <line x1={left} y1={top} x2={left} y2={top + H} stroke="#2a2a2a" />
+                      <line x1={left} y1={top + H} x2={left + W} y2={top + H} stroke="#2a2a2a" />
+                      <line x1={left} y1={y0} x2={left + W} y2={y0} stroke="#2a2a2a" strokeDasharray="4 4" />
+
+                      {bars}
+                      <path d={netPath} fill="none" stroke="#e5e7eb" strokeWidth="2" opacity="0.9" />
+
+                      {/* x labels (sparse) */}
+                      {chartSeries.map((r, i) => {
+                        const show = chartSeries.length <= 8 || i === 0 || i === chartSeries.length - 1 || i % 3 === 0;
+                        if (!show) return null;
+                        const cx = left + i * dx + dx / 2;
+                        return (
+                          <text key={`t-${r.m}`} x={cx} y={top + H + 18} fontSize="10" textAnchor="middle" fill="#9ca3af">
+                            {r.m}
+                          </text>
+                        );
+                      })}
+                    </svg>
+                  );
+                })()}
               </div>
-              <div className="border rounded-md px-3 py-2">
-                <div className="text-[11px] opacity-70">
-                  <Tip
-                    label="Gross profit"
-                    tip="Sales minus Cost of Revenue (Food + Beverage)."
-                  />
-                </div>
-                <div className="font-medium tabular-nums">{fmtUSD(selGrossProfit)}</div>
+              <div className="text-xs opacity-70 mt-2">
+                Bars show Sales (green) vs Net Expenses (blue). White line is Net Income. Net expenses can be negative (refunds/credits).
               </div>
-              <div className="border rounded-md px-3 py-2">
-                <div className="text-[11px] opacity-70">
-                  <Tip
-                    label="Net margin"
-                    tip="Net income divided by sales."
-                  />
+            </div>
+
+            {/* Variance drivers (fills the remaining “dead air” with meaning) */}
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+              <div className="border rounded-lg p-3">
+                <div className="text-sm opacity-80 mb-2">Variance highlights (vs prior period)</div>
+                <div className="text-sm space-y-1">
+                  <div className="flex justify-between">
+                    <span>
+                      Net income <Info text="Change in net income vs prior period." />
+                    </span>
+                    <span className={dNetIncome.up ? "text-emerald-300" : "text-rose-300"}>{dNetIncome.text}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>
+                      Sales <Info text="Change in sales revenue vs prior period." />
+                    </span>
+                    <span className={dSales.up ? "text-emerald-300" : "text-rose-300"}>{dSales.text}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>
+                      Food cost <Info text="Change in food costs vs prior period. Lower is usually better." />
+                    </span>
+                    <span className={dFood.up ? "text-rose-300" : "text-emerald-300"}>{dFood.text}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>
+                      Labor cost <Info text="Change in labor costs vs prior period. Lower is usually better." />
+                    </span>
+                    <span className={dLabor.up ? "text-rose-300" : "text-emerald-300"}>{dLabor.text}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>
+                      Prime cost <Info text="Food + Beverage + Labor change vs prior period." />
+                    </span>
+                    <span className={dPrime.up ? "text-rose-300" : "text-emerald-300"}>{dPrime.text}</span>
+                  </div>
                 </div>
-                <div className="font-medium tabular-nums">{fmtPct(selNetMargin)}</div>
+              </div>
+
+              <div className="border rounded-lg p-3">
+                <div className="text-sm font-medium mb-2">Key stats</div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                  <div className="flex justify-between gap-2">
+                    <span className="opacity-80">
+                      Sales <Info text="Total revenue from sales in the selected period." />
+                    </span>
+                    <span className="tabular-nums">{fmtUSD(selSales)}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="opacity-80">
+                      Net expenses <Info text="All expenses net of refunds/credits. Can be negative." />
+                    </span>
+                    <span className="tabular-nums">{fmtUSD(selNetExpenses)}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="opacity-80">
+                      Net income <Info text="Revenue minus all expenses." />
+                    </span>
+                    <span className="tabular-nums">{fmtUSD(selNetIncome)}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="opacity-80">
+                      Orders <Info text="Total number of orders in the selected period." />
+                    </span>
+                    <span className="tabular-nums">{selOrders}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="opacity-80">
+                      AOV <Info text="Average Order Value = Sales ÷ Orders." />
+                    </span>
+                    <span className="tabular-nums">{fmtUSD(selAOV)}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="opacity-80">
+                      Food % <Info text="Food cost ÷ Sales. Lower is usually better." />
+                    </span>
+                    <span className="tabular-nums">{pct(selFoodPct)}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="opacity-80">
+                      Labor % <Info text="Labor cost ÷ Sales. Lower is usually better." />
+                    </span>
+                    <span className="tabular-nums">{pct(selLaborPct)}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="opacity-80">
+                      Prime % <Info text="(Food + Beverage + Labor) ÷ Sales. Key cost control metric." />
+                    </span>
+                    <span className="tabular-nums">{pct(selPrimePct)}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="opacity-80">
+                      Net margin <Info text="Net income ÷ Sales. Higher is better." />
+                    </span>
+                    <span className="tabular-nums">{pct(selNetMargin)}</span>
+                  </div>
+                  <div />
+                </div>
               </div>
             </div>
           </div>
 
-          {/* Right: key stats (with tooltips) */}
-          <aside className="w-full lg:w-[320px] border rounded-xl p-3">
-            <div className="text-sm font-medium mb-2">Key stats</div>
+          {/* Right-side quick controls for expanding sections (Yahoo-like feel) */}
+          <div className="w-full md:w-[260px] border rounded-xl p-3 h-fit">
+            <div className="text-sm font-medium mb-2">Statement controls</div>
 
-            <div className="space-y-1 text-sm">
-              <div className="flex justify-between gap-2">
-                <span className="opacity-80">
-                  <Tip label="Sales" tip="Total revenue for the selected period." />
+            <div className="text-xs opacity-70 mb-1">
+              Expand sections <Info text="Collapse sub-lines to reduce horizontal scrolling." />
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Link
+                href={buildHref("/financial", { ...baseParams, cogs: expCogs ? "0" : "1" })}
+                className="border rounded px-3 py-2 text-sm hover:bg-neutral-900 flex justify-between"
+              >
+                <span>
+                  COGS details <Info text="Shows Food and Beverage lines under Cost of Revenue." />
                 </span>
-                <span className="tabular-nums">{fmtUSD(selSales)}</span>
-              </div>
+                <span className="opacity-70">{expCogs ? "On" : "Off"}</span>
+              </Link>
 
-              <div className="flex justify-between gap-2">
-                <span className="opacity-80">
-                  <Tip label="Net expenses" tip="Sum of all expenses (can be negative due to credits/refunds)." />
+              <Link
+                href={buildHref("/financial", { ...baseParams, opex: expOpex ? "0" : "1" })}
+                className="border rounded px-3 py-2 text-sm hover:bg-neutral-900 flex justify-between"
+              >
+                <span>
+                  OpEx details <Info text="Shows Labor/Rent/Utilities/Marketing/Misc under Operating Expenses." />
                 </span>
-                <span className="tabular-nums">{fmtUSD(selNetExpenses)}</span>
-              </div>
+                <span className="opacity-70">{expOpex ? "On" : "Off"}</span>
+              </Link>
 
-              <div className="flex justify-between gap-2">
-                <span className="opacity-80">
-                  <Tip label="Net income" tip="Gross profit minus operating expenses." />
-                </span>
-                <span className="tabular-nums">{fmtUSD(selNetIncome)}</span>
-              </div>
-
-              <div className="border-t border-neutral-800 my-2" />
-
-              <div className="flex justify-between gap-2">
-                <span className="opacity-80">
-                  <Tip label="Orders" tip="Total number of orders for the selected period." />
-                </span>
-                <span className="tabular-nums">{selOrders}</span>
-              </div>
-
-              <div className="flex justify-between gap-2">
-                <span className="opacity-80">
-                  <Tip label="AOV" tip="Average Order Value = Sales ÷ Orders." />
-                </span>
-                <span className="tabular-nums">{fmtUSD(selAOV)}</span>
-              </div>
-
-              <div className="flex justify-between gap-2">
-                <span className="opacity-80">
-                  <Tip label="Food %" tip="Food + Beverage as a % of Sales (cost of revenue %)." />
-                </span>
-                <span className="tabular-nums">{fmtPct(selFoodPct)}</span>
-              </div>
-
-              <div className="flex justify-between gap-2">
-                <span className="opacity-80">
-                  <Tip label="Labor %" tip="Labor as a % of Sales." />
-                </span>
-                <span className="tabular-nums">{fmtPct(selLaborPct)}</span>
-              </div>
-
-              <div className="flex justify-between gap-2">
-                <span className="opacity-80">
-                  <Tip label="Prime %" tip="Prime cost % = (Food + Beverage + Labor) ÷ Sales." />
-                </span>
-                <span className="tabular-nums">{fmtPct(selPrimePct)}</span>
-              </div>
-
-              <div className="flex justify-between gap-2">
-                <span className="opacity-80">
-                  <Tip label="Net margin" tip="Net income ÷ Sales." />
-                </span>
-                <span className="tabular-nums">{fmtPct(selNetMargin)}</span>
+              <div className="text-xs opacity-70 mt-2">
+                Columns are {period === "monthly" ? "months" : period === "quarterly" ? "quarters" : "years"} · Values in USD · Net expenses may be negative
               </div>
             </div>
-          </aside>
+          </div>
         </div>
       </section>
 
-      {/* Income Statement table (Yahoo-ish breakdown) */}
+      {/* Income Statement Table */}
       <section className="border rounded-xl mt-4 overflow-x-auto">
-        <div className="flex items-center justify-between px-4 py-3 border-b">
-          <div className="text-sm opacity-90 font-medium">Income Statement</div>
-          <div className="text-xs opacity-60">
-            Columns are months • Values in USD • Net expenses may be negative
-          </div>
+        <div className="px-4 py-3 border-b flex items-center justify-between">
+          <div className="text-sm font-medium">Income Statement</div>
+          <div className="text-xs opacity-70">Columns are {period === "monthly" ? "months" : period === "quarterly" ? "quarters" : "years"} · Values in USD · Net expenses may be negative</div>
         </div>
 
-        {/* Table */}
-        <table className="min-w-[1100px] w-full text-sm">
+        <table className="w-full text-sm min-w-[920px]">
           <thead className="opacity-80">
-            <tr className="bg-neutral-900/40">
-              <th className="text-left font-normal px-3 py-2 w-[220px]">Breakdown</th>
-              {months.map((m) => (
-                <th key={m} className="text-right font-normal px-3 py-2 tabular-nums">
-                  {m}
+            <tr className="border-b">
+              <th className="text-left font-normal px-3 py-2 w-[240px]">Breakdown</th>
+              {periods.map((p) => (
+                <th key={p.key} className="text-right font-normal px-3 py-2 whitespace-nowrap">
+                  {periodLabel(p.key, period)}
                 </th>
               ))}
-              <th className="text-right font-normal px-3 py-2 tabular-nums">Total</th>
-              <th className="text-right font-normal px-3 py-2 tabular-nums">% Sales</th>
+              <th className="text-right font-normal px-3 py-2">Total</th>
+              <th className="text-right font-normal px-3 py-2">% Sales</th>
             </tr>
           </thead>
 
           <tbody>
-            {(() => {
-              const totalSales = selSales;
+            {rowDefs.filter(sectionVisible).map((row) => {
+              // hide subrows if collapsed
+              if (row.section === "cogs" && row.indent === 1 && !expCogs) return null;
+              if (row.section === "opex" && row.indent === 1 && !expOpex) return null;
 
-              const row = (
-                label: React.ReactNode,
-                perMonth: (r: IncomeRow) => number,
-                total: number,
-                pctOfSales: number | null,
-                opts?: { bold?: boolean; indent?: boolean }
-              ) => (
-                <tr className="border-t">
-                  <td className={`px-3 py-2 ${opts?.bold ? "font-medium" : ""}`}>
-                    {opts?.indent ? <span className="opacity-60">— </span> : null}
-                    {label}
-                  </td>
-                  {incomeRows.map((r) => (
-                    <td key={`${label}-${r.month}`} className="px-3 py-2 text-right tabular-nums">
-                      {fmtUSD(perMonth(r))}
-                    </td>
-                  ))}
-                  <td className={`px-3 py-2 text-right tabular-nums ${opts?.bold ? "font-medium" : ""}`}>{fmtUSD(total)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {pctOfSales === null ? "—" : fmtPct(pctOfSales)}
+              const totalVal = row.totalFor(totalsObj);
+              const pctSales = row.pctSales ? row.pctSales(totalsObj, totalVal) : null;
+
+              const label =
+                row.indent === 1 ? (
+                  <span className="flex items-center gap-2">
+                    <span className="opacity-70">—</span>
+                    <span>{row.label}</span>
+                    {row.tooltip ? <Info text={row.tooltip} /> : null}
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-2">
+                    <span>{row.label}</span>
+                    {row.tooltip ? <Info text={row.tooltip} /> : null}
+                  </span>
+                );
+
+              return (
+                <tr key={row.key} className="border-t">
+                  <td className={`px-3 py-2 ${row.bold ? "font-semibold" : ""}`}>{label}</td>
+                  {periods.map((p) => {
+                    const v = row.valueFor(p);
+                    return (
+                      <td key={`${row.key}-${p.key}`} className={`px-3 py-2 text-right tabular-nums ${row.bold ? "font-semibold" : ""}`}>
+                        {fmtUSD(v)}
+                      </td>
+                    );
+                  })}
+                  <td className={`px-3 py-2 text-right tabular-nums ${row.bold ? "font-semibold" : ""}`}>{fmtUSD(totalVal)}</td>
+                  <td className={`px-3 py-2 text-right tabular-nums ${row.bold ? "font-semibold" : ""}`}>
+                    {pctSales === null ? "—" : pct(pctSales)}
                   </td>
                 </tr>
               );
-
-              return (
-                <>
-                  {row(
-                    <Tip label="Total Revenue" tip="Total sales (revenue) for each month." />,
-                    (r) => r.sales,
-                    selSales,
-                    null,
-                    { bold: true }
-                  )}
-
-                  {row(
-                    <Tip label="Cost of Revenue" tip="Direct cost to produce sales (Food + Beverage)." />,
-                    (r) => r.cost_of_revenue,
-                    selCostOfRev,
-                    safeDiv(selCostOfRev, totalSales),
-                    { bold: true }
-                  )}
-
-                  {row(
-                    <Tip label="Food" tip="Food ingredients / supplies tied directly to sales." />,
-                    (r) => r.food,
-                    selCats.Food,
-                    safeDiv(selCats.Food, totalSales),
-                    { indent: true }
-                  )}
-
-                  {row(
-                    <Tip label="Beverage" tip="Drinks / beverage inputs tied directly to sales." />,
-                    (r) => r.beverage,
-                    selCats.Beverage,
-                    safeDiv(selCats.Beverage, totalSales),
-                    { indent: true }
-                  )}
-
-                  {row(
-                    <Tip label="Gross Profit" tip="Sales minus Cost of Revenue." />,
-                    (r) => r.gross_profit,
-                    selGrossProfit,
-                    safeDiv(selGrossProfit, totalSales),
-                    { bold: true }
-                  )}
-
-                  {row(
-                    <Tip label="Operating Expenses" tip="Expenses required to operate (Labor, Rent, Utilities, Marketing, Misc)." />,
-                    (r) => r.operating_expenses,
-                    selOpEx,
-                    safeDiv(selOpEx, totalSales),
-                    { bold: true }
-                  )}
-
-                  {row(
-                    <Tip label="Labor" tip="Wages, contractor pay, and labor-related expense." />,
-                    (r) => r.labor,
-                    selCats.Labor,
-                    safeDiv(selCats.Labor, totalSales),
-                    { indent: true }
-                  )}
-
-                  {row(
-                    <Tip label="Rent" tip="Rent, lease, commissary, or kitchen space fees." />,
-                    (r) => r.rent,
-                    selCats.Rent,
-                    safeDiv(selCats.Rent, totalSales),
-                    { indent: true }
-                  )}
-
-                  {row(
-                    <Tip label="Utilities" tip="Gas, electric, water, internet, etc." />,
-                    (r) => r.utilities,
-                    selCats.Utilities,
-                    safeDiv(selCats.Utilities, totalSales),
-                    { indent: true }
-                  )}
-
-                  {row(
-                    <Tip label="Marketing" tip="Ads, promos, events, and marketing spend." />,
-                    (r) => r.marketing,
-                    selCats.Marketing,
-                    safeDiv(selCats.Marketing, totalSales),
-                    { indent: true }
-                  )}
-
-                  {row(
-                    <Tip label="Misc" tip="Everything else (repairs, fees, subscriptions, supplies not in food, etc.)." />,
-                    (r) => r.misc,
-                    selCats.Misc,
-                    safeDiv(selCats.Misc, totalSales),
-                    { indent: true }
-                  )}
-
-                  {row(
-                    <Tip label="Net Income" tip="Gross profit minus operating expenses." />,
-                    (r) => r.net_income,
-                    selNetIncome,
-                    safeDiv(selNetIncome, totalSales),
-                    { bold: true }
-                  )}
-                </>
-              );
-            })()}
+            })}
           </tbody>
         </table>
       </section>
