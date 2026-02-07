@@ -19,9 +19,14 @@ const currency = (n: number) =>
 
 const defaultTick = { fontSize: 12, fill: "var(--neutral-400, #aaa)" };
 const gridStroke = "var(--neutral-800, #2a2a2a)";
+
 const strokeSales = "var(--chart-1, #3ea65f)";
 const strokeExpenses = "var(--chart-2, #4da3ff)";
 const strokeProfit = "var(--chart-3, #eab308)";
+
+// Optional hover/active fill (lighter highlight). If you don't define the CSS var,
+// the fallback keeps it readable.
+const activeExpensesFill = "var(--chart-2-active, #93c5fd)";
 
 export function SalesExpensesProfitLine({
   data,
@@ -63,7 +68,14 @@ export function CategoryBars({
           <XAxis dataKey="name" tick={defaultTick} />
           <YAxis tick={defaultTick} />
           <Tooltip formatter={(v: any) => currency(Number(v) || 0)} />
-          <Bar dataKey="value" stroke="none" />
+
+          {/* FIX: Explicit fill so bars aren't "black shadow" until hover */}
+          <Bar
+            dataKey="value"
+            fill={strokeExpenses}
+            stroke="none"
+            activeBar={{ fill: activeExpensesFill }}
+          />
         </BarChart>
       </ResponsiveContainer>
     </div>
