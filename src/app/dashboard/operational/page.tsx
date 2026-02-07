@@ -1,5 +1,4 @@
 import "server-only";
-
 import DashboardControls from "../_components/DashboardControls";
 import DefinitionsDrawer from "../_components/DefinitionsDrawer";
 import KpiCard from "../_components/KpiCard";
@@ -21,7 +20,6 @@ function toWeekdayLabel(isoDate: string) {
 }
 
 function daysBetween(aISO: string, bISO: string) {
-  // days from a -> b (b - a)
   const a = new Date(`${aISO}T00:00:00`).getTime();
   const b = new Date(`${bISO}T00:00:00`).getTime();
   const ms = b - a;
@@ -31,10 +29,9 @@ function daysBetween(aISO: string, bISO: string) {
 export default async function OperationalDashboard(props: any) {
   const sp = (await props?.searchParams) ?? props?.searchParams ?? {};
   const range = resolveRange(sp);
-
   const supabase = await createServerClient();
 
-  // --- Inventory dashboard view (on-hand + value + expires_soon)
+  // --- Inventory dashboard view
   const { data: invRows, error: invErr } = await supabase
     .from("v_inventory_dashboard")
     .select("item_id, name, on_hand_base, on_hand_value_usd, expires_soon")
@@ -50,15 +47,11 @@ export default async function OperationalDashboard(props: any) {
   }
 
   const itemsTotal = (invRows ?? []).length;
-  const totalOnHandValue = (invRows ?? []).reduce(
-    (a: number, r: any) => a + Number(r.on_hand_value_usd || 0),
-    0
-  );
+  const totalOnHandValue = (invRows ?? []).reduce((a: number, r: any) => a + Number(r.on_hand_value_usd || 0), 0);
 
-  // Expiring soon thresholds (defaults)
+  // Expiring soon thresholds
   const EXP_7_DAYS = 7;
   const EXP_30_DAYS = 30;
-
   const todayISO = new Date().toISOString().slice(0, 10);
 
   const exp7 = (invRows ?? []).filter((r: any) => {
@@ -75,7 +68,7 @@ export default async function OperationalDashboard(props: any) {
     return d >= 0 && d <= EXP_30_DAYS;
   });
 
-  // --- Purchasing (inventory receipts) within selected range
+  // --- Purchasing (receipts) within selected range
   const { data: receipts, error: recErr } = await supabase
     .from("inventory_receipts")
     .select("created_at, total_cost_usd, qty_base")
@@ -112,7 +105,7 @@ export default async function OperationalDashboard(props: any) {
     value: clamp2(weekdayTotals.get(wd) || 0),
   }));
 
-  // Top on-hand value items (simple list)
+  // Top on-hand value items (list)
   const topOnHand = (invRows ?? []).slice(0, 8).map((r: any) => ({
     name: String(r.name ?? "—"),
     value: Number(r.on_hand_value_usd || 0),
@@ -129,6 +122,44 @@ export default async function OperationalDashboard(props: any) {
       exp: String(r.expires_soon ?? "").slice(0, 10),
       value: Number(r.on_hand_value_usd || 0),
     }));
+
+  // --- NEW: Recent inventory counts (variance)
+  const { data: recentCounts, error: cntErr } = await supabase
+    .from("v_recent_counts")
+    .select("count_id, created_at, total_counted_units, total_counted_value_usd, total_change_units, total_change_value_usd")
+    .order("created_at", { ascending: false })
+    .limit(8);
+
+  // If this errors, we don't hard-fail the whole dashboard; it's a guardrail panel.
+  const countsSafe = cntErr ? [] : (recentCounts ?? []);
+
+  // --- NEW: Makeable recipes (now)
+  // v_recipe_makeable_simple provides recipe_id + makeable. Join recipe names via recipes table.
+  const { data: makeableRows, error: makeErr } = await supabase
+    .from("v_recipe_makeable_simple")
+    .select("recipe_id, makeable")
+    .order("makeable", { ascending: false })
+    .limit(30);
+
+  let makeableList: Array<{ name: string; makeable: number }> = [];
+  if (!makeErr && (makeableRows ?? []).length) {
+    const ids = Array.from(new Set((makeableRows ?? []).map((r: any) => r.recipe_id))).filter(Boolean);
+    const { data: recipeRows } = await supabase
+      .from("recipes")
+      .select("id, name")
+      .in("id", ids);
+
+    const nameMap = new Map<string, string>();
+    for (const r of recipeRows ?? []) nameMap.set(String((r as any).id), String((r as any).name ?? "—"));
+
+    makeableList = (makeableRows ?? [])
+      .map((r: any) => ({
+        name: nameMap.get(String(r.recipe_id)) ?? "—",
+        makeable: Number(r.makeable || 0),
+      }))
+      .filter((r) => r.makeable > 0)
+      .slice(0, 10);
+  }
 
   const definitions = [
     {
@@ -163,6 +194,16 @@ export default async function OperationalDashboard(props: any) {
     {
       label: "Purchase quantity (base)",
       formula: "SUM(inventory_receipts.qty_base)",
+    },
+    {
+      label: "Recent inventory counts (variance)",
+      formula: "From v_recent_counts: total_change_units/value summarize count adjustments",
+      note: "Useful for spotting shrink, miscounts, or process issues.",
+    },
+    {
+      label: "Makeable recipes (now)",
+      formula: "From v_recipe_makeable_simple: floor(on_hand / req_per_batch) per ingredient, min across ingredients",
+      note: "Shows how many full batches you can make today based on inventory.",
     },
     {
       label: "Future: Top items / menu mix",
@@ -209,7 +250,6 @@ export default async function OperationalDashboard(props: any) {
           hint="Items with nearest expiry within 30 days."
           formula={`expires_on within ${EXP_30_DAYS} days`}
         />
-
         <KpiCard
           label="Purchasing Spend"
           value={fmtCurrency(purchaseSpend)}
@@ -251,12 +291,13 @@ export default async function OperationalDashboard(props: any) {
           <div className="space-y-2">
             {topOnHand.length ? (
               topOnHand.map((r, idx) => (
-                <div key={idx} className="flex items-center justify-between gap-3 rounded border border-neutral-800 bg-neutral-950/40 px-3 py-2">
+                <div
+                  key={idx}
+                  className="flex items-center justify-between gap-3 rounded border border-neutral-800 bg-neutral-950/40 px-3 py-2"
+                >
                   <div className="min-w-0">
                     <div className="font-medium truncate">{r.name}</div>
-                    <div className="text-xs opacity-70">
-                      Qty (base): {clamp2(r.qty).toLocaleString()}
-                    </div>
+                    <div className="text-xs opacity-70">Qty (base): {clamp2(r.qty).toLocaleString()}</div>
                   </div>
                   <div className="font-semibold">{fmtCurrency(r.value)}</div>
                 </div>
@@ -267,17 +308,84 @@ export default async function OperationalDashboard(props: any) {
           </div>
         </div>
 
+        {/* NEW: Recent inventory counts */}
+        <div className="rounded border border-neutral-800 p-4 lg:col-span-2">
+          <div className="font-semibold mb-2">Recent Inventory Counts (variance)</div>
+          <div className="text-sm opacity-70 mb-4">
+            Quick guardrail: large variance can indicate shrink, miscounts, or a process issue.
+          </div>
+
+          {cntErr ? (
+            <div className="text-sm opacity-70">Counts panel unavailable: {cntErr.message}</div>
+          ) : countsSafe.length ? (
+            <div className="space-y-2">
+              {countsSafe.map((c: any, idx: number) => (
+                <div
+                  key={idx}
+                  className="rounded border border-neutral-800 bg-neutral-950/40 px-3 py-2 flex items-center justify-between gap-4"
+                >
+                  <div className="min-w-0">
+                    <div className="font-medium truncate">
+                      {String(c.created_at ?? "").slice(0, 10)} • Count #{String(c.count_id).slice(0, 8)}
+                    </div>
+                    <div className="text-xs opacity-70">
+                      Change Units: {clamp2(Number(c.total_change_units || 0)).toLocaleString()} • Change Value:{" "}
+                      {fmtCurrency(Number(c.total_change_value_usd || 0))}
+                    </div>
+                  </div>
+
+                  <div className="text-right">
+                    <div className="text-sm opacity-80">Counted Value</div>
+                    <div className="font-semibold">{fmtCurrency(Number(c.total_counted_value_usd || 0))}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-sm opacity-70">No counts yet.</div>
+          )}
+        </div>
+
+        {/* NEW: Makeable recipes */}
+        <div className="rounded border border-neutral-800 p-4 lg:col-span-2">
+          <div className="font-semibold mb-2">Makeable Recipes (right now)</div>
+          <div className="text-sm opacity-70 mb-4">
+            Based on current inventory. Helps decide what you can produce today without running out.
+          </div>
+
+          {makeErr ? (
+            <div className="text-sm opacity-70">Makeable panel unavailable: {makeErr.message}</div>
+          ) : makeableList.length ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {makeableList.map((r, idx) => (
+                <div key={idx} className="rounded border border-neutral-800 bg-neutral-950/40 p-3">
+                  <div className="font-medium">{r.name}</div>
+                  <div className="text-sm opacity-80 mt-1">
+                    Makeable batches: <strong>{Number(r.makeable).toLocaleString()}</strong>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-sm opacity-70">No makeable recipe data yet.</div>
+          )}
+        </div>
+
+        {/* Expiring soon list */}
         <div className="rounded border border-neutral-800 p-4 lg:col-span-2">
           <div className="font-semibold mb-2">{`Expiring Soon (≤ ${EXP_7_DAYS} days)`}</div>
           <div className="text-sm opacity-70 mb-4">
             These items are at higher risk of waste. Consider specials or prep planning.
           </div>
+
           {expSoonList.length ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {expSoonList.map((r, idx) => (
                 <div key={idx} className="rounded border border-neutral-800 bg-neutral-950/40 p-3">
                   <div className="font-medium">{r.name}</div>
-                  <div className="text-sm opacity-80 mt-1">Expiry: <strong>{r.exp}</strong></div>
+                  <div className="text-sm opacity-80 mt-1">
+                    Expiry: <strong>{r.exp}</strong>
+                  </div>
                   <div className="text-sm opacity-70 mt-1">On-hand value: {fmtCurrency(r.value)}</div>
                 </div>
               ))}
