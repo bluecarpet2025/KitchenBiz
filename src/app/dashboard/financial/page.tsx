@@ -3,12 +3,9 @@ import DashboardControls from "../_components/DashboardControls";
 import DefinitionsDrawer from "../_components/DefinitionsDrawer";
 import { resolveRange } from "../_components/dateRange";
 
-export default async function FinancialDashboard({
-  searchParams,
-}: {
-  searchParams: Record<string, string | string[] | undefined>;
-}) {
-  const range = resolveRange(searchParams);
+export default async function FinancialDashboard(props: any) {
+  const sp = (await props?.searchParams) ?? props?.searchParams ?? {};
+  const range = resolveRange(sp);
 
   const definitions = [
     { label: "Net Sales", formula: "SUM(total)" },

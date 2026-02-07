@@ -13,12 +13,9 @@ function clamp2(n: number) {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
 
-export default async function ExecutiveDashboard({
-  searchParams,
-}: {
-  searchParams: Record<string, string | string[] | undefined>;
-}) {
-  const range = resolveRange(searchParams);
+export default async function ExecutiveDashboard(props: any) {
+  const sp = (await props?.searchParams) ?? props?.searchParams ?? {};
+  const range = resolveRange(sp);
 
   const supabase = await createServerClient();
 
@@ -38,13 +35,13 @@ export default async function ExecutiveDashboard({
   }
 
   const inRange = (d: string) => d >= range.start && d < range.end;
-  const salesRows = (salesDays ?? []).filter((r) => inRange(r.day as string));
+  const salesRows = (salesDays ?? []).filter((r: any) => inRange(String(r.day)));
 
-  const netSales = salesRows.reduce((a, r: any) => a + Number(r.net_sales || 0), 0);
-  const grossSales = salesRows.reduce((a, r: any) => a + Number(r.gross_sales || 0), 0);
-  const discounts = salesRows.reduce((a, r: any) => a + Number(r.discounts || 0), 0);
-  const taxes = salesRows.reduce((a, r: any) => a + Number(r.taxes || 0), 0);
-  const orders = salesRows.reduce((a, r: any) => a + Number(r.orders || 0), 0);
+  const netSales = salesRows.reduce((a: number, r: any) => a + Number(r.net_sales || 0), 0);
+  const grossSales = salesRows.reduce((a: number, r: any) => a + Number(r.gross_sales || 0), 0);
+  const discounts = salesRows.reduce((a: number, r: any) => a + Number(r.discounts || 0), 0);
+  const taxes = salesRows.reduce((a: number, r: any) => a + Number(r.taxes || 0), 0);
+  const orders = salesRows.reduce((a: number, r: any) => a + Number(r.orders || 0), 0);
 
   // Expenses: use normalized categories view + filter by range in JS
   const { data: expNorm, error: expErr } = await supabase
@@ -105,7 +102,7 @@ export default async function ExecutiveDashboard({
     { label: "Gross Sales", formula: "SUM(qty * unit_price)", note: "Total before discounts and taxes." },
     { label: "Discounts", formula: "SUM(discount)", note: "All discounts applied to sales." },
     { label: "Taxes", formula: "SUM(tax)", note: "Sales tax collected (not revenue)." },
-    { label: "Net Sales", formula: "SUM(total)", note: "What you actually sold after discounts + tax handling in the line total." },
+    { label: "Net Sales", formula: "SUM(total)", note: "This is the main sales number used in dashboards." },
     { label: "Expenses", formula: "SUM(expenses.amount_usd)", note: "Sum of expenses in the selected date range." },
     { label: "Profit", formula: "Net Sales - Expenses" },
     { label: "Margin %", formula: "Profit / Net Sales" },
@@ -125,42 +122,12 @@ export default async function ExecutiveDashboard({
       <DashboardControls />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-        <KpiCard
-          label="Net Sales"
-          value={fmtCurrency(netSales)}
-          hint="Revenue after discounts and taxes handling in line totals."
-          formula="SUM(total)"
-        />
-        <KpiCard
-          label="Expenses"
-          value={fmtCurrency(totalExpenses)}
-          hint="Operating expenses in this date range."
-          formula="SUM(expenses.amount_usd)"
-        />
-        <KpiCard
-          label="Profit"
-          value={fmtCurrency(profit)}
-          hint="Net Sales minus Expenses."
-          formula="Net Sales - Expenses"
-        />
-        <KpiCard
-          label="Margin %"
-          value={`${clamp2(marginPct)}%`}
-          hint="Profit divided by Net Sales."
-          formula="Profit / Net Sales"
-        />
-        <KpiCard
-          label="Orders"
-          value={String(orders)}
-          hint="Unique orders in this date range."
-          formula="COUNT(DISTINCT orders)"
-        />
-        <KpiCard
-          label="AOV"
-          value={fmtCurrency(aov)}
-          hint="Average order value."
-          formula="Net Sales / Orders"
-        />
+        <KpiCard label="Net Sales" value={fmtCurrency(netSales)} hint="Revenue after discounts/tax line handling." formula="SUM(total)" />
+        <KpiCard label="Expenses" value={fmtCurrency(totalExpenses)} hint="Operating expenses in this range." formula="SUM(expenses.amount_usd)" />
+        <KpiCard label="Profit" value={fmtCurrency(profit)} hint="Net Sales minus Expenses." formula="Net Sales - Expenses" />
+        <KpiCard label="Margin %" value={`${clamp2(marginPct)}%`} hint="Profit divided by Net Sales." formula="Profit / Net Sales" />
+        <KpiCard label="Orders" value={String(orders)} hint="Unique orders in this range." formula="COUNT(DISTINCT orders)" />
+        <KpiCard label="AOV" value={fmtCurrency(aov)} hint="Average order value." formula="Net Sales / Orders" />
         <KpiCard label="Gross Sales" value={fmtCurrency(grossSales)} hint="Before discounts and taxes." formula="SUM(qty * unit_price)" />
         <KpiCard label="Discounts" value={fmtCurrency(discounts)} hint="Total discounts given." formula="SUM(discount)" />
       </div>
