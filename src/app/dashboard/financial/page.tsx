@@ -4,11 +4,7 @@ import DefinitionsDrawer from "../_components/DefinitionsDrawer";
 import KpiCard from "../_components/KpiCard";
 import { resolveRange } from "../_components/dateRange";
 import { createServerClient } from "@/lib/supabase/server";
-import {
-  SalesExpensesProfitLine,
-  CategoryBars,
-  WeekdayBars,
-} from "../_components/Charts";
+import { SalesExpensesProfitLine, CategoryBars, WeekdayBars } from "../_components/Charts";
 
 const fmtCurrency = (n: number) =>
   new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(Number(n) || 0);
@@ -19,40 +15,24 @@ function clamp2(n: number) {
 function clampPct(n: number) {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
+
 function toWeekdayLabel(isoDate: string) {
   const d = new Date(`${isoDate}T00:00:00`);
   const idx = d.getDay(); // 0=Sun..6=Sat
   return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][idx] ?? "—";
 }
-function toISODate(d: Date) {
+function toISO(d: Date) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
-function startOfWeekMonFromISO(isoDate: string) {
-  const d = new Date(`${isoDate}T00:00:00`);
-  const day = d.getDay(); // 0..6
+function startOfWeekMonISO(iso: string) {
+  const d = new Date(`${iso}T00:00:00`);
+  const day = d.getDay();
   const diff = (day + 6) % 7; // Mon->0
   d.setDate(d.getDate() - diff);
-  return toISODate(d);
-}
-function addDaysISO(isoDate: string, days: number) {
-  const d = new Date(`${isoDate}T00:00:00`);
-  d.setDate(d.getDate() + days);
-  return toISODate(d);
-}
-function statusLabel(actualPct: number, targetPct: number, direction: "max" | "min") {
-  // max = "lower is better" (Prime%, Food%, Labor%)
-  // min = "higher is better"
-  if (direction === "max") {
-    if (actualPct <= targetPct) return "On target";
-    if (actualPct <= targetPct + 2) return "Slightly high";
-    return "High";
-  }
-  if (actualPct >= targetPct) return "On target";
-  if (actualPct >= targetPct - 2) return "Slightly low";
-  return "Low";
+  return toISO(d);
 }
 
 export default async function FinancialDashboard(props: any) {
@@ -75,16 +55,7 @@ export default async function FinancialDashboard(props: any) {
     );
   }
 
-  const inRange = (d: string) => d >= range.start && d < range.end;
-  const salesRows = (salesDays ?? []).filter((r: any) => inRange(String(r.day)));
-
-  const netSales = salesRows.reduce((a: number, r: any) => a + Number(r.net_sales || 0), 0);
-  const grossSales = salesRows.reduce((a: number, r: any) => a + Number(r.gross_sales || 0), 0);
-  const discounts = salesRows.reduce((a: number, r: any) => a + Number(r.discounts || 0), 0);
-  const taxes = salesRows.reduce((a: number, r: any) => a + Number(r.taxes || 0), 0);
-  const orders = salesRows.reduce((a: number, r: any) => a + Number(r.orders || 0), 0);
-
-  // --- Expenses (normalized categories)
+  // --- Expenses (normalized)
   const { data: expNorm, error: expErr } = await supabase
     .from("v_expense_categories_normalized")
     .select("occurred_at, amount_usd, category_norm");
@@ -98,23 +69,33 @@ export default async function FinancialDashboard(props: any) {
     );
   }
 
+  const inRange = (d: string) => d >= range.start && d < range.end;
+
+  const salesRows = (salesDays ?? []).filter((r: any) => inRange(String(r.day)));
+
   const expRows = (expNorm ?? []).filter((r: any) => {
     const day = String(r.occurred_at ?? "").slice(0, 10);
     return day && day >= range.start && day < range.end;
   });
+
+  // --- Totals
+  const netSales = salesRows.reduce((a: number, r: any) => a + Number(r.net_sales || 0), 0);
+  const grossSales = salesRows.reduce((a: number, r: any) => a + Number(r.gross_sales || 0), 0);
+  const discounts = salesRows.reduce((a: number, r: any) => a + Number(r.discounts || 0), 0);
+  const taxes = salesRows.reduce((a: number, r: any) => a + Number(r.taxes || 0), 0);
+  const orders = salesRows.reduce((a: number, r: any) => a + Number(r.orders || 0), 0);
 
   const totalExpenses = expRows.reduce((a: number, r: any) => a + Number(r.amount_usd || 0), 0);
   const profit = netSales - totalExpenses;
   const marginPct = netSales > 0 ? (profit / netSales) * 100 : 0;
   const aov = orders > 0 ? netSales / orders : 0;
 
-  // --- Category totals / prime cost
+  // --- Category totals (normalized buckets)
   const byCat = new Map<string, number>();
   for (const r of expRows as any[]) {
     const k = String(r.category_norm ?? "Misc");
     byCat.set(k, (byCat.get(k) || 0) + Number(r.amount_usd || 0));
   }
-
   const food = Number(byCat.get("Food") || 0);
   const labor = Number(byCat.get("Labor") || 0);
   const rent = Number(byCat.get("Rent") || 0);
@@ -127,24 +108,18 @@ export default async function FinancialDashboard(props: any) {
   const laborPct = netSales > 0 ? (labor / netSales) * 100 : 0;
   const primePct = netSales > 0 ? (primeCost / netSales) * 100 : 0;
 
-  // --- Targets (defaults; later we can store per-tenant)
-  const TARGET_PRIME = 60; // % of net sales (lower better)
-  const TARGET_FOOD = 30;
-  const TARGET_LABOR = 25;
-
-  // --- Category bars (6 buckets)
+  // --- Category bars
   const categoryBars = ["Food", "Labor", "Rent", "Utilities", "Marketing", "Misc"].map((k) => ({
     name: k,
     value: clamp2(byCat.get(k) || 0),
   }));
 
-  // --- Daily trend line series
+  // --- Daily line series
   const expenseByDay = new Map<string, number>();
   for (const r of expRows as any[]) {
     const day = String(r.occurred_at ?? "").slice(0, 10);
     expenseByDay.set(day, (expenseByDay.get(day) || 0) + Number(r.amount_usd || 0));
   }
-
   const dailyLine = salesRows.map((r: any) => {
     const day = String(r.day);
     const exp = Number(expenseByDay.get(day) || 0);
@@ -157,30 +132,27 @@ export default async function FinancialDashboard(props: any) {
     };
   });
 
-  // --- Weekly trend (Financial owns “analysis”)
-  type WeekAgg = { week: string; net_sales: number; expenses: number };
-  const weekMap = new Map<string, WeekAgg>();
-
+  // --- Weekly summary (same measures, aggregated)
+  const weekAgg = new Map<string, { net_sales: number; expenses: number; profit: number }>();
   for (const r of salesRows as any[]) {
     const day = String(r.day);
-    const wk = startOfWeekMonFromISO(day);
-    const exp = Number(expenseByDay.get(day) || 0);
+    const wk = startOfWeekMonISO(day);
     const ns = Number(r.net_sales || 0);
-
-    const cur = weekMap.get(wk) ?? { week: wk, net_sales: 0, expenses: 0 };
+    const exp = Number(expenseByDay.get(day) || 0);
+    const cur = weekAgg.get(wk) || { net_sales: 0, expenses: 0, profit: 0 };
     cur.net_sales += ns;
     cur.expenses += exp;
-    weekMap.set(wk, cur);
+    cur.profit += ns - exp;
+    weekAgg.set(wk, cur);
   }
-
-  const weeklyLine = Array.from(weekMap.values())
-    .map((w) => ({
-      key: `${w.week} → ${addDaysISO(w.week, 6)}`,
-      net_sales: clamp2(w.net_sales),
-      expenses: clamp2(w.expenses),
-      profit: clamp2(w.net_sales - w.expenses),
-    }))
-    .sort((a, b) => String(a.key).localeCompare(String(b.key)));
+  const weeklyLine = Array.from(weekAgg.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([wk, v]) => ({
+      key: wk,
+      net_sales: clamp2(v.net_sales),
+      expenses: clamp2(v.expenses),
+      profit: clamp2(v.profit),
+    }));
 
   // --- Weekday net sales
   const weekdayTotals = new Map<string, number>();
@@ -189,12 +161,22 @@ export default async function FinancialDashboard(props: any) {
     const wd = toWeekdayLabel(day);
     weekdayTotals.set(wd, (weekdayTotals.get(wd) || 0) + Number(r.net_sales || 0));
   }
-
   const weekdayOrder = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const weekdayData = weekdayOrder.map((wd) => ({
     name: wd,
     value: clamp2(weekdayTotals.get(wd) || 0),
   }));
+
+  // --- Targets vs Actual (conservative defaults)
+  const TARGETS = {
+    prime: 60,
+    food: 30,
+    labor: 25,
+  };
+  function targetLabel(actual: number, target: number) {
+    const ok = actual <= target;
+    return `Target ≤ ${target}% • ${ok ? "On target" : "Over target"}`;
+  }
 
   const definitions = [
     { label: "Gross Sales", formula: "SUM(qty * unit_price)", note: "Total before discounts and taxes." },
@@ -206,14 +188,12 @@ export default async function FinancialDashboard(props: any) {
     { label: "Margin %", formula: "Profit / Net Sales" },
     { label: "Orders", formula: "COUNT(DISTINCT sales_orders.id)" },
     { label: "AOV", formula: "Net Sales / Orders", note: "Average order value." },
-    { label: "Food", formula: "SUM(expenses.amount_usd) WHERE category_norm = 'Food'" },
-    { label: "Labor", formula: "SUM(expenses.amount_usd) WHERE category_norm = 'Labor'" },
+    { label: "Food", formula: "SUM(expenses.amount_usd) WHERE category_norm = 'Food'", note: "Food-related expenses (normalized)." },
+    { label: "Labor", formula: "SUM(expenses.amount_usd) WHERE category_norm = 'Labor'", note: "Labor-related expenses (normalized)." },
     { label: "Prime Cost", formula: "Food + Labor", note: "A common restaurant metric." },
     { label: "Food %", formula: "Food / Net Sales" },
     { label: "Labor %", formula: "Labor / Net Sales" },
     { label: "Prime %", formula: "(Food + Labor) / Net Sales" },
-    { label: "Targets", formula: "Defaults: Prime 60%, Food 30%, Labor 25% (lower is better)" },
-    { label: "Weekly Trend", formula: "Aggregate daily totals into Monday-start weeks" },
   ];
 
   return (
@@ -227,36 +207,27 @@ export default async function FinancialDashboard(props: any) {
 
       <DashboardControls />
 
-      {/* Targets vs Actual (Financial = health) */}
+      {/* Targets vs Actual */}
       <div className="rounded border border-neutral-800 p-4 mb-4">
-        <div className="font-semibold mb-2">Targets vs Actual (quick health check)</div>
+        <div className="font-semibold mb-1">Targets vs Actual (quick health check)</div>
         <div className="text-sm opacity-70 mb-3">
           Defaults are conservative. Later we can let each tenant set their own targets.
         </div>
-
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div className="rounded border border-neutral-800 bg-neutral-950/40 p-3">
+          <div className="rounded border border-neutral-800 p-3 bg-neutral-950/40">
             <div className="text-sm opacity-80">Prime %</div>
             <div className="text-xl font-semibold mt-1">{clampPct(primePct)}%</div>
-            <div className="text-sm opacity-70 mt-1">
-              Target ≤ {TARGET_PRIME}% • {statusLabel(primePct, TARGET_PRIME, "max")}
-            </div>
+            <div className="text-xs opacity-70 mt-1">{targetLabel(primePct, TARGETS.prime)}</div>
           </div>
-
-          <div className="rounded border border-neutral-800 bg-neutral-950/40 p-3">
+          <div className="rounded border border-neutral-800 p-3 bg-neutral-950/40">
             <div className="text-sm opacity-80">Food %</div>
             <div className="text-xl font-semibold mt-1">{clampPct(foodPct)}%</div>
-            <div className="text-sm opacity-70 mt-1">
-              Target ≤ {TARGET_FOOD}% • {statusLabel(foodPct, TARGET_FOOD, "max")}
-            </div>
+            <div className="text-xs opacity-70 mt-1">{targetLabel(foodPct, TARGETS.food)}</div>
           </div>
-
-          <div className="rounded border border-neutral-800 bg-neutral-950/40 p-3">
+          <div className="rounded border border-neutral-800 p-3 bg-neutral-950/40">
             <div className="text-sm opacity-80">Labor %</div>
             <div className="text-xl font-semibold mt-1">{clampPct(laborPct)}%</div>
-            <div className="text-sm opacity-70 mt-1">
-              Target ≤ {TARGET_LABOR}% • {statusLabel(laborPct, TARGET_LABOR, "max")}
-            </div>
+            <div className="text-xs opacity-70 mt-1">{targetLabel(laborPct, TARGETS.labor)}</div>
           </div>
         </div>
       </div>
@@ -267,12 +238,10 @@ export default async function FinancialDashboard(props: any) {
         <KpiCard label="Expenses" value={fmtCurrency(totalExpenses)} hint="Operating expenses in this range." formula="SUM(expenses.amount_usd)" />
         <KpiCard label="Profit" value={fmtCurrency(profit)} hint="Net Sales minus Expenses." formula="Net Sales - Expenses" />
         <KpiCard label="Margin %" value={`${clampPct(marginPct)}%`} hint="Profit divided by Net Sales." formula="Profit / Net Sales" />
-
         <KpiCard label="Prime Cost" value={fmtCurrency(primeCost)} hint="Food + Labor." formula="Food + Labor" />
         <KpiCard label="Prime %" value={`${clampPct(primePct)}%`} hint="Prime cost as a % of net sales." formula="(Food + Labor) / Net Sales" />
         <KpiCard label="Food %" value={`${clampPct(foodPct)}%`} hint="Food as a % of net sales." formula="Food / Net Sales" />
         <KpiCard label="Labor %" value={`${clampPct(laborPct)}%`} hint="Labor as a % of net sales." formula="Labor / Net Sales" />
-
         <KpiCard label="Orders" value={String(orders)} hint="Unique orders in this range." formula="COUNT(DISTINCT orders)" />
         <KpiCard label="AOV" value={fmtCurrency(aov)} hint="Average order value." formula="Net Sales / Orders" />
         <KpiCard label="Gross Sales" value={fmtCurrency(grossSales)} hint="Before discounts and taxes." formula="SUM(qty * unit_price)" />
@@ -284,7 +253,7 @@ export default async function FinancialDashboard(props: any) {
         <div className="rounded border border-neutral-800 p-4">
           <div className="font-semibold mb-2">Net Sales vs Expenses vs Profit (daily)</div>
           <div className="text-sm opacity-70 mb-4">Daily trend for detail-level analysis.</div>
-          <SalesExpensesProfitLine data={dailyLine} />
+          <SalesExpensesProfitLine data={dailyLine.length ? dailyLine : [{ key: "—", net_sales: 0, expenses: 0, profit: 0 }]} />
         </div>
 
         <div className="rounded border border-neutral-800 p-4">
@@ -295,19 +264,22 @@ export default async function FinancialDashboard(props: any) {
           <CategoryBars data={categoryBars} />
         </div>
 
-        <div className="rounded border border-neutral-800 p-4 lg:col-span-2">
-          <div className="font-semibold mb-2">Weekly Trend (summary)</div>
-          <div className="text-sm opacity-70 mb-4">
-            Weekly totals help you spot patterns without daily noise.
+        {/* Tighten page: keep Weekday visible; collapse Weekly summary (still available, not removed) */}
+        <details className="rounded border border-neutral-800 p-4 lg:col-span-2">
+          <summary className="font-semibold cursor-pointer select-none">
+            Weekly Trend (summary)
+            <span className="ml-2 text-sm font-normal opacity-70">Weekly totals help you spot patterns without daily noise.</span>
+          </summary>
+          <div className="mt-4">
+            <SalesExpensesProfitLine
+              data={weeklyLine.length ? weeklyLine : [{ key: "—", net_sales: 0, expenses: 0, profit: 0 }]}
+            />
           </div>
-          <SalesExpensesProfitLine data={weeklyLine} />
-        </div>
+        </details>
 
         <div className="rounded border border-neutral-800 p-4 lg:col-span-2">
           <div className="font-semibold mb-2">Net Sales by Weekday</div>
-          <div className="text-sm opacity-70 mb-4">
-            Helpful for spotting strong/weak days of the week.
-          </div>
+          <div className="text-sm opacity-70 mb-4">Helpful for spotting strong/weak days of the week.</div>
           <WeekdayBars data={weekdayData} />
         </div>
       </div>
@@ -321,23 +293,24 @@ export default async function FinancialDashboard(props: any) {
             <div className="text-sm opacity-80">Net Sales</div>
             <div className="text-xl font-semibold mt-1">{fmtCurrency(netSales)}</div>
           </div>
-
           <div className="rounded border border-neutral-800 p-3 bg-neutral-950/40">
             <div className="text-sm opacity-80">Prime Cost (Food + Labor)</div>
             <div className="text-xl font-semibold mt-1">{fmtCurrency(primeCost)}</div>
             <div className="text-sm opacity-70 mt-1">{clampPct(primePct)}%</div>
           </div>
-
           <div className="rounded border border-neutral-800 p-3 bg-neutral-950/40">
             <div className="text-sm opacity-80">Other Expenses</div>
-            <div className="text-xl font-semibold mt-1">
-              {fmtCurrency(Math.max(0, totalExpenses - primeCost))}
-            </div>
+            <div className="text-xl font-semibold mt-1">{fmtCurrency(Math.max(0, totalExpenses - primeCost))}</div>
             <div className="text-sm opacity-70 mt-1">
               Rent {fmtCurrency(rent)} • Utilities {fmtCurrency(utilities)} • Marketing {fmtCurrency(marketing)} • Misc {fmtCurrency(misc)}
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Keep discounts visible in financial via definitions; optional: show it as KPI later if you want */}
+      <div className="text-xs opacity-60 mt-4">
+        Note: Discounts in range: <strong>{fmtCurrency(discounts)}</strong>
       </div>
     </div>
   );
