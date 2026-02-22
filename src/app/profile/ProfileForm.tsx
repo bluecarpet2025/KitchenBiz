@@ -33,7 +33,9 @@ export default function ProfileForm({
   // Plan is read-only here (Stripe controls it via webhook → profiles.plan)
   const plan = ((initialPlan as Plan) || "starter") as Plan;
 
+  // Keep state for now (even if not shown) to avoid changing props/behavior elsewhere
   const [brandingTier, setBrandingTier] = useState(initialBrandingTier);
+
   const [busy, setBusy] = useState(false);
   const [billingBusy, setBillingBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -48,6 +50,7 @@ export default function ProfileForm({
 
   const save = async () => {
     setBusy(true);
+
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -58,17 +61,15 @@ export default function ProfileForm({
       return;
     }
 
-    const { error: profErr } = await supabase
-      .from("profiles")
-      .upsert(
-        {
-          id: user.id,
-          display_name: name.trim(),
-          use_demo: useDemo,
-          branding_tier: computedBrandingTier,
-        },
-        { onConflict: "id" }
-      );
+    const { error: profErr } = await supabase.from("profiles").upsert(
+      {
+        id: user.id,
+        display_name: name.trim(),
+        use_demo: useDemo,
+        branding_tier: computedBrandingTier,
+      },
+      { onConflict: "id" }
+    );
 
     // Save tenant info if applicable
     let tenantErr: string | null = null;
@@ -85,6 +86,7 @@ export default function ProfileForm({
         .maybeSingle();
 
       if (error) tenantErr = error.message;
+
       if (updated) {
         setBizName(updated.name ?? "");
         setBizBlurb(updated.short_description ?? "");
@@ -92,6 +94,7 @@ export default function ProfileForm({
     }
 
     setBrandingTier(computedBrandingTier);
+
     setBusy(false);
     setMsg(profErr?.message || tenantErr || "Saved ✓");
     setTimeout(() => setMsg(null), 4000);
@@ -173,19 +176,13 @@ export default function ProfileForm({
     const disabled = !canBill || billingBusy;
 
     return (
-      <div
-        className={`border rounded-md p-3 ${
-          active ? "border-green-700 bg-green-900/10" : "border-neutral-800"
-        }`}
-      >
+      <div className={`border rounded-md p-3 ${active ? "border-green-700 bg-green-900/10" : "border-neutral-800"}`}>
         <div className="flex items-center justify-between gap-2">
           <div className="font-medium">
             {planLabel(target)} — {planPrice(target)}
           </div>
           {active && (
-            <span className="text-[11px] px-2 py-0.5 rounded-full border border-green-700 text-green-300">
-              Current
-            </span>
+            <span className="text-[11px] px-2 py-0.5 rounded-full border border-green-700 text-green-300">Current</span>
           )}
         </div>
 
@@ -202,9 +199,7 @@ export default function ProfileForm({
 
         {/* Small hint only for switching to free */}
         {target === "starter" && plan !== "starter" && canBill && (
-          <div className="text-[11px] opacity-60 mt-2">
-            Switching to Free happens by canceling in the portal.
-          </div>
+          <div className="text-[11px] opacity-60 mt-2">Switching to Free happens by canceling in the portal.</div>
         )}
 
         {!canBill && (
@@ -260,43 +255,19 @@ export default function ProfileForm({
             <PlanCard target="pro" />
           </div>
 
-          {/* Add-ons */}
-          <div className="border border-neutral-800 rounded-md p-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="font-medium">Add-ons</div>
-              <button
-                type="button"
-                disabled={!canBill || billingBusy}
-                onClick={openBillingPortal}
-                className="border rounded px-3 py-2 text-xs hover:bg-neutral-900 disabled:opacity-50"
-              >
-                Billing Portal
-              </button>
-            </div>
+          <div className="text-[11px] opacity-60">
+            Plan changes sync from Stripe via webhook (updates in a few seconds).
+          </div>
 
-            <div className="mt-2 flex items-start justify-between gap-3">
-              <div>
-                <div className="text-sm font-medium">Deep Business Report</div>
-                <div className="text-xs opacity-70">$49 (one-time) • Available for Basic+</div>
-              </div>
-              <button
-                type="button"
-                disabled={!canBill || billingBusy || plan === "starter"}
-                onClick={() => startCheckout({ kind: "one_time", sku: "ai_deep_business_report" })}
-                className="border rounded px-3 py-2 text-sm hover:bg-neutral-900 disabled:opacity-50"
-                title={plan === "starter" ? "Upgrade to Basic to purchase this." : ""}
-              >
-                Buy
-              </button>
-            </div>
-
-            <div className="text-xs opacity-60 mt-2">
-              Plan changes sync from Stripe via webhook (updates in a few seconds).
-            </div>
-
-            <p className="text-xs mt-2 opacity-70">
-              <strong>Branding Tier:</strong> {brandingTier} (auto from plan: {computedBrandingTier})
-            </p>
+          <div className="pt-2">
+            <button
+              type="button"
+              disabled={!canBill || billingBusy}
+              onClick={openBillingPortal}
+              className="border rounded px-3 py-2 text-xs hover:bg-neutral-900 disabled:opacity-50"
+            >
+              Billing Portal
+            </button>
           </div>
         </div>
       )}
