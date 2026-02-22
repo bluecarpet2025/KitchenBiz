@@ -33,7 +33,7 @@ export default function ProfileForm({
   // Plan is read-only here (Stripe controls it via webhook → profiles.plan)
   const plan = ((initialPlan as Plan) || "starter") as Plan;
 
-  // Keep state for now (even if not shown) to avoid changing props/behavior elsewhere
+  // Keep state for now to avoid changing behavior elsewhere
   const [brandingTier, setBrandingTier] = useState(initialBrandingTier);
 
   const [busy, setBusy] = useState(false);
@@ -217,7 +217,8 @@ export default function ProfileForm({
         e.preventDefault();
         save();
       }}
-      className="max-w-xl mt-6 space-y-4"
+      // Expanded width to match the page container (max-w-3xl on the page)
+      className="w-full mt-6 space-y-4"
     >
       {msg && <div className="text-sm rounded-md px-3 py-2 bg-neutral-800">{msg}</div>}
 
@@ -255,9 +256,7 @@ export default function ProfileForm({
             <PlanCard target="pro" />
           </div>
 
-          <div className="text-[11px] opacity-60">
-            Plan changes sync from Stripe via webhook (updates in a few seconds).
-          </div>
+          <div className="text-[11px] opacity-60">Plan changes sync from Stripe via webhook (updates in a few seconds).</div>
 
           <div className="pt-2">
             <button
@@ -269,6 +268,10 @@ export default function ProfileForm({
               Billing Portal
             </button>
           </div>
+
+          <p className="text-xs mt-2 opacity-70">
+            <strong>Branding Tier:</strong> {brandingTier} (auto from plan: {computedBrandingTier})
+          </p>
         </div>
       )}
 
